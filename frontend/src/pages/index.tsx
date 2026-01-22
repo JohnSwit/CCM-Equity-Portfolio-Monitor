@@ -10,12 +10,13 @@ export default function Dashboard() {
   const [selectedView, setSelectedView] = useState<any>(null);
   const [summary, setSummary] = useState<any>(null);
   const [returns, setReturns] = useState<any[]>([]);
+  const [benchmarkReturns, setBenchmarkReturns] = useState<any>({});
+  const [chartData, setChartData] = useState<any[]>([]);
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
   const [factors, setFactors] = useState<any>(null);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedBenchmark, setSelectedBenchmark] = useState('SPY');
 
   useEffect(() => {
     loadViews();
@@ -25,7 +26,14 @@ export default function Dashboard() {
     if (selectedView) {
       loadViewData();
     }
-  }, [selectedView, selectedBenchmark]);
+  }, [selectedView]);
+
+  useEffect(() => {
+    // Merge portfolio and benchmark data for chart
+    if (returns.length > 0) {
+      mergeChartData();
+    }
+  }, [returns, benchmarkReturns]);
 
   const loadViews = async () => {
     try {
@@ -45,9 +53,10 @@ export default function Dashboard() {
 
     setLoading(true);
     try {
-      const [summaryData, returnsData, holdingsData, riskData, factorsData, unpricedData] = await Promise.all([
+      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, factorsData, unpricedData] = await Promise.all([
         api.getSummary(selectedView.view_type, selectedView.view_id),
         api.getReturns(selectedView.view_type, selectedView.view_id),
+        api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
         api.getHoldings(selectedView.view_type, selectedView.view_id),
         api.getRisk(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
@@ -56,6 +65,7 @@ export default function Dashboard() {
 
       setSummary(summaryData);
       setReturns(returnsData);
+      setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
       setFactors(factorsData);
@@ -65,6 +75,39 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const mergeChartData = () => {
+    // Create a map of date to data point
+    const dataByDate: any = {};
+
+    // Add portfolio returns
+    returns.forEach((r: any) => {
+      const dateStr = r.date;
+      dataByDate[dateStr] = {
+        date: dateStr,
+        Portfolio: r.index_value,
+      };
+    });
+
+    // Add benchmark returns
+    ['SPY', 'QQQ', 'INDU'].forEach((code) => {
+      if (benchmarkReturns[code]) {
+        benchmarkReturns[code].forEach((r: any) => {
+          const dateStr = r.date;
+          if (dataByDate[dateStr]) {
+            dataByDate[dateStr][code] = r.index_value;
+          }
+        });
+      }
+    });
+
+    // Convert to array and sort by date
+    const merged = Object.values(dataByDate).sort((a: any, b: any) =>
+      a.date.localeCompare(b.date)
+    );
+
+    setChartData(merged);
   };
 
   const formatCurrency = (value: number) => {
@@ -78,6 +121,12 @@ export default function Dashboard() {
 
   const formatPercent = (value: number) => {
     return (value * 100).toFixed(2) + '%';
+  };
+
+  const formatIndexValue = (value: number) => {
+    // Convert index value to percentage return
+    // e.g., 1.05 becomes +5.00%
+    return ((value - 1) * 100).toFixed(2) + '%';
   };
 
   const viewOptions = views.map((v) => ({
@@ -152,21 +201,26 @@ export default function Dashboard() {
 
             {/* Performance Chart */}
             <div className="card">
-              <h3 className="text-lg font-semibold mb-4">Performance</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={returns}>
+              <h3 className="text-lg font-semibold mb-4">Performance vs Benchmarks</h3>
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
                     tickFormatter={(value) => format(new Date(value), 'MMM yy')}
                   />
-                  <YAxis />
+                  <YAxis
+                    tickFormatter={(value) => formatIndexValue(value)}
+                  />
                   <Tooltip
                     labelFormatter={(value) => format(new Date(value), 'MMM d, yyyy')}
-                    formatter={(value: any) => [(value * 100).toFixed(2) + '%', 'Return']}
+                    formatter={(value: any) => [formatIndexValue(value), '']}
                   />
                   <Legend />
-                  <Line type="monotone" dataKey="index_value" stroke="#3b82f6" name="Index" />
+                  <Line type="monotone" dataKey="Portfolio" stroke="#3b82f6" strokeWidth={2} name="Portfolio" dot={false} />
+                  <Line type="monotone" dataKey="SPY" stroke="#10b981" strokeWidth={1.5} name="S&P 500 (SPY)" dot={false} />
+                  <Line type="monotone" dataKey="QQQ" stroke="#8b5cf6" strokeWidth={1.5} name="Nasdaq (QQQ)" dot={false} />
+                  <Line type="monotone" dataKey="INDU" stroke="#f59e0b" strokeWidth={1.5} name="Dow (INDU)" dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
