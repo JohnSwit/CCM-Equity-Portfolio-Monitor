@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
-from app.models.security import Security
+from app.models import Security
 from app.utils.ticker_utils import TickerNormalizer, SectorMapper
 from app.core.logging import get_logger
 
