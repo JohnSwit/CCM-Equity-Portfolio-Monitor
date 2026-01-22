@@ -188,6 +188,42 @@ class APIClient {
     const response = await this.client.post(`/jobs/run?job_name=${jobName}`);
     return response.data;
   }
+
+  // Transactions
+  async getTransactions(params?: {
+    account_id?: number;
+    account_number?: string;
+    symbol?: string;
+    start_date?: string;
+    end_date?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const response = await this.client.get('/transactions', { params });
+    return response.data;
+  }
+
+  async getAccountsWithTransactionCounts() {
+    const response = await this.client.get('/transactions/accounts');
+    return response.data;
+  }
+
+  async deleteTransaction(transactionId: number) {
+    const response = await this.client.delete(`/transactions/${transactionId}`);
+    return response.data;
+  }
+
+  async deleteAllAccountTransactions(accountId: number) {
+    const response = await this.client.delete(`/transactions/accounts/${accountId}/all`);
+    return response.data;
+  }
+
+  async deleteTransactionsBulk(transactionIds: number[]) {
+    const response = await this.client.delete('/transactions/bulk', {
+      data: { transaction_ids: transactionIds },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();
