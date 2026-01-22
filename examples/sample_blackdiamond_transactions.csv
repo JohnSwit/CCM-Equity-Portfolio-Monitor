@@ -1,0 +1,9 @@
+Account Number,Account Display Name,Class,Asset Name,Symbol,Trade Date,Settle Date,Transaction Type,Price,Units,Market Value,Transaction Fee
+12345,John Doe IRA,Equity,Apple Inc,AAPL,01/15/2024,01/17/2024,Buy,185.50,100,18550.00,9.99
+12345,John Doe IRA,Equity,Microsoft Corp,MSFT,01/15/2024,01/17/2024,Buy,380.25,50,19012.50,9.99
+12345,John Doe IRA,ETF,SPDR S&P 500 ETF,SPY,01/16/2024,01/18/2024,Buy,475.80,25,11895.00,9.99
+67890,Jane Smith Trust,Equity,Tesla Inc,TSLA,01/16/2024,01/18/2024,Buy,210.00,75,15750.00,9.99
+67890,Jane Smith Trust,Equity,NVIDIA Corp,NVDA,01/17/2024,01/19/2024,Buy,495.30,40,19812.00,9.99
+12345,John Doe IRA,Equity,Apple Inc,AAPL,01/20/2024,01/22/2024,Dividend,,,250.00,0.00
+12345,John Doe IRA,Equity,Apple Inc,AAPL,02/01/2024,02/03/2024,Sell,192.75,50,9637.50,9.99
+67890,Jane Smith Trust,Equity,Tesla Inc,TSLA,02/05/2024,02/07/2024,Sell,220.50,25,5512.50,9.99
