@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import (
     User, PortfolioValueEOD, ReturnsEOD, RiskEOD,
-    BenchmarkMetric, FactorRegression, ViewType, Account, Group,
+    BenchmarkMetric, BenchmarkReturn, FactorRegression, ViewType, Account, Group,
     PositionsEOD, Security, PricesEOD
 )
 from app.models.schemas import (
@@ -125,6 +125,47 @@ def get_returns(
         )
         for r in returns
     ]
+
+
+@router.get("/benchmark-returns")
+def get_benchmark_returns(
+    benchmark_codes: str = Query(...),  # Comma-separated: "SPY,QQQ,INDU"
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get benchmark returns series with computed cumulative index.
+    Returns data for multiple benchmarks in a format ready for charting.
+    """
+    codes = [c.strip() for c in benchmark_codes.split(',')]
+    result = {}
+
+    for code in codes:
+        query = db.query(BenchmarkReturn).filter(BenchmarkReturn.code == code)
+
+        if start_date:
+            query = query.filter(BenchmarkReturn.date >= start_date)
+        if end_date:
+            query = query.filter(BenchmarkReturn.date <= end_date)
+
+        returns = query.order_by(BenchmarkReturn.date).all()
+
+        # Compute cumulative index starting at 1.0
+        cumulative_index = 1.0
+        data_points = []
+        for r in returns:
+            cumulative_index *= (1 + r.return_value)
+            data_points.append({
+                'date': r.date,
+                'return_value': r.return_value,
+                'index_value': cumulative_index
+            })
+
+        result[code] = data_points
+
+    return result
 
 
 @router.get("/holdings", response_model=HoldingsResponse)

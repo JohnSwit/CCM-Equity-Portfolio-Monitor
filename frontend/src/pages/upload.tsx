@@ -84,6 +84,18 @@ export default function Upload() {
     }
   };
 
+  const handleDeleteImport = async (importId: number, fileName: string) => {
+    if (!confirm(`Delete import "${fileName}" and all its transactions? This cannot be undone. You will need to run the analytics update after deletion.`)) return;
+
+    try {
+      const result = await api.deleteImport(importId);
+      alert(result.message);
+      await loadImportHistory();
+    } catch (error: any) {
+      alert('Delete failed: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -251,6 +263,7 @@ export default function Upload() {
                 <th>Processed</th>
                 <th>Imported</th>
                 <th>Errors</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -274,6 +287,14 @@ export default function Upload() {
                   <td>{imp.rows_processed}</td>
                   <td>{imp.rows_imported}</td>
                   <td>{imp.rows_error}</td>
+                  <td>
+                    <button
+                      onClick={() => handleDeleteImport(imp.id, imp.file_name)}
+                      className="text-red-600 hover:text-red-800 text-sm font-medium"
+                    >
+                      Delete
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

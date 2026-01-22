@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, ImportLog
+from app.models import User, ImportLog, Transaction
 from app.models.schemas import ImportPreviewResponse, ImportCommitResponse
 from app.services.bd_parser import BDParser, calculate_file_hash
 
@@ -88,3 +88,40 @@ def get_import_history(
         }
         for imp in imports
     ]
+
+
+@router.delete("/{import_id}")
+def delete_import(
+    import_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete an import and all its transactions.
+    WARNING: This will delete all transactions from this import.
+    """
+    # Find the import
+    import_log = db.query(ImportLog).filter(ImportLog.id == import_id).first()
+    if not import_log:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    # Count transactions to delete
+    txn_count = db.query(Transaction).filter(
+        Transaction.import_log_id == import_id
+    ).count()
+
+    # Delete all transactions from this import
+    db.query(Transaction).filter(
+        Transaction.import_log_id == import_id
+    ).delete()
+
+    # Delete the import log
+    db.delete(import_log)
+    db.commit()
+
+    return {
+        'deleted': True,
+        'import_id': import_id,
+        'transactions_deleted': txn_count,
+        'message': f'Deleted import {import_log.file_name} and {txn_count} transactions. Run analytics update to refresh data.'
+    }

@@ -131,6 +131,13 @@ class APIClient {
     return response.data;
   }
 
+  async getBenchmarkReturns(benchmarkCodes: string[], startDate?: string, endDate?: string) {
+    const response = await this.client.get('/analytics/benchmark-returns', {
+      params: { benchmark_codes: benchmarkCodes.join(','), start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
   // Imports
   async importBDTransactions(file: File, mode: 'preview' | 'commit') {
     const formData = new FormData();
@@ -152,6 +159,11 @@ class APIClient {
     const response = await this.client.get('/imports', {
       params: { limit },
     });
+    return response.data;
+  }
+
+  async deleteImport(importId: number) {
+    const response = await this.client.delete(`/imports/${importId}`);
     return response.data;
   }
 
