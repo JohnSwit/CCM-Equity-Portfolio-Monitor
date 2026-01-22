@@ -10,7 +10,7 @@ from datetime import date, datetime
 from app.core.database import get_db
 from app.services.data_sourcing import ClassificationService, BenchmarkService, FactorReturnsService
 from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
-from app.models.security import Security
+from app.models import Security
 
 router = APIRouter(prefix="/data-management", tags=["data-management"])
 
