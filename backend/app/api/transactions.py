@@ -25,7 +25,7 @@ def get_transactions(
     symbol: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    limit: int = Query(500, ge=1, le=5000),
+    limit: int = Query(1000, ge=1, le=50000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -70,16 +70,16 @@ def get_transactions(
                 'id': t.id,
                 'account_id': t.account_id,
                 'account_number': t.account.account_number,
-                'account_name': t.account.account_name,
+                'account_name': t.account.display_name,
                 'security_id': t.security_id,
                 'symbol': t.security.symbol,
                 'asset_name': t.security.asset_name,
                 'asset_class': t.security.asset_class.value,
                 'trade_date': t.trade_date,
                 'transaction_type': t.transaction_type.value,
-                'quantity': float(t.quantity),
+                'quantity': float(t.units) if t.units else 0.0,
                 'price': float(t.price) if t.price else None,
-                'amount': float(t.amount) if t.amount else None,
+                'amount': float(t.market_value) if t.market_value else None,
                 'import_log_id': t.import_log_id,
                 'created_at': t.created_at
             }
@@ -100,19 +100,19 @@ def get_accounts_with_transaction_counts(
     accounts = db.query(
         Account.id,
         Account.account_number,
-        Account.account_name,
+        Account.display_name,
         func.count(Transaction.id).label('transaction_count')
     ).outerjoin(Transaction).group_by(
         Account.id,
         Account.account_number,
-        Account.account_name
+        Account.display_name
     ).order_by(Account.account_number).all()
 
     return [
         {
             'id': acc.id,
             'account_number': acc.account_number,
-            'account_name': acc.account_name,
+            'account_name': acc.display_name,
             'transaction_count': acc.transaction_count
         }
         for acc in accounts
@@ -197,7 +197,7 @@ async def delete_all_account_transactions(
         'deleted': True,
         'account_id': account_id,
         'account_number': account.account_number,
-        'account_name': account.account_name,
+        'account_name': account.display_name,
         'transactions_deleted': txn_count,
         'message': f'Deleted {txn_count} transactions for account {account.account_number}. Analytics have been recomputed.'
     }

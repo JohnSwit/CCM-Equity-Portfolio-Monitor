@@ -15,7 +15,7 @@ export default function TransactionsPage() {
   // Filters
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [symbolFilter, setSymbolFilter] = useState('');
-  const [limit, setLimit] = useState(100);
+  const [limit, setLimit] = useState(1000);
   const [offset, setOffset] = useState(0);
 
   useEffect(() => {
