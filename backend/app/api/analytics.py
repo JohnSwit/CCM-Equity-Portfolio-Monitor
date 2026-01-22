@@ -31,6 +31,14 @@ def parse_view_type(view_type_str: str) -> ViewType:
     return mapping.get(view_type_str, ViewType.ACCOUNT)
 
 
+def get_db_view_type(vt: ViewType) -> ViewType:
+    """
+    Convert view type for database queries.
+    FIRM views are stored as GROUP in the database.
+    """
+    return ViewType.GROUP if vt == ViewType.FIRM else vt
+
+
 @router.get("/summary", response_model=SummaryResponse)
 def get_summary(
     view_type: str = Query(...),
@@ -40,11 +48,12 @@ def get_summary(
 ):
     """Get summary analytics for a view"""
     vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
 
     # Get latest value
     latest_value = db.query(PortfolioValueEOD).filter(
         and_(
-            PortfolioValueEOD.view_type == vt,
+            PortfolioValueEOD.view_type == db_vt,
             PortfolioValueEOD.view_id == view_id
         )
     ).order_by(desc(PortfolioValueEOD.date)).first()
@@ -57,13 +66,13 @@ def get_summary(
     if vt == ViewType.ACCOUNT:
         account = db.query(Account).filter(Account.id == view_id).first()
         view_name = account.display_name if account else f"Account {view_id}"
-    else:
+    else:  # GROUP or FIRM
         group = db.query(Group).filter(Group.id == view_id).first()
         view_name = group.name if group else f"Group {view_id}"
 
     # Compute period returns
     returns_engine = ReturnsEngine(db)
-    period_returns = returns_engine.compute_period_returns(vt, view_id, latest_value.date)
+    period_returns = returns_engine.compute_period_returns(db_vt, view_id, latest_value.date)
 
     return SummaryResponse(
         view_type=view_type,
@@ -92,10 +101,11 @@ def get_returns(
 ):
     """Get returns series for a view"""
     vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
 
     query = db.query(ReturnsEOD).filter(
         and_(
-            ReturnsEOD.view_type == vt,
+            ReturnsEOD.view_type == db_vt,
             ReturnsEOD.view_id == view_id
         )
     )
@@ -127,12 +137,13 @@ def get_holdings(
 ):
     """Get holdings for a view"""
     vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
 
     if not as_of_date:
         # Get latest date
         latest = db.query(PortfolioValueEOD.date).filter(
             and_(
-                PortfolioValueEOD.view_type == vt,
+                PortfolioValueEOD.view_type == db_vt,
                 PortfolioValueEOD.view_id == view_id
             )
         ).order_by(desc(PortfolioValueEOD.date)).first()
@@ -201,12 +212,13 @@ def get_risk(
 ):
     """Get risk metrics for a view"""
     vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
 
     if not as_of_date:
         # Get latest date
         latest = db.query(RiskEOD.date).filter(
             and_(
-                RiskEOD.view_type == vt,
+                RiskEOD.view_type == db_vt,
                 RiskEOD.view_id == view_id
             )
         ).order_by(desc(RiskEOD.date)).first()
@@ -218,7 +230,7 @@ def get_risk(
 
     risk = db.query(RiskEOD).filter(
         and_(
-            RiskEOD.view_type == vt,
+            RiskEOD.view_type == db_vt,
             RiskEOD.view_id == view_id,
             RiskEOD.date == as_of_date
         )
@@ -247,11 +259,12 @@ def get_benchmark_metrics(
 ):
     """Get benchmark metrics for a view"""
     vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
 
     # Get latest metrics
     metrics = db.query(BenchmarkMetric).filter(
         and_(
-            BenchmarkMetric.view_type == vt,
+            BenchmarkMetric.view_type == db_vt,
             BenchmarkMetric.view_id == view_id,
             BenchmarkMetric.benchmark_code == benchmark
         )
@@ -288,11 +301,12 @@ def get_factor_exposures(
 ):
     """Get factor exposures for a view"""
     vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
 
     # Get latest regression
     regression = db.query(FactorRegression).filter(
         and_(
-            FactorRegression.view_type == vt,
+            FactorRegression.view_type == db_vt,
             FactorRegression.view_id == view_id,
             FactorRegression.factor_set_code == factor_set,
             FactorRegression.window == window
