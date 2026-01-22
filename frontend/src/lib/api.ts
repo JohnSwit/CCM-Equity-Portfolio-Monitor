@@ -224,6 +224,49 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Portfolio Statistics
+  async getContributionToReturns(viewType: string, viewId: number, startDate?: string, endDate?: string, topN: number = 20) {
+    const response = await this.client.get('/portfolio-stats/contribution-to-returns', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, top_n: topN },
+    });
+    return response.data;
+  }
+
+  async getVolatilityMetrics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
+    const response = await this.client.get('/portfolio-stats/volatility-metrics', {
+      params: { view_type: viewType, view_id: viewId, benchmark, window },
+    });
+    return response.data;
+  }
+
+  async getDrawdownAnalysis(viewType: string, viewId: number) {
+    const response = await this.client.get('/portfolio-stats/drawdown-analysis', {
+      params: { view_type: viewType, view_id: viewId },
+    });
+    return response.data;
+  }
+
+  async getVarCvar(viewType: string, viewId: number, confidenceLevels: string = '95,99', window: number = 252) {
+    const response = await this.client.get('/portfolio-stats/var-cvar', {
+      params: { view_type: viewType, view_id: viewId, confidence_levels: confidenceLevels, window },
+    });
+    return response.data;
+  }
+
+  async getFactorAnalysis(viewType: string, viewId: number, asOfDate?: string) {
+    const response = await this.client.get('/portfolio-stats/factor-analysis', {
+      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
+    });
+    return response.data;
+  }
+
+  async getComprehensiveStatistics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
+    const response = await this.client.get('/portfolio-stats/comprehensive', {
+      params: { view_type: viewType, view_id: viewId, benchmark, window },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();
