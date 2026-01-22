@@ -25,8 +25,13 @@ export default function PortfolioStatisticsPage() {
   const [brinsonData, setBrinsonData] = useState<any>(null);
   const [factorAttributionData, setFactorAttributionData] = useState<any>(null);
 
+  // Data status
+  const [dataStatus, setDataStatus] = useState<any>(null);
+  const [refreshingData, setRefreshingData] = useState<string | null>(null);
+
   useEffect(() => {
     loadViews();
+    loadDataStatus();
   }, []);
 
   useEffect(() => {
@@ -81,6 +86,58 @@ export default function PortfolioStatisticsPage() {
       console.error('Failed to load statistics:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadDataStatus = async () => {
+    try {
+      const status = await api.getDataStatus();
+      setDataStatus(status);
+    } catch (error) {
+      console.error('Failed to load data status:', error);
+    }
+  };
+
+  const handleRefreshClassifications = async () => {
+    setRefreshingData('classifications');
+    try {
+      await api.refreshClassifications(undefined, true);
+      alert('Classification refresh started in background. This may take several minutes.');
+      setTimeout(loadDataStatus, 2000);
+    } catch (error) {
+      console.error('Failed to refresh classifications:', error);
+      alert('Failed to refresh classifications. See console for details.');
+    } finally {
+      setRefreshingData(null);
+    }
+  };
+
+  const handleRefreshBenchmarks = async () => {
+    setRefreshingData('benchmarks');
+    try {
+      await api.refreshAllBenchmarks(false);
+      alert('Benchmarks refreshed successfully.');
+      loadDataStatus();
+      if (selectedView) loadStatistics();
+    } catch (error) {
+      console.error('Failed to refresh benchmarks:', error);
+      alert('Failed to refresh benchmarks. See console for details.');
+    } finally {
+      setRefreshingData(null);
+    }
+  };
+
+  const handleRefreshFactors = async () => {
+    setRefreshingData('factors');
+    try {
+      await api.refreshFactorReturns(undefined, true);
+      alert('Factor returns refresh started in background. This may take a minute.');
+      setTimeout(loadDataStatus, 2000);
+    } catch (error) {
+      console.error('Failed to refresh factor returns:', error);
+      alert('Failed to refresh factor returns. See console for details.');
+    } finally {
+      setRefreshingData(null);
     }
   };
 
@@ -145,6 +202,133 @@ export default function PortfolioStatisticsPage() {
             </div>
           </div>
         </div>
+
+        {/* Data Status */}
+        {dataStatus && (
+          <div className="card">
+            <h2 className="text-xl font-bold mb-4">Data Status & Management</h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Classifications Status */}
+              <div className="border rounded p-4">
+                <h3 className="font-semibold text-gray-700 mb-2">Security Classifications</h3>
+                <div className="space-y-2 text-sm">
+                  <div>
+                    <span className="text-gray-600">Coverage:</span>{' '}
+                    <span className="font-medium">
+                      {dataStatus.classifications.classified_securities} / {dataStatus.classifications.total_securities} ({dataStatus.classifications.coverage_percent}%)
+                    </span>
+                  </div>
+                  {dataStatus.classifications.last_updated && (
+                    <div>
+                      <span className="text-gray-600">Last Updated:</span>{' '}
+                      <span className="font-medium text-xs">{new Date(dataStatus.classifications.last_updated).toLocaleString()}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-gray-600">Sources:</span>{' '}
+                    <div className="text-xs mt-1">
+                      {Object.entries(dataStatus.classifications.sources || {}).map(([source, count]: [string, any]) => (
+                        <div key={source}>{source}: {count}</div>
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleRefreshClassifications}
+                    disabled={refreshingData === 'classifications'}
+                    className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
+                  >
+                    {refreshingData === 'classifications' ? 'Refreshing...' : 'Refresh Classifications'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Benchmark Status */}
+              <div className="border rounded p-4">
+                <h3 className="font-semibold text-gray-700 mb-2">Benchmark Holdings</h3>
+                <div className="space-y-2 text-sm">
+                  {Object.entries(dataStatus.benchmarks || {}).map(([code, data]: [string, any]) => (
+                    <div key={code} className="border-b pb-2 last:border-b-0">
+                      <div className="font-medium">{code}</div>
+                      <div className="text-xs text-gray-600">
+                        {data.constituent_count} constituents
+                      </div>
+                      {data.as_of_date && (
+                        <div className="text-xs text-gray-600">
+                          As of: {data.as_of_date}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    onClick={handleRefreshBenchmarks}
+                    disabled={refreshingData === 'benchmarks'}
+                    className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
+                  >
+                    {refreshingData === 'benchmarks' ? 'Refreshing...' : 'Refresh Benchmarks'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Factor Returns Status */}
+              <div className="border rounded p-4">
+                <h3 className="font-semibold text-gray-700 mb-2">Factor Returns</h3>
+                <div className="space-y-2 text-sm">
+                  {dataStatus.factor_returns.start_date && dataStatus.factor_returns.end_date ? (
+                    <>
+                      <div>
+                        <span className="text-gray-600">Date Range:</span>{' '}
+                        <div className="text-xs mt-1">
+                          {dataStatus.factor_returns.start_date} to {dataStatus.factor_returns.end_date}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Trading Days:</span>{' '}
+                        <span className="font-medium">{dataStatus.factor_returns.trading_days}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Factors:</span>
+                        <div className="text-xs mt-1">
+                          {Object.keys(dataStatus.factor_returns.factors || {}).join(', ')}
+                        </div>
+                      </div>
+                      {dataStatus.factor_returns.last_updated && (
+                        <div>
+                          <span className="text-gray-600">Last Updated:</span>{' '}
+                          <span className="font-medium text-xs">{new Date(dataStatus.factor_returns.last_updated).toLocaleString()}</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-red-600">No factor data available</div>
+                  )}
+                  <button
+                    onClick={handleRefreshFactors}
+                    disabled={refreshingData === 'factors'}
+                    className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
+                  >
+                    {refreshingData === 'factors' ? 'Refreshing...' : 'Refresh Factor Returns'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Data Readiness Indicators */}
+            <div className="mt-6 p-4 bg-gray-50 rounded">
+              <h3 className="font-semibold text-gray-700 mb-2">Feature Readiness</h3>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-2">
+                  <span className={`w-3 h-3 rounded-full ${dataStatus.data_readiness.brinson_attribution_ready ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                  <span className="text-sm">Brinson Attribution</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`w-3 h-3 rounded-full ${dataStatus.data_readiness.factor_attribution_ready ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                  <span className="text-sm">Factor Attribution</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading && <div className="text-center py-8">Loading statistics...</div>}
 
@@ -476,10 +660,25 @@ export default function PortfolioStatisticsPage() {
             )}
 
             {/* Brinson Attribution */}
-            {brinsonData && !brinsonData.error && (
+            {brinsonData && (
               <div className="card">
                 <h2 className="text-xl font-bold mb-4">Brinson Attribution Analysis</h2>
-                {brinsonData.note ? (
+                {brinsonData.error ? (
+                  <div className="p-4 bg-red-50 rounded border border-red-200">
+                    <p className="text-sm font-semibold text-red-800 mb-2">{brinsonData.error}</p>
+                    {brinsonData.missing_data && (
+                      <p className="text-xs text-red-700 mt-1">
+                        Missing Data: <span className="font-mono">{brinsonData.missing_data}</span>
+                      </p>
+                    )}
+                    {brinsonData.action_required && (
+                      <div className="mt-3 p-2 bg-white rounded border border-red-300">
+                        <p className="text-xs text-gray-700 font-medium">Action Required:</p>
+                        <p className="text-xs text-gray-600 font-mono mt-1">{brinsonData.action_required}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : brinsonData.note ? (
                   <div className="p-4 bg-yellow-50 rounded border border-yellow-200">
                     <p className="text-sm text-yellow-800">{brinsonData.note}</p>
                     <p className="text-xs text-yellow-700 mt-2">
@@ -510,10 +709,25 @@ export default function PortfolioStatisticsPage() {
             )}
 
             {/* Factor Attribution */}
-            {factorAttributionData && !factorAttributionData.error && (
+            {factorAttributionData && (
               <div className="card">
                 <h2 className="text-xl font-bold mb-4">Factor Attribution of Returns</h2>
-                {factorAttributionData.note ? (
+                {factorAttributionData.error ? (
+                  <div className="p-4 bg-red-50 rounded border border-red-200">
+                    <p className="text-sm font-semibold text-red-800 mb-2">{factorAttributionData.error}</p>
+                    {factorAttributionData.missing_data && (
+                      <p className="text-xs text-red-700 mt-1">
+                        Missing Data: <span className="font-mono">{factorAttributionData.missing_data}</span>
+                      </p>
+                    )}
+                    {factorAttributionData.action_required && (
+                      <div className="mt-3 p-2 bg-white rounded border border-red-300">
+                        <p className="text-xs text-gray-700 font-medium">Action Required:</p>
+                        <p className="text-xs text-gray-600 font-mono mt-1">{factorAttributionData.action_required}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : factorAttributionData.note ? (
                   <div className="p-4 bg-yellow-50 rounded border border-yellow-200">
                     <p className="text-sm text-yellow-800">{factorAttributionData.note}</p>
                     <p className="text-xs text-yellow-700 mt-2">

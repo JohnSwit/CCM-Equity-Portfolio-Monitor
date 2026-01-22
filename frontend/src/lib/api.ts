@@ -310,6 +310,50 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Data Management
+  async refreshClassifications(limit?: number, background: boolean = false) {
+    const response = await this.client.post('/data-management/refresh-classifications', null, {
+      params: { limit, background },
+    });
+    return response.data;
+  }
+
+  async refreshSingleClassification(securityId: number) {
+    const response = await this.client.post(`/data-management/refresh-classification/${securityId}`);
+    return response.data;
+  }
+
+  async refreshBenchmark(benchmarkCode: string) {
+    const response = await this.client.post(`/data-management/refresh-benchmark/${benchmarkCode}`);
+    return response.data;
+  }
+
+  async refreshAllBenchmarks(background: boolean = false) {
+    const response = await this.client.post('/data-management/refresh-all-benchmarks', null, {
+      params: { background },
+    });
+    return response.data;
+  }
+
+  async refreshFactorReturns(startDate?: string, background: boolean = false) {
+    const response = await this.client.post('/data-management/refresh-factor-returns', null, {
+      params: { start_date: startDate, background },
+    });
+    return response.data;
+  }
+
+  async getDataStatus() {
+    const response = await this.client.get('/data-management/status');
+    return response.data;
+  }
+
+  async getMissingClassifications(limit: number = 100) {
+    const response = await this.client.get('/data-management/missing-classifications', {
+      params: { limit },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

@@ -8,8 +8,10 @@ from app.models import (
     Transaction, PositionsEOD, PortfolioValueEOD, ReturnsEOD,
     PricesEOD, Security, Account, ViewType, TransactionType
 )
-from app.models.sector_models import SectorClassification, BenchmarkConstituent
+from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
+from app.utils.ticker_utils import TickerNormalizer
 import logging
+from scipy import stats
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +321,7 @@ class BrinsonAttributionAnalyzer:
 
         Formulas:
         Allocation = (W_p - W_b) * R_b
-        Selection = W_p * (R_p - R_b)
+        Selection = W_b * (R_p - R_b)
         Interaction = (W_p - W_b) * (R_p - R_b)
         """
         if view_type != ViewType.ACCOUNT:
@@ -328,24 +330,199 @@ class BrinsonAttributionAnalyzer:
         # Get sector analyzer
         sector_analyzer = SectorAnalyzer(self.db)
 
-        # Get portfolio sector weights at start
+        # Get portfolio sector weights and holdings at start
         port_start = sector_analyzer.get_portfolio_sector_weights(view_type, view_id, start_date)
         if 'error' in port_start:
             return port_start
 
-        # Calculate sector returns for portfolio (simplified - would need actual tracking)
-        # This is a placeholder - full implementation would track sector returns over period
+        # Get portfolio sector weights at end
+        port_end = sector_analyzer.get_portfolio_sector_weights(view_type, view_id, end_date)
+        if 'error' in port_end:
+            return {'error': 'Could not get end-period portfolio data'}
+
+        # Get benchmark weights at start (use latest available before start_date)
+        latest_bench_date = self.db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
+            and_(
+                BenchmarkConstituent.benchmark_code == benchmark_code,
+                BenchmarkConstituent.as_of_date <= start_date
+            )
+        ).scalar()
+
+        if not latest_bench_date:
+            return {
+                'error': f'No benchmark data available for {benchmark_code}',
+                'missing_data': 'benchmark_constituents',
+                'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
+            }
+
+        # Get benchmark constituents with sectors
+        benchmark_holdings = self.db.query(
+            BenchmarkConstituent.symbol,
+            BenchmarkConstituent.weight,
+            SectorClassification.sector
+        ).outerjoin(
+            Security, Security.ticker == BenchmarkConstituent.symbol
+        ).outerjoin(
+            SectorClassification, SectorClassification.security_id == Security.id
+        ).filter(
+            and_(
+                BenchmarkConstituent.benchmark_code == benchmark_code,
+                BenchmarkConstituent.as_of_date == latest_bench_date
+            )
+        ).all()
+
+        if not benchmark_holdings:
+            return {'error': f'No holdings found for benchmark {benchmark_code}'}
+
+        # Calculate sector returns for portfolio holdings
+        portfolio_sector_returns = self._calculate_sector_returns(port_start['holdings'], start_date, end_date)
+
+        # Calculate sector returns for benchmark holdings
+        benchmark_sector_returns = self._calculate_benchmark_sector_returns(benchmark_holdings, start_date, end_date)
+
+        # Build portfolio sector weights dict (use start weights)
+        port_weights = {s['sector']: s['weight'] for s in port_start['sectors']}
+
+        # Build benchmark sector weights dict
+        bench_weights = {}
+        for holding in benchmark_holdings:
+            sector = holding.sector or 'Unclassified'
+            bench_weights[sector] = bench_weights.get(sector, 0) + float(holding.weight)
+
+        # Get all sectors
+        all_sectors = set(port_weights.keys()) | set(bench_weights.keys())
+
+        # Calculate Brinson components by sector
+        attribution_by_sector = []
+        total_allocation = 0.0
+        total_selection = 0.0
+        total_interaction = 0.0
+
+        for sector in all_sectors:
+            W_p = port_weights.get(sector, 0.0)
+            W_b = bench_weights.get(sector, 0.0)
+            R_p = portfolio_sector_returns.get(sector, 0.0)
+            R_b = benchmark_sector_returns.get(sector, 0.0)
+
+            allocation = (W_p - W_b) * R_b
+            selection = W_b * (R_p - R_b)
+            interaction = (W_p - W_b) * (R_p - R_b)
+
+            total_allocation += allocation
+            total_selection += selection
+            total_interaction += interaction
+
+            attribution_by_sector.append({
+                'sector': sector,
+                'portfolio_weight': float(W_p),
+                'benchmark_weight': float(W_b),
+                'portfolio_return': float(R_p),
+                'benchmark_return': float(R_b),
+                'allocation_effect': float(allocation),
+                'selection_effect': float(selection),
+                'interaction_effect': float(interaction),
+                'total_effect': float(allocation + selection + interaction)
+            })
+
+        attribution_by_sector.sort(key=lambda x: abs(x['total_effect']), reverse=True)
 
         return {
-            'allocation_effect': 0.0,
-            'selection_effect': 0.0,
-            'interaction_effect': 0.0,
-            'total_active_return': 0.0,
-            'note': 'Brinson attribution requires sector-level return tracking. This is a placeholder for future implementation.',
-            'start_date': start_date,
-            'end_date': end_date,
-            'benchmark': benchmark_code
+            'allocation_effect': float(total_allocation),
+            'selection_effect': float(total_selection),
+            'interaction_effect': float(total_interaction),
+            'total_active_return': float(total_allocation + total_selection + total_interaction),
+            'by_sector': attribution_by_sector,
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat(),
+            'benchmark': benchmark_code,
+            'benchmark_data_date': latest_bench_date.isoformat()
         }
+
+    def _calculate_sector_returns(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
+        """Calculate sector returns for portfolio holdings"""
+        sector_returns = {}
+        sector_start_values = {}
+        sector_end_values = {}
+
+        for holding in holdings:
+            sector = holding['sector']
+            security_id = holding['security_id']
+
+            # Get prices at start and end
+            start_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security_id,
+                    PricesEOD.date <= start_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            end_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security_id,
+                    PricesEOD.date <= end_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            if start_price and end_price:
+                start_val = holding['shares'] * float(start_price[0])
+                end_val = holding['shares'] * float(end_price[0])
+
+                sector_start_values[sector] = sector_start_values.get(sector, 0) + start_val
+                sector_end_values[sector] = sector_end_values.get(sector, 0) + end_val
+
+        # Calculate returns
+        for sector in sector_start_values:
+            if sector_start_values[sector] > 0:
+                sector_returns[sector] = (sector_end_values[sector] / sector_start_values[sector]) - 1
+
+        return sector_returns
+
+    def _calculate_benchmark_sector_returns(self, holdings: List, start_date: date, end_date: date) -> Dict[str, float]:
+        """Calculate sector returns for benchmark holdings"""
+        sector_returns = {}
+        sector_weighted_returns = {}
+        sector_weights = {}
+
+        for holding in holdings:
+            sector = holding.sector or 'Unclassified'
+            ticker = holding.symbol
+            weight = float(holding.weight)
+
+            # Find security by ticker
+            security = self.db.query(Security).filter(
+                Security.ticker == TickerNormalizer.normalize(ticker)
+            ).first()
+
+            if not security:
+                continue
+
+            # Get prices
+            start_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security.id,
+                    PricesEOD.date <= start_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            end_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security.id,
+                    PricesEOD.date <= end_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            if start_price and end_price:
+                security_return = (float(end_price[0]) / float(start_price[0])) - 1
+
+                sector_weighted_returns[sector] = sector_weighted_returns.get(sector, 0) + (security_return * weight)
+                sector_weights[sector] = sector_weights.get(sector, 0) + weight
+
+        # Calculate sector returns (weighted average)
+        for sector in sector_weights:
+            if sector_weights[sector] > 0:
+                sector_returns[sector] = sector_weighted_returns[sector] / sector_weights[sector]
+
+        return sector_returns
 
 
 class AdvancedFactorAnalyzer:
@@ -362,10 +539,12 @@ class AdvancedFactorAnalyzer:
         end_date: date
     ) -> Dict:
         """
-        Decompose returns into factor contributions and alpha.
-        Shows how much of return came from each factor tilt vs stock selection.
+        Decompose returns into factor contributions and alpha using Fama-French factors.
+        Shows how much of return came from each factor tilt vs stock selection (alpha).
+
+        Uses regression: R_portfolio - R_f = alpha + beta_mkt*(R_m - R_f) + beta_smb*SMB + ...
         """
-        # Get returns for period
+        # Get portfolio daily returns
         returns = self.db.query(ReturnsEOD).filter(
             and_(
                 ReturnsEOD.view_type == view_type,
@@ -375,32 +554,138 @@ class AdvancedFactorAnalyzer:
             )
         ).order_by(ReturnsEOD.date).all()
 
-        if not returns:
-            return {'error': 'No returns data found'}
+        if not returns or len(returns) < 2:
+            return {'error': 'Insufficient returns data found'}
 
-        # Calculate total return
-        total_return = (returns[-1].twr_index / returns[0].twr_index - 1) if returns else 0
+        # Get factor returns for the same period
+        factor_returns_data = self.db.query(FactorReturns).filter(
+            and_(
+                FactorReturns.date >= start_date,
+                FactorReturns.date <= end_date
+            )
+        ).order_by(FactorReturns.date).all()
 
-        # Placeholder for factor attribution
-        # Full implementation would require:
-        # 1. Factor returns over period
-        # 2. Portfolio factor exposures over time
-        # 3. Decomposition: Return = Sum(beta_i * factor_return_i) + alpha
+        if not factor_returns_data:
+            return {
+                'error': 'No factor returns data available',
+                'missing_data': 'factor_returns',
+                'action_required': 'Run POST /data-management/refresh-factor-returns'
+            }
+
+        # Build dataframes
+        portfolio_df = pd.DataFrame([{
+            'date': r.date,
+            'daily_return': float(r.daily_return) if r.daily_return else 0
+        } for r in returns])
+
+        factor_df = pd.DataFrame([{
+            'date': f.date,
+            'factor': f.factor_name,
+            'return': float(f.value)
+        } for f in factor_returns_data])
+
+        # Pivot factor data
+        factor_pivot = factor_df.pivot(index='date', columns='factor', values='return')
+
+        # Merge with portfolio returns
+        merged = portfolio_df.merge(factor_pivot, left_on='date', right_index=True, how='inner')
+
+        if len(merged) < 10:
+            return {'error': 'Insufficient overlapping data for regression (need at least 10 days)'}
+
+        # Calculate excess returns (portfolio return - risk-free rate)
+        if 'RF' in merged.columns:
+            merged['excess_return'] = merged['daily_return'] - merged['RF']
+        else:
+            merged['excess_return'] = merged['daily_return']  # Assume RF = 0
+
+        # Prepare regression data
+        y = merged['excess_return'].values
+        X_factors = []
+        factor_names = []
+
+        # Market factor (Mkt-RF)
+        if 'Mkt-RF' in merged.columns:
+            X_factors.append(merged['Mkt-RF'].values)
+            factor_names.append('Market')
+
+        # Size factor (SMB)
+        if 'SMB' in merged.columns:
+            X_factors.append(merged['SMB'].values)
+            factor_names.append('Size (SMB)')
+
+        # Value factor (HML)
+        if 'HML' in merged.columns:
+            X_factors.append(merged['HML'].values)
+            factor_names.append('Value (HML)')
+
+        # Profitability factor (RMW)
+        if 'RMW' in merged.columns:
+            X_factors.append(merged['RMW'].values)
+            factor_names.append('Profitability (RMW)')
+
+        # Investment factor (CMA)
+        if 'CMA' in merged.columns:
+            X_factors.append(merged['CMA'].values)
+            factor_names.append('Investment (CMA)')
+
+        # Momentum factor
+        if 'Mom' in merged.columns:
+            X_factors.append(merged['Mom'].values)
+            factor_names.append('Momentum')
+
+        if not X_factors:
+            return {'error': 'No factor data available for regression'}
+
+        # Run regression
+        X = np.column_stack(X_factors)
+        X_with_intercept = np.column_stack([np.ones(len(X)), X])
+
+        # Use statsmodels-style regression with scipy
+        result = np.linalg.lstsq(X_with_intercept, y, rcond=None)
+        coefficients = result[0]
+
+        alpha = coefficients[0]
+        betas = coefficients[1:]
+
+        # Calculate factor contributions to total return
+        # Contribution = beta * sum(factor_returns)
+        factor_contributions = {}
+        factor_exposures = {}
+
+        for i, factor_name in enumerate(factor_names):
+            beta = betas[i]
+            factor_col = ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'Mom'][i] if i < 6 else None
+
+            if factor_col and factor_col in merged.columns:
+                factor_total_return = merged[factor_col].sum()
+                contribution = beta * factor_total_return
+                factor_contributions[factor_name] = float(contribution)
+                factor_exposures[factor_name] = float(beta)
+
+        # Calculate R-squared
+        y_pred = X_with_intercept @ coefficients
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        # Calculate total returns
+        total_portfolio_return = float(merged['daily_return'].sum())
+        total_factor_contribution = sum(factor_contributions.values())
+        alpha_contribution = alpha * len(merged)  # Alpha per day * number of days
 
         return {
-            'total_return': float(total_return),
-            'factor_contributions': {
-                'market': 0.0,
-                'size': 0.0,
-                'value': 0.0,
-                'momentum': 0.0,
-                'quality': 0.0,
-                'low_vol': 0.0
-            },
-            'alpha': float(total_return),  # Placeholder
-            'note': 'Factor attribution requires factor return data. This is a placeholder.',
-            'start_date': start_date,
-            'end_date': end_date
+            'total_return': total_portfolio_return,
+            'factor_contributions': factor_contributions,
+            'factor_exposures': factor_exposures,
+            'alpha': float(alpha_contribution),
+            'alpha_daily': float(alpha),
+            'r_squared': float(r_squared),
+            'explained_return': float(total_factor_contribution),
+            'unexplained_return': float(alpha_contribution),
+            'observation_count': len(merged),
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat()
         }
 
     def analyze_factor_crowding(
