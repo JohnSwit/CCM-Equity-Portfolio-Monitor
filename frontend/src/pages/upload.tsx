@@ -8,6 +8,8 @@ export default function Upload() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
   const [importHistory, setImportHistory] = useState<any[]>([]);
+  const [runningJob, setRunningJob] = useState(false);
+  const [jobResult, setJobResult] = useState<any>(null);
 
   useEffect(() => {
     loadImportHistory();
@@ -61,6 +63,24 @@ export default function Upload() {
       alert('Import failed: ' + error.response?.data?.detail);
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleRunMarketDataUpdate = async () => {
+    if (!confirm('Run market data update? This will fetch the latest prices for all securities.')) return;
+
+    setRunningJob(true);
+    setJobResult(null);
+    try {
+      const data = await api.runJob('market_data_update');
+      setJobResult(data);
+      alert('Market data update completed: ' + data.message);
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.detail || error.message || 'Unknown error';
+      alert('Job failed: ' + errorMsg);
+      setJobResult({ status: 'failed', message: errorMsg });
+    } finally {
+      setRunningJob(false);
     }
   };
 
@@ -198,6 +218,26 @@ export default function Upload() {
             </div>
           </div>
         )}
+
+        {/* Market Data Update */}
+        <div className="card">
+          <h2 className="text-lg font-semibold mb-4">Market Data & Analytics</h2>
+          <p className="text-sm text-gray-600 mb-4">
+            After importing transactions, run the market data update to fetch the latest prices and compute analytics.
+          </p>
+          <button
+            onClick={handleRunMarketDataUpdate}
+            disabled={runningJob}
+            className="btn btn-primary"
+          >
+            {runningJob ? 'Running...' : 'Update Market Data & Compute Analytics'}
+          </button>
+          {jobResult && (
+            <div className={`mt-4 p-3 rounded ${jobResult.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+              {jobResult.message}
+            </div>
+          )}
+        </div>
 
         {/* Import History */}
         <div className="card">

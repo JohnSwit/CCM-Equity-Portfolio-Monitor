@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from datetime import datetime
 import asyncio
@@ -10,11 +10,21 @@ from app.models.schemas import JobRunResponse
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
+def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    """Verify that the current user is an admin"""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required"
+        )
+    return current_user
+
+
 @router.post("/run", response_model=JobRunResponse)
 async def run_job(
     job_name: str = Query(..., regex="^(market_data_update|recompute_analytics)$"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_admin_user)
 ):
     """
     Trigger a job manually:
