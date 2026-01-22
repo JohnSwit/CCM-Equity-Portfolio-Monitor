@@ -18,6 +18,13 @@ export default function PortfolioStatisticsPage() {
   const [varData, setVarData] = useState<any>(null);
   const [factorData, setFactorData] = useState<any>(null);
 
+  // Phase 2 data
+  const [turnoverData, setTurnoverData] = useState<any>(null);
+  const [sectorData, setSectorData] = useState<any>(null);
+  const [sectorComparisonData, setSectorComparisonData] = useState<any>(null);
+  const [brinsonData, setBrinsonData] = useState<any>(null);
+  const [factorAttributionData, setFactorAttributionData] = useState<any>(null);
+
   useEffect(() => {
     loadViews();
   }, []);
@@ -46,12 +53,18 @@ export default function PortfolioStatisticsPage() {
 
     setLoading(true);
     try {
-      const [contrib, vol, dd, varCvar, factors] = await Promise.all([
+      const [contrib, vol, dd, varCvar, factors, turnover, sectors, sectorComp, brinson, factorAttr] = await Promise.all([
         api.getContributionToReturns(selectedView.view_type, selectedView.view_id, undefined, undefined, 20).catch(() => null),
         api.getVolatilityMetrics(selectedView.view_type, selectedView.view_id, benchmark, window).catch(() => null),
         api.getDrawdownAnalysis(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getVarCvar(selectedView.view_type, selectedView.view_id, '95,99', window).catch(() => null),
         api.getFactorAnalysis(selectedView.view_type, selectedView.view_id).catch(() => null),
+        // Phase 2
+        api.getTurnoverAnalysis(selectedView.view_type, selectedView.view_id, undefined, undefined, 'monthly').catch(() => null),
+        api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
+        api.getSectorComparison(selectedView.view_type, selectedView.view_id, 'SP500').catch(() => null),
+        api.getBrinsonAttribution(selectedView.view_type, selectedView.view_id, 'SP500').catch(() => null),
+        api.getFactorAttribution(selectedView.view_type, selectedView.view_id).catch(() => null),
       ]);
 
       setContributionData(contrib);
@@ -59,6 +72,11 @@ export default function PortfolioStatisticsPage() {
       setDrawdownData(dd);
       setVarData(varCvar);
       setFactorData(factors);
+      setTurnoverData(turnover);
+      setSectorData(sectors);
+      setSectorComparisonData(sectorComp);
+      setBrinsonData(brinson);
+      setFactorAttributionData(factorAttr);
     } catch (error) {
       console.error('Failed to load statistics:', error);
     } finally {
@@ -362,6 +380,171 @@ export default function PortfolioStatisticsPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {/* ===== PHASE 2: ADVANCED ANALYTICS ===== */}
+
+            {/* Turnover Analysis */}
+            {turnoverData && !turnoverData.error && turnoverData.overall && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Trading & Turnover</h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                  <div className="border-l-4 border-blue-500 pl-4">
+                    <div className="text-sm text-gray-600">Annualized Gross Turnover</div>
+                    <div className="text-2xl font-bold">{formatPercent(turnoverData.overall.annualized_gross_turnover)}</div>
+                  </div>
+                  <div className="border-l-4 border-green-500 pl-4">
+                    <div className="text-sm text-gray-600">Annualized Net Turnover</div>
+                    <div className="text-2xl font-bold">{formatPercent(turnoverData.overall.annualized_net_turnover)}</div>
+                  </div>
+                  <div className="border-l-4 border-purple-500 pl-4">
+                    <div className="text-sm text-gray-600">Total Trades</div>
+                    <div className="text-2xl font-bold">{turnoverData.overall.trade_count}</div>
+                  </div>
+                  <div className="border-l-4 border-orange-500 pl-4">
+                    <div className="text-sm text-gray-600">Avg Portfolio Value</div>
+                    <div className="text-2xl font-bold">${(turnoverData.overall.avg_portfolio_value / 1000000).toFixed(1)}M</div>
+                  </div>
+                </div>
+
+                {turnoverData.by_period && turnoverData.by_period.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">Turnover by Period</h3>
+                    <table className="table text-sm">
+                      <thead>
+                        <tr>
+                          <th>Period</th>
+                          <th className="text-right">Gross Turnover</th>
+                          <th className="text-right">Net Turnover</th>
+                          <th className="text-right">Trades</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {turnoverData.by_period.slice(0, 12).map((period: any, idx: number) => (
+                          <tr key={idx}>
+                            <td>{period.period}</td>
+                            <td className="text-right font-semibold">{formatPercent(period.gross_turnover)}</td>
+                            <td className="text-right">{formatPercent(period.net_turnover)}</td>
+                            <td className="text-right">{period.trade_count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Sector Comparison */}
+            {sectorComparisonData && !sectorComparisonData.error && sectorComparisonData.comparison && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Sector Analysis vs {sectorComparisonData.benchmark}</h2>
+                <table className="table text-sm">
+                  <thead>
+                    <tr>
+                      <th>Sector</th>
+                      <th className="text-right">Portfolio Weight</th>
+                      <th className="text-right">Benchmark Weight</th>
+                      <th className="text-right">Active Weight</th>
+                      <th>Position</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sectorComparisonData.comparison.map((sector: any, idx: number) => (
+                      <tr key={idx}>
+                        <td className="font-semibold">{sector.sector}</td>
+                        <td className="text-right">{formatPercent(sector.portfolio_weight)}</td>
+                        <td className="text-right text-gray-600">{formatPercent(sector.benchmark_weight)}</td>
+                        <td className={`text-right font-semibold ${sector.active_weight >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {sector.active_weight >= 0 ? '+' : ''}{formatPercent(sector.active_weight)}
+                        </td>
+                        <td>
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            sector.over_under === 'Overweight' ? 'bg-green-100 text-green-800' :
+                            sector.over_under === 'Underweight' ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {sector.over_under}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Brinson Attribution */}
+            {brinsonData && !brinsonData.error && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Brinson Attribution Analysis</h2>
+                {brinsonData.note ? (
+                  <div className="p-4 bg-yellow-50 rounded border border-yellow-200">
+                    <p className="text-sm text-yellow-800">{brinsonData.note}</p>
+                    <p className="text-xs text-yellow-700 mt-2">
+                      Full Brinson attribution requires sector-level return tracking over time. This feature is available
+                      once sector classifications and historical sector returns are configured.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="border-l-4 border-blue-500 pl-4">
+                      <div className="text-sm text-gray-600">Allocation Effect</div>
+                      <div className="text-2xl font-bold">{formatPercent(brinsonData.allocation_effect)}</div>
+                      <div className="text-xs text-gray-500 mt-1">Sector weighting decisions</div>
+                    </div>
+                    <div className="border-l-4 border-green-500 pl-4">
+                      <div className="text-sm text-gray-600">Selection Effect</div>
+                      <div className="text-2xl font-bold">{formatPercent(brinsonData.selection_effect)}</div>
+                      <div className="text-xs text-gray-500 mt-1">Security selection</div>
+                    </div>
+                    <div className="border-l-4 border-purple-500 pl-4">
+                      <div className="text-sm text-gray-600">Interaction Effect</div>
+                      <div className="text-2xl font-bold">{formatPercent(brinsonData.interaction_effect)}</div>
+                      <div className="text-xs text-gray-500 mt-1">Combined effect</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Factor Attribution */}
+            {factorAttributionData && !factorAttributionData.error && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Factor Attribution of Returns</h2>
+                {factorAttributionData.note ? (
+                  <div className="p-4 bg-yellow-50 rounded border border-yellow-200">
+                    <p className="text-sm text-yellow-800">{factorAttributionData.note}</p>
+                    <p className="text-xs text-yellow-700 mt-2">
+                      Factor attribution requires factor return data over time. This feature will be enabled once factor
+                      return history is available.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-4 p-3 bg-blue-50 rounded">
+                      <div className="text-sm">
+                        <span className="font-semibold">Total Return:</span> {formatPercent(factorAttributionData.total_return)}
+                      </div>
+                    </div>
+                    <h3 className="text-sm font-semibold mb-2">Factor Contributions</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      {Object.entries(factorAttributionData.factor_contributions || {}).map(([factor, contrib]: [string, any]) => (
+                        <div key={factor} className="p-3 bg-gray-50 rounded">
+                          <div className="text-xs text-gray-600 uppercase">{factor}</div>
+                          <div className="text-lg font-semibold">{formatPercent(contrib)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 p-3 bg-green-50 rounded">
+                      <div className="text-sm">
+                        <span className="font-semibold">Alpha:</span> {formatPercent(factorAttributionData.alpha)}
+                      </div>
+                      <div className="text-xs text-gray-600 mt-1">Return from security selection beyond factor tilts</div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>

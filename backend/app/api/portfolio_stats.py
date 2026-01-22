@@ -6,6 +6,10 @@ from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import User, ViewType
 from app.services.portfolio_statistics import PortfolioStatisticsEngine
+from app.services.advanced_analytics import (
+    TurnoverAnalyzer, SectorAnalyzer,
+    BrinsonAttributionAnalyzer, AdvancedFactorAnalyzer
+)
 import logging
 
 router = APIRouter(prefix="/portfolio-stats", tags=["portfolio-statistics"])
@@ -151,3 +155,142 @@ def get_comprehensive_statistics(
         'var_cvar': engine.get_var_cvar(vt, view_id, [0.95, 0.99], window),
         'factor_analysis': engine.get_factor_analysis(vt, view_id)
     }
+
+
+# ===== PHASE 2: ADVANCED ANALYTICS =====
+
+@router.get("/turnover")
+def get_turnover_analysis(
+    view_type: str,
+    view_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    period: str = Query('monthly', regex='^(monthly|quarterly|annual)$'),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Calculate portfolio turnover metrics.
+
+    - Gross turnover: (Buys + Sells) / Avg Portfolio Value
+    - Net turnover: abs(Buys - Sells) / Avg Portfolio Value
+    - Annualized metrics
+    - Breakdown by period
+    """
+    vt = parse_view_type(view_type)
+    analyzer = TurnoverAnalyzer(db)
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=365)
+
+    return analyzer.calculate_turnover(vt, view_id, start_date, end_date, period)
+
+
+@router.get("/sector-weights")
+def get_sector_weights(
+    view_type: str,
+    view_id: int,
+    as_of_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get portfolio sector weights.
+    Shows allocation across sectors.
+    """
+    vt = parse_view_type(view_type)
+    analyzer = SectorAnalyzer(db)
+    return analyzer.get_portfolio_sector_weights(vt, view_id, as_of_date)
+
+
+@router.get("/sector-comparison")
+def get_sector_comparison(
+    view_type: str,
+    view_id: int,
+    benchmark: str = Query('SP500', description="Benchmark code (SP500, etc)"),
+    as_of_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Compare portfolio sector weights to benchmark.
+    Shows over/underweight positions by sector.
+    """
+    vt = parse_view_type(view_type)
+    analyzer = SectorAnalyzer(db)
+    return analyzer.compare_to_benchmark(vt, view_id, benchmark, as_of_date)
+
+
+@router.get("/brinson-attribution")
+def get_brinson_attribution(
+    view_type: str,
+    view_id: int,
+    benchmark: str = Query('SP500'),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Brinson attribution analysis.
+
+    Decomposes active return into:
+    - Allocation effect: sector weighting decisions
+    - Selection effect: security selection within sectors
+    - Interaction effect: combined allocation and selection
+    """
+    vt = parse_view_type(view_type)
+    analyzer = BrinsonAttributionAnalyzer(db)
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=90)
+
+    return analyzer.calculate_brinson_attribution(vt, view_id, benchmark, start_date, end_date)
+
+
+@router.get("/factor-attribution")
+def get_factor_attribution(
+    view_type: str,
+    view_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Factor attribution of returns.
+
+    Decomposes returns into factor contributions vs alpha.
+    Shows how much return came from factor tilts vs stock selection.
+    """
+    vt = parse_view_type(view_type)
+    analyzer = AdvancedFactorAnalyzer(db)
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=90)
+
+    return analyzer.calculate_factor_attribution(vt, view_id, start_date, end_date)
+
+
+@router.get("/factor-crowding")
+def get_factor_crowding(
+    view_type: str,
+    view_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyze factor crowding in portfolio.
+
+    Shows how correlated holdings are on factor basis.
+    High crowding means multiple positions express same factor bets.
+    """
+    vt = parse_view_type(view_type)
+    analyzer = AdvancedFactorAnalyzer(db)
+    return analyzer.analyze_factor_crowding(vt, view_id)

@@ -267,6 +267,49 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Phase 2: Advanced Analytics
+  async getTurnoverAnalysis(viewType: string, viewId: number, startDate?: string, endDate?: string, period: string = 'monthly') {
+    const response = await this.client.get('/portfolio-stats/turnover', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period },
+    });
+    return response.data;
+  }
+
+  async getSectorWeights(viewType: string, viewId: number, asOfDate?: string) {
+    const response = await this.client.get('/portfolio-stats/sector-weights', {
+      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
+    });
+    return response.data;
+  }
+
+  async getSectorComparison(viewType: string, viewId: number, benchmark: string = 'SP500', asOfDate?: string) {
+    const response = await this.client.get('/portfolio-stats/sector-comparison', {
+      params: { view_type: viewType, view_id: viewId, benchmark, as_of_date: asOfDate },
+    });
+    return response.data;
+  }
+
+  async getBrinsonAttribution(viewType: string, viewId: number, benchmark: string = 'SP500', startDate?: string, endDate?: string) {
+    const response = await this.client.get('/portfolio-stats/brinson-attribution', {
+      params: { view_type: viewType, view_id: viewId, benchmark, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
+  async getFactorAttribution(viewType: string, viewId: number, startDate?: string, endDate?: string) {
+    const response = await this.client.get('/portfolio-stats/factor-attribution', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
+  async getFactorCrowding(viewType: string, viewId: number) {
+    const response = await this.client.get('/portfolio-stats/factor-crowding', {
+      params: { view_type: viewType, view_id: viewId },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();
