@@ -71,7 +71,7 @@ class FactorReturns(Base):
     Factor returns time series (Fama-French 5 factors + Momentum).
     Source: Kenneth French Data Library.
     """
-    __tablename__ = "factor_returns"
+    __tablename__ = "fama_french_factor_returns"
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
