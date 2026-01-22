@@ -106,6 +106,13 @@ async def delete_import(
     if not import_log:
         raise HTTPException(status_code=404, detail="Import not found")
 
+    # Get affected account IDs before deletion
+    affected_account_ids = set([
+        t.account_id for t in db.query(Transaction.account_id).filter(
+            Transaction.import_log_id == import_id
+        ).distinct().all()
+    ])
+
     # Count transactions to delete
     txn_count = db.query(Transaction).filter(
         Transaction.import_log_id == import_id
@@ -120,8 +127,12 @@ async def delete_import(
     db.delete(import_log)
     db.commit()
 
+    # Clear analytics for all affected accounts
+    from app.workers.jobs import recompute_analytics_job, clear_analytics_for_account
+    for account_id in affected_account_ids:
+        clear_analytics_for_account(db, account_id)
+
     # Automatically recompute analytics after deletion
-    from app.workers.jobs import recompute_analytics_job
     try:
         await recompute_analytics_job(db)
     except Exception as e:

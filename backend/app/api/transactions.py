@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import User, Transaction, Account, Security, ImportLog
-from app.workers.jobs import recompute_analytics_job
+from app.workers.jobs import recompute_analytics_job, clear_analytics_for_account
 import logging
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -133,6 +133,7 @@ async def delete_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     # Get details before deletion for response
+    account_id = transaction.account_id
     account_number = transaction.account.account_number
     symbol = transaction.security.symbol
     trade_date = transaction.trade_date
@@ -140,6 +141,9 @@ async def delete_transaction(
     # Delete transaction
     db.delete(transaction)
     db.commit()
+
+    # Clear analytics for the affected account
+    clear_analytics_for_account(db, account_id)
 
     # Recompute analytics
     try:
@@ -187,6 +191,9 @@ async def delete_all_account_transactions(
     db.query(Transaction).filter(Transaction.account_id == account_id).delete()
     db.commit()
 
+    # Clear analytics for the affected account
+    clear_analytics_for_account(db, account_id)
+
     # Recompute analytics
     try:
         await recompute_analytics_job(db)
@@ -216,7 +223,7 @@ async def delete_transactions_bulk(
     if not transaction_ids:
         raise HTTPException(status_code=400, detail="No transaction IDs provided")
 
-    # Verify transactions exist
+    # Verify transactions exist and collect affected accounts
     transactions = db.query(Transaction).filter(Transaction.id.in_(transaction_ids)).all()
     found_ids = {t.id for t in transactions}
     missing_ids = set(transaction_ids) - found_ids
@@ -227,9 +234,16 @@ async def delete_transactions_bulk(
     if not transactions:
         raise HTTPException(status_code=404, detail="No transactions found with provided IDs")
 
+    # Get affected account IDs
+    affected_account_ids = set(t.account_id for t in transactions)
+
     # Delete transactions
     deleted_count = db.query(Transaction).filter(Transaction.id.in_(transaction_ids)).delete(synchronize_session=False)
     db.commit()
+
+    # Clear analytics for all affected accounts
+    for account_id in affected_account_ids:
+        clear_analytics_for_account(db, account_id)
 
     # Recompute analytics
     try:
