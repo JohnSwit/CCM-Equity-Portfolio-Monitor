@@ -18,10 +18,11 @@ logger = logging.getLogger(__name__)
 
 async def market_data_update_job(db: Session = None):
     """
-    Daily job to fetch market data:
+    Daily job to fetch market data and compute analytics:
     1. Fetch prices for all securities with transactions
     2. Fetch benchmark prices (SPY, QQQ, INDU)
     3. Fetch factor ETF prices
+    4. Recompute all analytics (positions, returns, risk, factors)
     """
     close_db = False
     if db is None:
@@ -51,6 +52,12 @@ async def market_data_update_job(db: Session = None):
 
         # Factor ETFs will be updated as part of security prices
         # since they're in the Security table
+
+        logger.info("Market data fetched successfully")
+
+        # Now recompute analytics with the new data
+        logger.info("Recomputing analytics...")
+        await recompute_analytics_job(db)
 
         logger.info("Market data update job completed successfully")
 
