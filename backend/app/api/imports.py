@@ -91,13 +91,14 @@ def get_import_history(
 
 
 @router.delete("/{import_id}")
-def delete_import(
+async def delete_import(
     import_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Delete an import and all its transactions.
+    Automatically recomputes analytics after deletion.
     WARNING: This will delete all transactions from this import.
     """
     # Find the import
@@ -119,9 +120,18 @@ def delete_import(
     db.delete(import_log)
     db.commit()
 
+    # Automatically recompute analytics after deletion
+    from app.workers.jobs import recompute_analytics_job
+    try:
+        await recompute_analytics_job(db)
+    except Exception as e:
+        # Don't fail the deletion if analytics recomputation fails
+        import logging
+        logging.error(f"Failed to recompute analytics after deletion: {e}")
+
     return {
         'deleted': True,
         'import_id': import_id,
         'transactions_deleted': txn_count,
-        'message': f'Deleted import {import_log.file_name} and {txn_count} transactions. Run analytics update to refresh data.'
+        'message': f'Deleted import {import_log.file_name} and {txn_count} transactions. Analytics have been recomputed.'
     }

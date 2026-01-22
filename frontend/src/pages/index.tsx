@@ -17,6 +17,7 @@ export default function Dashboard() {
   const [factors, setFactors] = useState<any>(null);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
 
   useEffect(() => {
     loadViews();
@@ -31,9 +32,13 @@ export default function Dashboard() {
   useEffect(() => {
     // Merge portfolio and benchmark data for chart
     if (returns.length > 0) {
-      mergeChartData();
+      if (returnMode === 'TWR') {
+        mergeAndNormalizeTWR();
+      } else {
+        mergeAndNormalizeSimple();
+      }
     }
-  }, [returns, benchmarkReturns]);
+  }, [returns, benchmarkReturns, returnMode]);
 
   const loadViews = async () => {
     try {
@@ -77,7 +82,7 @@ export default function Dashboard() {
     }
   };
 
-  const mergeChartData = () => {
+  const mergeAndNormalizeTWR = () => {
     // Create a map of date to data point
     const dataByDate: any = {};
 
@@ -95,19 +100,101 @@ export default function Dashboard() {
       if (benchmarkReturns[code]) {
         benchmarkReturns[code].forEach((r: any) => {
           const dateStr = r.date;
-          if (dataByDate[dateStr]) {
-            dataByDate[dateStr][code] = r.index_value;
+          if (!dataByDate[dateStr]) {
+            dataByDate[dateStr] = { date: dateStr };
           }
+          dataByDate[dateStr][code] = r.index_value;
         });
       }
     });
 
     // Convert to array and sort by date
-    const merged = Object.values(dataByDate).sort((a: any, b: any) =>
+    let merged = Object.values(dataByDate).sort((a: any, b: any) =>
       a.date.localeCompare(b.date)
     );
 
-    setChartData(merged);
+    // Find first date where ALL series have data
+    const series = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+    const firstCompleteDate = merged.find((point: any) =>
+      series.every(s => point[s] !== undefined && point[s] !== null)
+    );
+
+    if (!firstCompleteDate) {
+      // If no common date found, just use portfolio data
+      setChartData(merged);
+      return;
+    }
+
+    // Get baseline values for normalization
+    const baselineValues: any = {};
+    series.forEach(s => {
+      baselineValues[s] = firstCompleteDate[s] || 1.0;
+    });
+
+    // Normalize all series to start at 1.0
+    // Filter to only include dates from first common date onwards
+    const normalized = merged
+      .filter((point: any) => point.date >= firstCompleteDate.date)
+      .map((point: any) => {
+        const normalizedPoint: any = { date: point.date };
+        series.forEach(s => {
+          if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
+            normalizedPoint[s] = point[s] / baselineValues[s];
+          }
+        });
+        return normalizedPoint;
+      });
+
+    setChartData(normalized);
+  };
+
+  const mergeAndNormalizeSimple = () => {
+    if (returns.length === 0) return;
+
+    const firstDate = returns[0].date;
+    const lastDate = returns[returns.length - 1].date;
+
+    // Get start and end values for portfolio
+    const portfolioStart = returns[0].index_value;
+    const portfolioEnd = returns[returns.length - 1].index_value;
+
+    // Get start and end values for benchmarks
+    const getSimpleReturn = (code: string) => {
+      const benchData = benchmarkReturns[code];
+      if (!benchData || benchData.length === 0) return { start: null, end: null };
+
+      // Find values closest to our date range
+      const dataInRange = benchData.filter((r: any) => r.date >= firstDate && r.date <= lastDate);
+      if (dataInRange.length === 0) return { start: null, end: null };
+
+      const start = dataInRange[0].index_value;
+      const end = dataInRange[dataInRange.length - 1].index_value;
+      return { start, end };
+    };
+
+    const spy = getSimpleReturn('SPY');
+    const qqq = getSimpleReturn('QQQ');
+    const indu = getSimpleReturn('INDU');
+
+    // Create two data points: start (all at 1.0) and end (relative performance)
+    const simpleData = [
+      {
+        date: firstDate,
+        Portfolio: 1.0,
+        ...(spy.start && { SPY: 1.0 }),
+        ...(qqq.start && { QQQ: 1.0 }),
+        ...(indu.start && { INDU: 1.0 }),
+      },
+      {
+        date: lastDate,
+        Portfolio: portfolioEnd / portfolioStart,
+        ...(spy.start && spy.end && { SPY: spy.end / spy.start }),
+        ...(qqq.start && qqq.end && { QQQ: qqq.end / qqq.start }),
+        ...(indu.start && indu.end && { INDU: indu.end / indu.start }),
+      },
+    ];
+
+    setChartData(simpleData);
   };
 
   const formatCurrency = (value: number) => {
@@ -201,7 +288,31 @@ export default function Dashboard() {
 
             {/* Performance Chart */}
             <div className="card">
-              <h3 className="text-lg font-semibold mb-4">Performance vs Benchmarks</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">Performance vs Benchmarks</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setReturnMode('TWR')}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                      returnMode === 'TWR'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    TWR (Time-Weighted)
+                  </button>
+                  <button
+                    onClick={() => setReturnMode('Simple')}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                      returnMode === 'Simple'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    Simple Return
+                  </button>
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height={400}>
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
