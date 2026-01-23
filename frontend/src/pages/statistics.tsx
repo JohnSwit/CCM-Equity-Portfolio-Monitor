@@ -143,6 +143,21 @@ export default function PortfolioStatisticsPage() {
     }
   };
 
+  const handleRecomputeAnalytics = async () => {
+    setRefreshingData('analytics');
+    try {
+      const result = await api.recomputeAnalytics();
+      alert(result.message || 'Analytics recomputed successfully!');
+      loadDataStatus();
+      if (selectedView) loadStatistics();
+    } catch (error) {
+      console.error('Failed to recompute analytics:', error);
+      alert('Failed to recompute analytics. See console for details.');
+    } finally {
+      setRefreshingData(null);
+    }
+  };
+
   const formatPercent = (value: number | null | undefined) => {
     if (value === null || value === undefined) return 'N/A';
     return (value * 100).toFixed(2) + '%';
@@ -311,6 +326,21 @@ export default function PortfolioStatisticsPage() {
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* Analytics Recomputation */}
+            <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded">
+              <h3 className="font-semibold text-gray-700 mb-2">Analytics Computation</h3>
+              <p className="text-sm text-gray-600 mb-3">
+                After loading new data, recompute analytics to calculate factor exposures and portfolio metrics.
+              </p>
+              <button
+                onClick={handleRecomputeAnalytics}
+                disabled={refreshingData === 'analytics'}
+                className="w-full px-3 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:bg-gray-400"
+              >
+                {refreshingData === 'analytics' ? 'Recomputing...' : 'Recompute Analytics'}
+              </button>
             </div>
 
             {/* Data Readiness Indicators */}

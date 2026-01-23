@@ -336,6 +336,11 @@ class APIClient {
     return response.data;
   }
 
+  async recomputeAnalytics() {
+    const response = await this.client.post('/data-management/recompute-analytics');
+    return response.data;
+  }
+
   async getDataStatus() {
     const response = await this.client.get('/data-management/status');
     return response.data;

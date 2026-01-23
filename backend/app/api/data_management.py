@@ -170,6 +170,30 @@ async def get_data_status(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/recompute-analytics")
+async def recompute_analytics(db: Session = Depends(get_db)):
+    """
+    Recompute all analytics including positions, returns, and factor regressions.
+    This is needed after loading new data to calculate factor exposures.
+    """
+    from app.workers.jobs import recompute_analytics_job
+
+    try:
+        print("=== ANALYTICS RECOMPUTATION STARTED ===")
+        await recompute_analytics_job(db)
+        print("=== ANALYTICS RECOMPUTATION COMPLETE ===")
+        return {
+            "success": True,
+            "message": "Analytics recomputed successfully. Factor analysis should now show data."
+        }
+    except Exception as e:
+        print(f"ERROR recomputing analytics: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to recompute analytics: {str(e)}"
+        )
+
+
 @router.get("/missing-classifications")
 async def get_missing_classifications(
     limit: int = 100,
