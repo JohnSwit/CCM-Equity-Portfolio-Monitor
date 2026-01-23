@@ -10,18 +10,174 @@ from app.services.benchmarks import BenchmarksEngine
 from app.services.baskets import BasketsEngine
 from app.services.factors import FactorsEngine
 from app.services.risk import RiskEngine
-from app.models import Account, Group, ViewType
+from app.models import (
+    Account, Group, ViewType, Transaction,
+    PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
+    BenchmarkMetric, FactorRegression
+)
 import logging
 
 logger = logging.getLogger(__name__)
 
 
+def clear_analytics_for_accounts_without_transactions(db: Session):
+    """
+    Clear all analytics data for accounts that have no transactions.
+    This handles the case where all transactions for an account were deleted.
+    """
+    logger.info("Clearing analytics for accounts without transactions...")
+
+    # Get all account IDs
+    all_account_ids = [acc.id for acc in db.query(Account.id).all()]
+
+    # Get account IDs that have transactions
+    accounts_with_txns = set([
+        txn.account_id for txn in db.query(Transaction.account_id).distinct().all()
+    ])
+
+    # Find accounts with no transactions
+    accounts_to_clear = [acc_id for acc_id in all_account_ids if acc_id not in accounts_with_txns]
+
+    if not accounts_to_clear:
+        logger.info("No accounts without transactions found")
+        return
+
+    logger.info(f"Clearing analytics for {len(accounts_to_clear)} accounts without transactions")
+
+    # Clear positions
+    deleted_positions = db.query(PositionsEOD).filter(
+        PositionsEOD.account_id.in_(accounts_to_clear)
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_positions} positions")
+
+    # Clear portfolio values
+    deleted_values = db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+        PortfolioValueEOD.view_id.in_(accounts_to_clear)
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_values} portfolio values")
+
+    # Clear returns
+    deleted_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT,
+        ReturnsEOD.view_id.in_(accounts_to_clear)
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_returns} returns")
+
+    # Clear risk metrics
+    deleted_risk = db.query(RiskEOD).filter(
+        RiskEOD.view_type == ViewType.ACCOUNT,
+        RiskEOD.view_id.in_(accounts_to_clear)
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_risk} risk metrics")
+
+    # Clear benchmark metrics
+    deleted_benchmarks = db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type == ViewType.ACCOUNT,
+        BenchmarkMetric.view_id.in_(accounts_to_clear)
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_benchmarks} benchmark metrics")
+
+    # Clear factor regressions
+    deleted_factors = db.query(FactorRegression).filter(
+        FactorRegression.view_type == ViewType.ACCOUNT,
+        FactorRegression.view_id.in_(accounts_to_clear)
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_factors} factor regressions")
+
+    db.commit()
+    logger.info("Analytics cleared successfully")
+
+
+def clear_analytics_for_account(db: Session, account_id: int):
+    """
+    Clear all analytics data for a specific account.
+    Use this when transactions are deleted for an account.
+    """
+    logger.info(f"Clearing analytics for account {account_id}...")
+
+    # Clear positions
+    db.query(PositionsEOD).filter(
+        PositionsEOD.account_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Clear portfolio values
+    db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+        PortfolioValueEOD.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Clear returns
+    db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT,
+        ReturnsEOD.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Clear risk metrics
+    db.query(RiskEOD).filter(
+        RiskEOD.view_type == ViewType.ACCOUNT,
+        RiskEOD.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Clear benchmark metrics
+    db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type == ViewType.ACCOUNT,
+        BenchmarkMetric.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Clear factor regressions
+    db.query(FactorRegression).filter(
+        FactorRegression.view_type == ViewType.ACCOUNT,
+        FactorRegression.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    logger.info(f"Analytics cleared for account {account_id}")
+
+
+def clear_group_and_firm_analytics(db: Session):
+    """
+    Clear all group and firm level analytics.
+    These need to be recomputed from scratch after account changes.
+    """
+    logger.info("Clearing group and firm analytics...")
+
+    # Clear group/firm portfolio values
+    db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    # Clear group/firm returns
+    db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    # Clear group/firm risk metrics
+    db.query(RiskEOD).filter(
+        RiskEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    # Clear group/firm benchmark metrics
+    db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    # Clear group/firm factor regressions
+    db.query(FactorRegression).filter(
+        FactorRegression.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    logger.info("Group and firm analytics cleared")
+
+
 async def market_data_update_job(db: Session = None):
     """
-    Daily job to fetch market data:
+    Daily job to fetch market data and compute analytics:
     1. Fetch prices for all securities with transactions
     2. Fetch benchmark prices (SPY, QQQ, INDU)
     3. Fetch factor ETF prices
+    4. Recompute all analytics (positions, returns, risk, factors)
     """
     close_db = False
     if db is None:
@@ -52,6 +208,12 @@ async def market_data_update_job(db: Session = None):
         # Factor ETFs will be updated as part of security prices
         # since they're in the Security table
 
+        logger.info("Market data fetched successfully")
+
+        # Now recompute analytics with the new data
+        logger.info("Recomputing analytics...")
+        await recompute_analytics_job(db)
+
         logger.info("Market data update job completed successfully")
 
     except Exception as e:
@@ -65,6 +227,7 @@ async def market_data_update_job(db: Session = None):
 async def recompute_analytics_job(db: Session = None):
     """
     Daily job to recompute analytics:
+    0. Clear old analytics for accounts without transactions and all group/firm data
     1. Build positions from transactions
     2. Compute portfolio values and returns for accounts
     3. Compute group/firm rollups
@@ -82,6 +245,11 @@ async def recompute_analytics_job(db: Session = None):
         logger.info("Starting analytics recomputation job")
 
         as_of_date = date.today()
+
+        # 0. Clear old analytics data
+        logger.info("Clearing old analytics data...")
+        clear_analytics_for_accounts_without_transactions(db)
+        clear_group_and_firm_analytics(db)
 
         # 1. Build positions
         logger.info("Building positions...")

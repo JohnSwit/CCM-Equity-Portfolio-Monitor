@@ -131,6 +131,13 @@ class APIClient {
     return response.data;
   }
 
+  async getBenchmarkReturns(benchmarkCodes: string[], startDate?: string, endDate?: string) {
+    const response = await this.client.get('/analytics/benchmark-returns', {
+      params: { benchmark_codes: benchmarkCodes.join(','), start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
   // Imports
   async importBDTransactions(file: File, mode: 'preview' | 'commit') {
     const formData = new FormData();
@@ -155,6 +162,11 @@ class APIClient {
     return response.data;
   }
 
+  async deleteImport(importId: number) {
+    const response = await this.client.delete(`/imports/${importId}`);
+    return response.data;
+  }
+
   // Baskets
   async getBaskets() {
     const response = await this.client.get('/baskets');
@@ -174,6 +186,165 @@ class APIClient {
   // Jobs
   async runJob(jobName: string) {
     const response = await this.client.post(`/jobs/run?job_name=${jobName}`);
+    return response.data;
+  }
+
+  // Transactions
+  async getTransactions(params?: {
+    account_id?: number;
+    account_number?: string;
+    symbol?: string;
+    start_date?: string;
+    end_date?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const response = await this.client.get('/transactions', { params });
+    return response.data;
+  }
+
+  async getAccountsWithTransactionCounts() {
+    const response = await this.client.get('/transactions/accounts');
+    return response.data;
+  }
+
+  async deleteTransaction(transactionId: number) {
+    const response = await this.client.delete(`/transactions/${transactionId}`);
+    return response.data;
+  }
+
+  async deleteAllAccountTransactions(accountId: number) {
+    const response = await this.client.delete(`/transactions/accounts/${accountId}/all`);
+    return response.data;
+  }
+
+  async deleteTransactionsBulk(transactionIds: number[]) {
+    const response = await this.client.delete('/transactions/bulk', {
+      data: { transaction_ids: transactionIds },
+    });
+    return response.data;
+  }
+
+  // Portfolio Statistics
+  async getContributionToReturns(viewType: string, viewId: number, startDate?: string, endDate?: string, topN: number = 20) {
+    const response = await this.client.get('/portfolio-stats/contribution-to-returns', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, top_n: topN },
+    });
+    return response.data;
+  }
+
+  async getVolatilityMetrics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
+    const response = await this.client.get('/portfolio-stats/volatility-metrics', {
+      params: { view_type: viewType, view_id: viewId, benchmark, window },
+    });
+    return response.data;
+  }
+
+  async getDrawdownAnalysis(viewType: string, viewId: number) {
+    const response = await this.client.get('/portfolio-stats/drawdown-analysis', {
+      params: { view_type: viewType, view_id: viewId },
+    });
+    return response.data;
+  }
+
+  async getVarCvar(viewType: string, viewId: number, confidenceLevels: string = '95,99', window: number = 252) {
+    const response = await this.client.get('/portfolio-stats/var-cvar', {
+      params: { view_type: viewType, view_id: viewId, confidence_levels: confidenceLevels, window },
+    });
+    return response.data;
+  }
+
+  async getFactorAnalysis(viewType: string, viewId: number, asOfDate?: string) {
+    const response = await this.client.get('/portfolio-stats/factor-analysis', {
+      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
+    });
+    return response.data;
+  }
+
+  async getComprehensiveStatistics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
+    const response = await this.client.get('/portfolio-stats/comprehensive', {
+      params: { view_type: viewType, view_id: viewId, benchmark, window },
+    });
+    return response.data;
+  }
+
+  // Phase 2: Advanced Analytics
+  async getTurnoverAnalysis(viewType: string, viewId: number, startDate?: string, endDate?: string, period: string = 'monthly') {
+    const response = await this.client.get('/portfolio-stats/turnover', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period },
+    });
+    return response.data;
+  }
+
+  async getSectorWeights(viewType: string, viewId: number, asOfDate?: string) {
+    const response = await this.client.get('/portfolio-stats/sector-weights', {
+      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
+    });
+    return response.data;
+  }
+
+  async getSectorComparison(viewType: string, viewId: number, benchmark: string = 'SP500', asOfDate?: string) {
+    const response = await this.client.get('/portfolio-stats/sector-comparison', {
+      params: { view_type: viewType, view_id: viewId, benchmark, as_of_date: asOfDate },
+    });
+    return response.data;
+  }
+
+  async getBrinsonAttribution(viewType: string, viewId: number, benchmark: string = 'SP500', startDate?: string, endDate?: string) {
+    const response = await this.client.get('/portfolio-stats/brinson-attribution', {
+      params: { view_type: viewType, view_id: viewId, benchmark, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
+  async getFactorAttribution(viewType: string, viewId: number, startDate?: string, endDate?: string) {
+    const response = await this.client.get('/portfolio-stats/factor-attribution', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
+  async getFactorCrowding(viewType: string, viewId: number) {
+    const response = await this.client.get('/portfolio-stats/factor-crowding', {
+      params: { view_type: viewType, view_id: viewId },
+    });
+    return response.data;
+  }
+
+  // Data Management
+  async refreshClassifications(limit?: number) {
+    const response = await this.client.post('/data-management/refresh-classifications', null, {
+      params: { limit },
+    });
+    return response.data;
+  }
+
+  async refreshSingleClassification(securityId: number) {
+    const response = await this.client.post(`/data-management/refresh-classification/${securityId}`);
+    return response.data;
+  }
+
+  async refreshSP500Benchmark() {
+    const response = await this.client.post('/data-management/refresh-benchmark');
+    return response.data;
+  }
+
+  async refreshFactorReturns(startDate?: string) {
+    const response = await this.client.post('/data-management/refresh-factor-returns', null, {
+      params: { start_date: startDate },
+    });
+    return response.data;
+  }
+
+  async getDataStatus() {
+    const response = await this.client.get('/data-management/status');
+    return response.data;
+  }
+
+  async getMissingClassifications(limit: number = 100) {
+    const response = await this.client.get('/data-management/missing-classifications', {
+      params: { limit },
+    });
     return response.data;
   }
 }

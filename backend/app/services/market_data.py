@@ -156,6 +156,44 @@ class MarketDataProvider:
         logger.info(f"Stored {count} prices for {symbol} from {source}")
         return count
 
+    async def fetch_stooq_prices_raw(
+        self,
+        provider_symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """Fetch prices from Stooq using the provider symbol directly (no transformation)"""
+        try:
+            # Stooq URL format: ?s=SYMBOL&d1=YYYYMMDD&d2=YYYYMMDD&i=d
+            params = {
+                's': provider_symbol,
+                'd1': start_date.strftime('%Y%m%d'),
+                'd2': end_date.strftime('%Y%m%d'),
+                'i': 'd'  # daily
+            }
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(self.stooq_base_url, params=params)
+                response.raise_for_status()
+
+                # Parse CSV
+                df = pd.read_csv(
+                    pd.io.common.StringIO(response.text),
+                    parse_dates=['Date']
+                )
+
+                if df.empty or 'Close' not in df.columns:
+                    return None
+
+                df = df.rename(columns={'Date': 'date', 'Close': 'close'})
+                df = df[['date', 'close']].dropna()
+
+                return df
+
+        except Exception as e:
+            logger.warning(f"Stooq fetch failed for {provider_symbol}: {e}")
+            return None
+
     async def fetch_and_store_benchmark_prices(
         self,
         benchmark_code: str,
@@ -164,11 +202,11 @@ class MarketDataProvider:
         end_date: date
     ) -> int:
         """Fetch and store benchmark prices"""
-        # For benchmarks, use the provider symbol directly
-        df = await self.fetch_stooq_prices(provider_symbol, start_date, end_date)
+        # For benchmarks, use the provider symbol directly without transformation
+        df = await self.fetch_stooq_prices_raw(provider_symbol, start_date, end_date)
 
         if df is None or df.empty:
-            # Try yfinance with original code
+            # Try yfinance with the benchmark code
             df = self.fetch_yfinance_prices(benchmark_code, start_date, end_date)
 
         if df is None or df.empty:

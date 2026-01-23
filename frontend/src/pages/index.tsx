@@ -10,12 +10,14 @@ export default function Dashboard() {
   const [selectedView, setSelectedView] = useState<any>(null);
   const [summary, setSummary] = useState<any>(null);
   const [returns, setReturns] = useState<any[]>([]);
+  const [benchmarkReturns, setBenchmarkReturns] = useState<any>({});
+  const [chartData, setChartData] = useState<any[]>([]);
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
   const [factors, setFactors] = useState<any>(null);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedBenchmark, setSelectedBenchmark] = useState('SPY');
+  const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
 
   useEffect(() => {
     loadViews();
@@ -25,7 +27,18 @@ export default function Dashboard() {
     if (selectedView) {
       loadViewData();
     }
-  }, [selectedView, selectedBenchmark]);
+  }, [selectedView]);
+
+  useEffect(() => {
+    // Merge portfolio and benchmark data for chart
+    if (returns.length > 0) {
+      if (returnMode === 'TWR') {
+        mergeAndNormalizeTWR();
+      } else {
+        mergeAndNormalizeSimple();
+      }
+    }
+  }, [returns, benchmarkReturns, returnMode]);
 
   const loadViews = async () => {
     try {
@@ -45,9 +58,10 @@ export default function Dashboard() {
 
     setLoading(true);
     try {
-      const [summaryData, returnsData, holdingsData, riskData, factorsData, unpricedData] = await Promise.all([
+      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, factorsData, unpricedData] = await Promise.all([
         api.getSummary(selectedView.view_type, selectedView.view_id),
         api.getReturns(selectedView.view_type, selectedView.view_id),
+        api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
         api.getHoldings(selectedView.view_type, selectedView.view_id),
         api.getRisk(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
@@ -56,6 +70,7 @@ export default function Dashboard() {
 
       setSummary(summaryData);
       setReturns(returnsData);
+      setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
       setFactors(factorsData);
@@ -65,6 +80,121 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const mergeAndNormalizeTWR = () => {
+    // Create a map of date to data point
+    const dataByDate: any = {};
+
+    // Add portfolio returns
+    returns.forEach((r: any) => {
+      const dateStr = r.date;
+      dataByDate[dateStr] = {
+        date: dateStr,
+        Portfolio: r.index_value,
+      };
+    });
+
+    // Add benchmark returns
+    ['SPY', 'QQQ', 'INDU'].forEach((code) => {
+      if (benchmarkReturns[code]) {
+        benchmarkReturns[code].forEach((r: any) => {
+          const dateStr = r.date;
+          if (!dataByDate[dateStr]) {
+            dataByDate[dateStr] = { date: dateStr };
+          }
+          dataByDate[dateStr][code] = r.index_value;
+        });
+      }
+    });
+
+    // Convert to array and sort by date
+    let merged = Object.values(dataByDate).sort((a: any, b: any) =>
+      a.date.localeCompare(b.date)
+    );
+
+    // Find first date where ALL series have data
+    const series = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+    const firstCompleteDate = merged.find((point: any) =>
+      series.every(s => point[s] !== undefined && point[s] !== null)
+    );
+
+    if (!firstCompleteDate) {
+      // If no common date found, just use portfolio data
+      setChartData(merged);
+      return;
+    }
+
+    // Get baseline values for normalization
+    const baselineValues: any = {};
+    series.forEach(s => {
+      baselineValues[s] = firstCompleteDate[s] || 1.0;
+    });
+
+    // Normalize all series to start at 1.0
+    // Filter to only include dates from first common date onwards
+    const normalized = merged
+      .filter((point: any) => point.date >= firstCompleteDate.date)
+      .map((point: any) => {
+        const normalizedPoint: any = { date: point.date };
+        series.forEach(s => {
+          if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
+            normalizedPoint[s] = point[s] / baselineValues[s];
+          }
+        });
+        return normalizedPoint;
+      });
+
+    setChartData(normalized);
+  };
+
+  const mergeAndNormalizeSimple = () => {
+    if (returns.length === 0) return;
+
+    const firstDate = returns[0].date;
+    const lastDate = returns[returns.length - 1].date;
+
+    // Get start and end values for portfolio
+    const portfolioStart = returns[0].index_value;
+    const portfolioEnd = returns[returns.length - 1].index_value;
+
+    // Get start and end values for benchmarks
+    const getSimpleReturn = (code: string) => {
+      const benchData = benchmarkReturns[code];
+      if (!benchData || benchData.length === 0) return { start: null, end: null };
+
+      // Find values closest to our date range
+      const dataInRange = benchData.filter((r: any) => r.date >= firstDate && r.date <= lastDate);
+      if (dataInRange.length === 0) return { start: null, end: null };
+
+      const start = dataInRange[0].index_value;
+      const end = dataInRange[dataInRange.length - 1].index_value;
+      return { start, end };
+    };
+
+    const spy = getSimpleReturn('SPY');
+    const qqq = getSimpleReturn('QQQ');
+    const indu = getSimpleReturn('INDU');
+
+    // Create two data points: start (all at 1.0) and end (relative performance)
+    const simpleData = [
+      {
+        date: firstDate,
+        Portfolio: 1.0,
+        ...(spy.start && { SPY: 1.0 }),
+        ...(qqq.start && { QQQ: 1.0 }),
+        ...(indu.start && { INDU: 1.0 }),
+      },
+      {
+        date: lastDate,
+        Portfolio: portfolioEnd / portfolioStart,
+        ...(spy.start && spy.end && { SPY: spy.end / spy.start }),
+        ...(qqq.start && qqq.end && { QQQ: qqq.end / qqq.start }),
+        ...(indu.start && indu.end && { INDU: indu.end / indu.start }),
+      },
+    ];
+
+    setChartData(simpleData);
   };
 
   const formatCurrency = (value: number) => {
@@ -78,6 +208,12 @@ export default function Dashboard() {
 
   const formatPercent = (value: number) => {
     return (value * 100).toFixed(2) + '%';
+  };
+
+  const formatIndexValue = (value: number) => {
+    // Convert index value to percentage return
+    // e.g., 1.05 becomes +5.00%
+    return ((value - 1) * 100).toFixed(2) + '%';
   };
 
   const viewOptions = views.map((v) => ({
@@ -152,21 +288,50 @@ export default function Dashboard() {
 
             {/* Performance Chart */}
             <div className="card">
-              <h3 className="text-lg font-semibold mb-4">Performance</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={returns}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">Performance vs Benchmarks</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setReturnMode('TWR')}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                      returnMode === 'TWR'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    TWR (Time-Weighted)
+                  </button>
+                  <button
+                    onClick={() => setReturnMode('Simple')}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                      returnMode === 'Simple'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    Simple Return
+                  </button>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
                     tickFormatter={(value) => format(new Date(value), 'MMM yy')}
                   />
-                  <YAxis />
+                  <YAxis
+                    tickFormatter={(value) => formatIndexValue(value)}
+                  />
                   <Tooltip
                     labelFormatter={(value) => format(new Date(value), 'MMM d, yyyy')}
-                    formatter={(value: any) => [(value * 100).toFixed(2) + '%', 'Return']}
+                    formatter={(value: any) => [formatIndexValue(value), '']}
                   />
                   <Legend />
-                  <Line type="monotone" dataKey="index_value" stroke="#3b82f6" name="Index" />
+                  <Line type="monotone" dataKey="Portfolio" stroke="#3b82f6" strokeWidth={2} name="Portfolio" dot={false} />
+                  <Line type="monotone" dataKey="SPY" stroke="#10b981" strokeWidth={1.5} name="S&P 500 (SPY)" dot={false} />
+                  <Line type="monotone" dataKey="QQQ" stroke="#8b5cf6" strokeWidth={1.5} name="Nasdaq (QQQ)" dot={false} />
+                  <Line type="monotone" dataKey="INDU" stroke="#f59e0b" strokeWidth={1.5} name="Dow (INDU)" dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

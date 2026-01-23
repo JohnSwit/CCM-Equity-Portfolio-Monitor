@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, ImportLog
+from app.models import User, ImportLog, Transaction
 from app.models.schemas import ImportPreviewResponse, ImportCommitResponse
 from app.services.bd_parser import BDParser, calculate_file_hash
 
@@ -88,3 +88,61 @@ def get_import_history(
         }
         for imp in imports
     ]
+
+
+@router.delete("/{import_id}")
+async def delete_import(
+    import_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete an import and all its transactions.
+    Automatically recomputes analytics after deletion.
+    WARNING: This will delete all transactions from this import.
+    """
+    # Find the import
+    import_log = db.query(ImportLog).filter(ImportLog.id == import_id).first()
+    if not import_log:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    # Get affected account IDs before deletion
+    affected_account_ids = set([
+        t.account_id for t in db.query(Transaction.account_id).filter(
+            Transaction.import_log_id == import_id
+        ).distinct().all()
+    ])
+
+    # Count transactions to delete
+    txn_count = db.query(Transaction).filter(
+        Transaction.import_log_id == import_id
+    ).count()
+
+    # Delete all transactions from this import
+    db.query(Transaction).filter(
+        Transaction.import_log_id == import_id
+    ).delete()
+
+    # Delete the import log
+    db.delete(import_log)
+    db.commit()
+
+    # Clear analytics for all affected accounts
+    from app.workers.jobs import recompute_analytics_job, clear_analytics_for_account
+    for account_id in affected_account_ids:
+        clear_analytics_for_account(db, account_id)
+
+    # Automatically recompute analytics after deletion
+    try:
+        await recompute_analytics_job(db)
+    except Exception as e:
+        # Don't fail the deletion if analytics recomputation fails
+        import logging
+        logging.error(f"Failed to recompute analytics after deletion: {e}")
+
+    return {
+        'deleted': True,
+        'import_id': import_id,
+        'transactions_deleted': txn_count,
+        'message': f'Deleted import {import_log.file_name} and {txn_count} transactions. Analytics have been recomputed.'
+    }

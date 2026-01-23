@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.core.database import init_db, get_db
 from app.core.security import get_password_hash
 from app.models import User
-from app.api import auth, imports, views, analytics, baskets, jobs
+from app.api import auth, imports, views, analytics, baskets, jobs, transactions, portfolio_stats, data_management
 
 # Create FastAPI app
 app = FastAPI(
@@ -29,6 +29,9 @@ app.include_router(views.router)
 app.include_router(analytics.router)
 app.include_router(baskets.router)
 app.include_router(jobs.router)
+app.include_router(transactions.router)
+app.include_router(portfolio_stats.router)
+app.include_router(data_management.router)
 
 
 @app.on_event("startup")
