@@ -1,5 +1,6 @@
 """
 Data sourcing services for classifications, benchmark constituents, and factor returns.
+Updated: 2026-01-23
 """
 import os
 import httpx
