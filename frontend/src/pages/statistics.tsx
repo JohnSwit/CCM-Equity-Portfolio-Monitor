@@ -101,9 +101,10 @@ export default function PortfolioStatisticsPage() {
   const handleRefreshClassifications = async () => {
     setRefreshingData('classifications');
     try {
-      await api.refreshClassifications(undefined, true);
-      alert('Classification refresh started in background. This may take several minutes.');
-      setTimeout(loadDataStatus, 2000);
+      const result = await api.refreshClassifications();
+      alert(`Classification refresh complete: ${result.success}/${result.total} succeeded`);
+      loadDataStatus();
+      if (selectedView) loadStatistics();
     } catch (error) {
       console.error('Failed to refresh classifications:', error);
       alert('Failed to refresh classifications. See console for details.');
@@ -115,8 +116,8 @@ export default function PortfolioStatisticsPage() {
   const handleRefreshBenchmarks = async () => {
     setRefreshingData('benchmarks');
     try {
-      await api.refreshSP500Benchmark();
-      alert('S&P 500 benchmark refreshed successfully.');
+      const result = await api.refreshSP500Benchmark();
+      alert(`S&P 500 refreshed: ${result.count} constituents loaded`);
       loadDataStatus();
       if (selectedView) loadStatistics();
     } catch (error) {
@@ -130,9 +131,10 @@ export default function PortfolioStatisticsPage() {
   const handleRefreshFactors = async () => {
     setRefreshingData('factors');
     try {
-      await api.refreshFactorReturns(undefined, true);
-      alert('Factor returns refresh started in background. This may take a minute.');
-      setTimeout(loadDataStatus, 2000);
+      const result = await api.refreshFactorReturns();
+      alert(`Factor returns refreshed: ${result.success} records loaded`);
+      loadDataStatus();
+      if (selectedView) loadStatistics();
     } catch (error) {
       console.error('Failed to refresh factor returns:', error);
       alert('Failed to refresh factor returns. See console for details.');

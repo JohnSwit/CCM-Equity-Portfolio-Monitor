@@ -312,9 +312,9 @@ class APIClient {
   }
 
   // Data Management
-  async refreshClassifications(limit?: number, background: boolean = false) {
+  async refreshClassifications(limit?: number) {
     const response = await this.client.post('/data-management/refresh-classifications', null, {
-      params: { limit, background },
+      params: { limit },
     });
     return response.data;
   }
@@ -329,9 +329,9 @@ class APIClient {
     return response.data;
   }
 
-  async refreshFactorReturns(startDate?: string, background: boolean = false) {
+  async refreshFactorReturns(startDate?: string) {
     const response = await this.client.post('/data-management/refresh-factor-returns', null, {
-      params: { start_date: startDate, background },
+      params: { start_date: startDate },
     });
     return response.data;
   }

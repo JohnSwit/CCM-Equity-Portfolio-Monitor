@@ -18,8 +18,6 @@ router = APIRouter(prefix="/data-management", tags=["data-management"])
 @router.post("/refresh-classifications")
 async def refresh_classifications(
     limit: Optional[int] = None,
-    background: bool = False,
-    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -27,17 +25,10 @@ async def refresh_classifications(
 
     Args:
         limit: Maximum number of securities to refresh (None for all)
-        background: Run in background (returns immediately)
     """
     service = ClassificationService(db)
 
-    if background and background_tasks:
-        background_tasks.add_task(service.refresh_all_classifications, limit)
-        return {
-            "status": "started",
-            "message": "Classification refresh started in background"
-        }
-
+    # Run synchronously to ensure proper database session handling and error visibility
     result = await service.refresh_all_classifications(limit)
     return result
 
@@ -81,8 +72,6 @@ async def refresh_sp500_benchmark(
 @router.post("/refresh-factor-returns")
 async def refresh_factor_returns(
     start_date: Optional[str] = None,
-    background: bool = False,
-    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -90,7 +79,6 @@ async def refresh_factor_returns(
 
     Args:
         start_date: Start date (YYYY-MM-DD format, defaults to 5 years ago)
-        background: Run in background
     """
     service = FactorReturnsService(db)
 
@@ -101,13 +89,7 @@ async def refresh_factor_returns(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-    if background and background_tasks:
-        background_tasks.add_task(service.refresh_factor_returns, parsed_date)
-        return {
-            "status": "started",
-            "message": "Factor returns refresh started in background"
-        }
-
+    # Run synchronously to ensure proper database session handling and error visibility
     result = await service.refresh_factor_returns(parsed_date)
     return result
 
