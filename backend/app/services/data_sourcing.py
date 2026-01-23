@@ -346,35 +346,48 @@ class FactorReturnsService:
         Returns:
             Summary dict
         """
+        print("=== FACTOR RETURNS REFRESH STARTED ===")
         if not start_date:
             start_date = date.today() - timedelta(days=365 * 5)
 
+        print(f"Refreshing factor returns from {start_date}")
         logger.info(f"Refreshing factor returns from {start_date}")
 
         results = {"success": 0, "failed": 0, "errors": []}
 
         # Fetch 5 factors
         try:
+            print("Fetching 5 factors...")
             factors_5 = await self._fetch_5_factors()
+            print(f"5 factors fetched: {factors_5 is not None}, empty: {factors_5.empty if factors_5 is not None else 'N/A'}")
             if factors_5 is not None and not factors_5.empty:
+                print(f"Saving {len(factors_5)} factor records...")
                 self._save_factor_returns(factors_5, start_date)
                 results["success"] += len(factors_5)
+                print(f"Saved {len(factors_5)} 5-factor records")
         except Exception as e:
-            logger.error(f"Failed to fetch 5 factors: {str(e)}")
+            print(f"ERROR fetching 5 factors: {str(e)}")
+            logger.error(f"Failed to fetch 5 factors: {str(e)}", exc_info=True)
             results["failed"] += 1
             results["errors"].append({"source": "5_factors", "error": str(e)})
 
         # Fetch momentum
         try:
+            print("Fetching momentum...")
             momentum = await self._fetch_momentum()
+            print(f"Momentum fetched: {momentum is not None}, empty: {momentum.empty if momentum is not None else 'N/A'}")
             if momentum is not None and not momentum.empty:
+                print(f"Saving {len(momentum)} momentum records...")
                 self._save_factor_returns(momentum, start_date)
                 results["success"] += len(momentum)
+                print(f"Saved {len(momentum)} momentum records")
         except Exception as e:
-            logger.error(f"Failed to fetch momentum: {str(e)}")
+            print(f"ERROR fetching momentum: {str(e)}")
+            logger.error(f"Failed to fetch momentum: {str(e)}", exc_info=True)
             results["failed"] += 1
             results["errors"].append({"source": "momentum", "error": str(e)})
 
+        print(f"=== FACTOR RETURNS REFRESH COMPLETE: {results} ===")
         return results
 
     async def _fetch_5_factors(self) -> Optional[pd.DataFrame]:
