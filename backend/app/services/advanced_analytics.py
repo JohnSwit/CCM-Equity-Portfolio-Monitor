@@ -361,7 +361,7 @@ class BrinsonAttributionAnalyzer:
             BenchmarkConstituent.weight,
             SectorClassification.sector
         ).outerjoin(
-            Security, Security.ticker == BenchmarkConstituent.symbol
+            Security, Security.symbol == BenchmarkConstituent.symbol
         ).outerjoin(
             SectorClassification, SectorClassification.security_id == Security.id
         ).filter(
@@ -490,7 +490,7 @@ class BrinsonAttributionAnalyzer:
 
             # Find security by ticker
             security = self.db.query(Security).filter(
-                Security.ticker == TickerNormalizer.normalize(ticker)
+                Security.symbol == TickerNormalizer.normalize(ticker)
             ).first()
 
             if not security:

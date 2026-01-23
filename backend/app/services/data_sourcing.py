@@ -44,7 +44,7 @@ class ClassificationService:
             logger.error(f"Security {security_id} not found")
             return None
 
-        ticker = security.ticker
+        ticker = security.symbol
         logger.info(f"Refreshing classification for {ticker}")
 
         # Try Polygon.io first
@@ -92,9 +92,9 @@ class ClassificationService:
                 else:
                     results["failed"] += 1
             except Exception as e:
-                logger.error(f"Error refreshing {security.ticker}: {str(e)}")
+                logger.error(f"Error refreshing {security.symbol}: {str(e)}")
                 results["failed"] += 1
-                results["errors"].append({"ticker": security.ticker, "error": str(e)})
+                results["errors"].append({"ticker": security.symbol, "error": str(e)})
 
         logger.info(f"Classification refresh complete: {results['success']}/{results['total']} successful")
         return results
@@ -258,14 +258,15 @@ class BenchmarkService:
     async def _refresh_spy(self) -> Dict[str, Any]:
         """Refresh SPY holdings from State Street"""
         try:
-            # Note: The actual State Street URL may require special handling or may change
-            # This is a placeholder implementation
+            logger.info(f"Fetching SPY holdings from: {self.HOLDINGS_URLS['SPY']}")
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 response = await client.get(self.HOLDINGS_URLS["SPY"])
+                logger.info(f"SPY response status: {response.status_code}, content-type: {response.headers.get('content-type')}")
                 response.raise_for_status()
 
                 # Parse Excel file
                 df = pd.read_excel(io.BytesIO(response.content), skiprows=4)
+                logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
 
                 # Expecting columns: Ticker, Name, Weight, etc.
                 holdings = []
@@ -279,21 +280,25 @@ class BenchmarkService:
                             "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
                         })
 
+                logger.info(f"Parsed {len(holdings)} SPY holdings")
                 return self._save_benchmark_holdings("SPY", holdings, self.HOLDINGS_URLS["SPY"])
 
         except Exception as e:
-            logger.error(f"Failed to refresh SPY: {str(e)}")
+            logger.error(f"Failed to refresh SPY: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     async def _refresh_qqq(self) -> Dict[str, Any]:
         """Refresh QQQ holdings from Invesco"""
         try:
+            logger.info(f"Fetching QQQ holdings from: {self.HOLDINGS_URLS['QQQ']}")
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 response = await client.get(self.HOLDINGS_URLS["QQQ"])
+                logger.info(f"QQQ response status: {response.status_code}, content-type: {response.headers.get('content-type')}")
                 response.raise_for_status()
 
                 # Parse CSV
                 df = pd.read_csv(io.StringIO(response.text))
+                logger.info(f"QQQ DataFrame columns: {df.columns.tolist()}")
 
                 holdings = []
                 for _, row in df.iterrows():
@@ -306,10 +311,11 @@ class BenchmarkService:
                             "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
                         })
 
+                logger.info(f"Parsed {len(holdings)} QQQ holdings")
                 return self._save_benchmark_holdings("QQQ", holdings, self.HOLDINGS_URLS["QQQ"])
 
         except Exception as e:
-            logger.error(f"Failed to refresh QQQ: {str(e)}")
+            logger.error(f"Failed to refresh QQQ: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     async def _refresh_indu(self) -> Dict[str, Any]:
@@ -398,7 +404,7 @@ class FactorReturnsService:
         # Fetch 5 factors
         try:
             factors_5 = await self._fetch_5_factors()
-            if factors_5:
+            if factors_5 is not None and not factors_5.empty:
                 self._save_factor_returns(factors_5, start_date)
                 results["success"] += len(factors_5)
         except Exception as e:
@@ -409,7 +415,7 @@ class FactorReturnsService:
         # Fetch momentum
         try:
             momentum = await self._fetch_momentum()
-            if momentum:
+            if momentum is not None and not momentum.empty:
                 self._save_factor_returns(momentum, start_date)
                 results["success"] += len(momentum)
         except Exception as e:
