@@ -173,7 +173,11 @@ class SectorAnalyzer:
             Security.asset_name,
             SectorClassification.sector,
             SectorClassification.gics_sector
-        ).join(Security).outerjoin(SectorClassification).filter(
+        ).select_from(PositionsEOD).join(
+            Security, PositionsEOD.security_id == Security.id
+        ).outerjoin(
+            SectorClassification, SectorClassification.security_id == Security.id
+        ).filter(
             and_(
                 PositionsEOD.account_id == view_id,
                 PositionsEOD.date == as_of_date,
@@ -575,7 +579,7 @@ class AdvancedFactorAnalyzer:
         # Build dataframes
         portfolio_df = pd.DataFrame([{
             'date': r.date,
-            'daily_return': float(r.daily_return) if r.daily_return else 0
+            'daily_return': float(r.twr_return) if r.twr_return else 0
         } for r in returns])
 
         factor_df = pd.DataFrame([{

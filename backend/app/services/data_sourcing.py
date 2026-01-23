@@ -296,22 +296,40 @@ class BenchmarkService:
                 logger.info(f"QQQ response status: {response.status_code}, content-type: {response.headers.get('content-type')}")
                 response.raise_for_status()
 
-                # Parse CSV
-                df = pd.read_csv(io.StringIO(response.text))
-                logger.info(f"QQQ DataFrame columns: {df.columns.tolist()}")
+                # Try to parse CSV with error handling for malformed data
+                try:
+                    # Try parsing with error_bad_lines=False (skip bad lines)
+                    df = pd.read_csv(io.StringIO(response.text), on_bad_lines='skip')
+                    logger.info(f"QQQ DataFrame columns: {df.columns.tolist()}")
+                    logger.info(f"QQQ DataFrame shape: {df.shape}")
+                except Exception as parse_error:
+                    logger.error(f"CSV parsing failed: {parse_error}")
+                    # Try to log first few lines to debug
+                    lines = response.text.split('\n')[:20]
+                    logger.info(f"First 20 lines of QQQ response:\n" + "\n".join(lines))
+                    raise
 
                 holdings = []
-                for _, row in df.iterrows():
-                    ticker = row.get("Holding Ticker") or row.get("Ticker")
-                    weight = row.get("Weight") or row.get("% Weight")
+                for idx, row in df.iterrows():
+                    ticker = row.get("Holding Ticker") or row.get("Ticker") or row.get("Symbol")
+                    weight = row.get("Weight") or row.get("% Weight") or row.get("Weight (%)")
 
                     if pd.notna(ticker) and pd.notna(weight):
-                        holdings.append({
-                            "ticker": TickerNormalizer.normalize(str(ticker)),
-                            "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
-                        })
+                        try:
+                            weight_val = float(weight) if isinstance(weight, (int, float)) else float(str(weight).strip('%').strip()) / 100.0
+                            holdings.append({
+                                "ticker": TickerNormalizer.normalize(str(ticker)),
+                                "weight": weight_val,
+                            })
+                        except (ValueError, AttributeError) as e:
+                            logger.warning(f"Skipping row {idx}: ticker={ticker}, weight={weight}, error={e}")
+                            continue
 
                 logger.info(f"Parsed {len(holdings)} QQQ holdings")
+
+                if len(holdings) == 0:
+                    return {"success": False, "error": "No holdings parsed from CSV"}
+
                 return self._save_benchmark_holdings("QQQ", holdings, self.HOLDINGS_URLS["QQQ"])
 
         except Exception as e:

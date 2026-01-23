@@ -386,8 +386,8 @@ class PortfolioStatisticsEngine:
         if not regression:
             return {'error': 'No factor regression data available'}
 
-        # Parse exposures
-        exposures = regression.exposures or {}
+        # Parse exposures (stored in betas_json)
+        exposures = regression.betas_json or {}
 
         # Calculate total factor variance vs idiosyncratic
         total_var = regression.r_squared if regression.r_squared else 0
