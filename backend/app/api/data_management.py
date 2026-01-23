@@ -59,60 +59,23 @@ async def refresh_single_classification(
     return result
 
 
-@router.post("/refresh-benchmark/{benchmark_code}")
-async def refresh_benchmark(
-    benchmark_code: str,
+@router.post("/refresh-benchmark")
+async def refresh_sp500_benchmark(
     db: Session = Depends(get_db)
 ):
     """
-    Refresh benchmark constituent holdings.
-
-    Args:
-        benchmark_code: Benchmark code (SPY, QQQ, INDU)
+    Refresh S&P 500 benchmark constituent holdings.
     """
-    if benchmark_code not in ["SPY", "QQQ", "INDU"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported benchmark: {benchmark_code}. Supported: SPY, QQQ, INDU"
-        )
-
     service = BenchmarkService(db)
-    result = await service.refresh_benchmark(benchmark_code)
+    result = await service.refresh_benchmark("SP500")
 
     if not result.get("success"):
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to refresh benchmark: {result.get('error')}"
+            detail=f"Failed to refresh S&P 500: {result.get('error')}"
         )
 
     return result
-
-
-@router.post("/refresh-all-benchmarks")
-async def refresh_all_benchmarks(
-    background: bool = False,
-    background_tasks: BackgroundTasks = None,
-    db: Session = Depends(get_db)
-):
-    """
-    Refresh all supported benchmarks (SPY, QQQ, INDU).
-    """
-    async def refresh_all():
-        service = BenchmarkService(db)
-        results = {}
-        for code in ["SPY", "QQQ", "INDU"]:
-            results[code] = await service.refresh_benchmark(code)
-        return results
-
-    if background and background_tasks:
-        background_tasks.add_task(refresh_all)
-        return {
-            "status": "started",
-            "message": "Benchmark refresh started in background"
-        }
-
-    results = await refresh_all()
-    return results
 
 
 @router.post("/refresh-factor-returns")
@@ -169,22 +132,22 @@ async def get_data_status(db: Session = Depends(get_db)):
         func.count(SectorClassification.id)
     ).group_by(SectorClassification.source).all()
 
-    # Benchmark status
-    benchmark_status = {}
-    for benchmark_code in ["SPY", "QQQ", "INDU"]:
-        latest_date = db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
-            BenchmarkConstituent.benchmark_code == benchmark_code
-        ).scalar()
+    # S&P 500 benchmark status
+    latest_date = db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
+        BenchmarkConstituent.benchmark_code == "SP500"
+    ).scalar()
 
-        count = db.query(func.count(BenchmarkConstituent.id)).filter(
-            BenchmarkConstituent.benchmark_code == benchmark_code,
-            BenchmarkConstituent.as_of_date == latest_date
-        ).scalar() if latest_date else 0
+    sp500_count = db.query(func.count(BenchmarkConstituent.id)).filter(
+        BenchmarkConstituent.benchmark_code == "SP500",
+        BenchmarkConstituent.as_of_date == latest_date
+    ).scalar() if latest_date else 0
 
-        benchmark_status[benchmark_code] = {
+    benchmark_status = {
+        "SP500": {
             "as_of_date": latest_date.isoformat() if latest_date else None,
-            "constituent_count": count,
+            "constituent_count": sp500_count,
         }
+    }
 
     # Factor returns status
     factor_date_range = db.query(
@@ -242,8 +205,8 @@ async def get_missing_classifications(
         "securities": [
             {
                 "id": sec.id,
-                "ticker": sec.ticker,
-                "name": sec.name,
+                "symbol": sec.symbol,
+                "name": sec.asset_name,
             }
             for sec in unclassified
         ]

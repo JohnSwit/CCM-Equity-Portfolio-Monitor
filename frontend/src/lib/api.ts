@@ -324,15 +324,8 @@ class APIClient {
     return response.data;
   }
 
-  async refreshBenchmark(benchmarkCode: string) {
-    const response = await this.client.post(`/data-management/refresh-benchmark/${benchmarkCode}`);
-    return response.data;
-  }
-
-  async refreshAllBenchmarks(background: boolean = false) {
-    const response = await this.client.post('/data-management/refresh-all-benchmarks', null, {
-      params: { background },
-    });
+  async refreshSP500Benchmark() {
+    const response = await this.client.post('/data-management/refresh-benchmark');
     return response.data;
   }
 

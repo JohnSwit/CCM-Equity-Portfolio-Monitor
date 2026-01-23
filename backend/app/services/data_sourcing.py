@@ -215,58 +215,44 @@ class ClassificationService:
 
 class BenchmarkService:
     """
-    Service for fetching and storing benchmark constituent data.
+    Service for fetching and storing S&P 500 constituent data.
     """
 
-    # Known ETF holdings URLs
-    HOLDINGS_URLS = {
-        "SPY": "https://www.ssga.com/us/en/individual/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx",
-        "QQQ": "https://www.invesco.com/us/financial-products/etfs/holdings/main/holdings/0?audienceType=Investor&action=download&ticker=QQQ",
-        # INDU (Dow 30) - will use static list
-    }
-
-    DOW_30_TICKERS = [
-        "AAPL", "AMGN", "AXP", "BA", "CAT", "CRM", "CSCO", "CVX", "DIS", "DOW",
-        "GS", "HD", "HON", "IBM", "INTC", "JNJ", "JPM", "KO", "MCD", "MMM",
-        "MRK", "MSFT", "NKE", "PG", "TRV", "UNH", "V", "VZ", "WBA", "WMT"
-    ]
+    # S&P 500 ETF holdings URL
+    SPY_HOLDINGS_URL = "https://www.ssga.com/us/en/individual/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx"
 
     def __init__(self, db: Session):
         self.db = db
 
     async def refresh_benchmark(self, benchmark_code: str) -> Dict[str, Any]:
         """
-        Refresh benchmark constituents.
+        Refresh S&P 500 benchmark constituents.
 
         Args:
-            benchmark_code: Benchmark code (SPY, QQQ, INDU)
+            benchmark_code: Benchmark code (SP500 or SPY)
 
         Returns:
             Summary dict with success/failure info
         """
-        logger.info(f"Refreshing benchmark: {benchmark_code}")
-
-        if benchmark_code == "SPY":
-            return await self._refresh_spy()
-        elif benchmark_code == "QQQ":
-            return await self._refresh_qqq()
-        elif benchmark_code == "INDU":
-            return await self._refresh_indu()
+        # Accept both SP500 and SPY as valid codes
+        if benchmark_code in ["SP500", "SPY"]:
+            return await self._refresh_sp500()
         else:
-            return {"success": False, "error": f"Unknown benchmark: {benchmark_code}"}
+            return {"success": False, "error": f"Only SP500 benchmark is supported. Got: {benchmark_code}"}
 
-    async def _refresh_spy(self) -> Dict[str, Any]:
-        """Refresh SPY holdings from State Street"""
+    async def _refresh_sp500(self) -> Dict[str, Any]:
+        """Refresh S&P 500 holdings from State Street SPY ETF"""
         try:
-            logger.info(f"Fetching SPY holdings from: {self.HOLDINGS_URLS['SPY']}")
+            logger.info(f"Fetching S&P 500 holdings from SPY ETF: {self.SPY_HOLDINGS_URL}")
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                response = await client.get(self.HOLDINGS_URLS["SPY"])
+                response = await client.get(self.SPY_HOLDINGS_URL)
                 logger.info(f"SPY response status: {response.status_code}, content-type: {response.headers.get('content-type')}")
                 response.raise_for_status()
 
                 # Parse Excel file
                 df = pd.read_excel(io.BytesIO(response.content), skiprows=4)
                 logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
+                logger.info(f"SPY DataFrame rows: {len(df)}")
 
                 # Expecting columns: Ticker, Name, Weight, etc.
                 holdings = []
@@ -280,69 +266,16 @@ class BenchmarkService:
                             "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
                         })
 
-                logger.info(f"Parsed {len(holdings)} SPY holdings")
-                return self._save_benchmark_holdings("SPY", holdings, self.HOLDINGS_URLS["SPY"])
-
-        except Exception as e:
-            logger.error(f"Failed to refresh SPY: {str(e)}", exc_info=True)
-            return {"success": False, "error": str(e)}
-
-    async def _refresh_qqq(self) -> Dict[str, Any]:
-        """Refresh QQQ holdings from Invesco"""
-        try:
-            logger.info(f"Fetching QQQ holdings from: {self.HOLDINGS_URLS['QQQ']}")
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                response = await client.get(self.HOLDINGS_URLS["QQQ"])
-                logger.info(f"QQQ response status: {response.status_code}, content-type: {response.headers.get('content-type')}")
-                response.raise_for_status()
-
-                # Try to parse CSV with error handling for malformed data
-                try:
-                    # Try parsing with error_bad_lines=False (skip bad lines)
-                    df = pd.read_csv(io.StringIO(response.text), on_bad_lines='skip')
-                    logger.info(f"QQQ DataFrame columns: {df.columns.tolist()}")
-                    logger.info(f"QQQ DataFrame shape: {df.shape}")
-                except Exception as parse_error:
-                    logger.error(f"CSV parsing failed: {parse_error}")
-                    # Try to log first few lines to debug
-                    lines = response.text.split('\n')[:20]
-                    logger.info(f"First 20 lines of QQQ response:\n" + "\n".join(lines))
-                    raise
-
-                holdings = []
-                for idx, row in df.iterrows():
-                    ticker = row.get("Holding Ticker") or row.get("Ticker") or row.get("Symbol")
-                    weight = row.get("Weight") or row.get("% Weight") or row.get("Weight (%)")
-
-                    if pd.notna(ticker) and pd.notna(weight):
-                        try:
-                            weight_val = float(weight) if isinstance(weight, (int, float)) else float(str(weight).strip('%').strip()) / 100.0
-                            holdings.append({
-                                "ticker": TickerNormalizer.normalize(str(ticker)),
-                                "weight": weight_val,
-                            })
-                        except (ValueError, AttributeError) as e:
-                            logger.warning(f"Skipping row {idx}: ticker={ticker}, weight={weight}, error={e}")
-                            continue
-
-                logger.info(f"Parsed {len(holdings)} QQQ holdings")
+                logger.info(f"Parsed {len(holdings)} S&P 500 holdings from SPY")
 
                 if len(holdings) == 0:
-                    return {"success": False, "error": "No holdings parsed from CSV"}
+                    return {"success": False, "error": "No holdings parsed from Excel file"}
 
-                return self._save_benchmark_holdings("QQQ", holdings, self.HOLDINGS_URLS["QQQ"])
+                return self._save_benchmark_holdings("SP500", holdings, self.SPY_HOLDINGS_URL)
 
         except Exception as e:
-            logger.error(f"Failed to refresh QQQ: {str(e)}", exc_info=True)
+            logger.error(f"Failed to refresh S&P 500: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
-
-    async def _refresh_indu(self) -> Dict[str, Any]:
-        """Refresh INDU (Dow 30) using static equal-weight list"""
-        # Dow 30 is equal-weighted for simplicity
-        weight = 1.0 / len(self.DOW_30_TICKERS)
-        holdings = [{"ticker": ticker, "weight": weight} for ticker in self.DOW_30_TICKERS]
-
-        return self._save_benchmark_holdings("INDU", holdings, "static_dow_30")
 
     def _save_benchmark_holdings(
         self, benchmark_code: str, holdings: List[Dict[str, Any]], source_url: str
@@ -505,19 +438,26 @@ class FactorReturnsService:
         # Filter by date
         df = df[df['Date'] >= pd.Timestamp(start_date)]
 
-        # Melt dataframe to long format
+        # Melt dataframe to long format, excluding RF (risk-free rate) column
         id_vars = ['Date']
-        value_vars = [col for col in df.columns if col != 'Date']
+        value_vars = [col for col in df.columns if col not in ['Date', 'RF']]
+
+        logger.info(f"Saving factors: {value_vars}")
 
         df_long = df.melt(id_vars=id_vars, value_vars=value_vars, var_name='factor_name', value_name='value')
 
         # Delete existing data for these dates and factors
         dates_to_delete = df_long['Date'].unique()
-        self.db.query(FactorReturns).filter(
+        factor_names = df_long['factor_name'].unique()
+
+        deleted_count = self.db.query(FactorReturns).filter(
             FactorReturns.date.in_([d.date() for d in dates_to_delete])
         ).delete(synchronize_session=False)
 
+        logger.info(f"Deleted {deleted_count} existing factor return records")
+
         # Insert new data
+        saved_count = 0
         for _, row in df_long.iterrows():
             if pd.notna(row['value']):
                 factor_return = FactorReturns(
@@ -527,6 +467,12 @@ class FactorReturnsService:
                     source="kenneth_french",
                 )
                 self.db.add(factor_return)
+                saved_count += 1
 
         self.db.commit()
-        logger.info(f"Saved factor returns: {len(df_long)} records")
+
+        # Log summary by factor
+        factor_counts = df_long.groupby('factor_name').size().to_dict()
+        logger.info(f"Saved {saved_count} total factor return records")
+        for factor, count in factor_counts.items():
+            logger.info(f"  - {factor}: {count} records")

@@ -8,7 +8,7 @@ export default function PortfolioStatisticsPage() {
   const [views, setViews] = useState<any[]>([]);
   const [selectedView, setSelectedView] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [benchmark, setBenchmark] = useState('SPY');
+  const [benchmark, setBenchmark] = useState('SP500');
   const [window, setWindow] = useState(252);
 
   // Statistics data
@@ -115,13 +115,13 @@ export default function PortfolioStatisticsPage() {
   const handleRefreshBenchmarks = async () => {
     setRefreshingData('benchmarks');
     try {
-      await api.refreshAllBenchmarks(false);
-      alert('Benchmarks refreshed successfully.');
+      await api.refreshSP500Benchmark();
+      alert('S&P 500 benchmark refreshed successfully.');
       loadDataStatus();
       if (selectedView) loadStatistics();
     } catch (error) {
-      console.error('Failed to refresh benchmarks:', error);
-      alert('Failed to refresh benchmarks. See console for details.');
+      console.error('Failed to refresh S&P 500:', error);
+      alert('Failed to refresh S&P 500. See console for details.');
     } finally {
       setRefreshingData(null);
     }
@@ -182,9 +182,7 @@ export default function PortfolioStatisticsPage() {
                 onChange={(e) => setBenchmark(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md"
               >
-                <option value="SPY">S&P 500 (SPY)</option>
-                <option value="QQQ">Nasdaq (QQQ)</option>
-                <option value="INDU">Dow Jones (INDU)</option>
+                <option value="SP500">S&P 500</option>
               </select>
             </div>
             <div>
@@ -245,7 +243,7 @@ export default function PortfolioStatisticsPage() {
 
               {/* Benchmark Status */}
               <div className="border rounded p-4">
-                <h3 className="font-semibold text-gray-700 mb-2">Benchmark Holdings</h3>
+                <h3 className="font-semibold text-gray-700 mb-2">S&P 500 Benchmark</h3>
                 <div className="space-y-2 text-sm">
                   {Object.entries(dataStatus.benchmarks || {}).map(([code, data]: [string, any]) => (
                     <div key={code} className="border-b pb-2 last:border-b-0">
@@ -265,7 +263,7 @@ export default function PortfolioStatisticsPage() {
                     disabled={refreshingData === 'benchmarks'}
                     className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
                   >
-                    {refreshingData === 'benchmarks' ? 'Refreshing...' : 'Refresh Benchmarks'}
+                    {refreshingData === 'benchmarks' ? 'Refreshing...' : 'Refresh S&P 500'}
                   </button>
                 </div>
               </div>
