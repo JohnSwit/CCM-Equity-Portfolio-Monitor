@@ -136,6 +136,29 @@ def clear_analytics_for_account(db: Session, account_id: int):
     logger.info(f"Analytics cleared for account {account_id}")
 
 
+def clear_all_returns(db: Session):
+    """
+    Clear ALL returns data for fresh recomputation.
+    Use this when the TWR index convention has changed.
+    """
+    logger.info("Clearing ALL returns data for fresh recomputation...")
+
+    # Clear all account returns
+    deleted_account_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_account_returns} account returns")
+
+    # Clear all group/firm returns
+    deleted_group_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_group_returns} group/firm returns")
+
+    db.commit()
+    logger.info("All returns data cleared")
+
+
 def clear_group_and_firm_analytics(db: Session):
     """
     Clear all group and firm level analytics.
