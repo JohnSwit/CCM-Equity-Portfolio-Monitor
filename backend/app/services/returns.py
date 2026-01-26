@@ -236,9 +236,10 @@ class ReturnsEngine:
             ).first()
 
             if existing:
-                if existing.twr_return != row['twr_return']:
-                    existing.twr_return = row['twr_return']
-                    existing.twr_index = row['twr_index']
+                # Always update both twr_return and twr_index to ensure consistency
+                # This is important when the index convention changes (e.g., 100 -> 1.0)
+                existing.twr_return = row['twr_return']
+                existing.twr_index = row['twr_index']
             else:
                 ret = ReturnsEOD(
                     view_type=ViewType.ACCOUNT,
