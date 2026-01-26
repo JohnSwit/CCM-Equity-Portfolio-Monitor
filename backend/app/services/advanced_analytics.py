@@ -165,7 +165,18 @@ class SectorAnalyzer:
         if view_type != ViewType.ACCOUNT:
             return {'error': 'Sector analysis only supported for account views'}
 
-        # Get positions
+        # Find the latest position date on or before as_of_date
+        latest_pos_date = self.db.query(func.max(PositionsEOD.date)).filter(
+            and_(
+                PositionsEOD.account_id == view_id,
+                PositionsEOD.date <= as_of_date
+            )
+        ).scalar()
+
+        if not latest_pos_date:
+            return {'error': 'No positions found', 'sectors': []}
+
+        # Get positions using the latest available date
         positions = self.db.query(
             PositionsEOD.security_id,
             PositionsEOD.shares,
@@ -180,7 +191,7 @@ class SectorAnalyzer:
         ).filter(
             and_(
                 PositionsEOD.account_id == view_id,
-                PositionsEOD.date == as_of_date,
+                PositionsEOD.date == latest_pos_date,
                 PositionsEOD.shares > 0
             )
         ).all()
@@ -247,7 +258,7 @@ class SectorAnalyzer:
         return {
             'sectors': sorted(sector_weights.values(), key=lambda x: x['weight'], reverse=True),
             'total_value': float(total_value),
-            'as_of_date': as_of_date,
+            'as_of_date': latest_pos_date,
             'holdings': holdings
         }
 
