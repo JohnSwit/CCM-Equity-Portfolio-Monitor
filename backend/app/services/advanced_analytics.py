@@ -389,12 +389,10 @@ class BrinsonAttributionAnalyzer:
         if 'error' in port_end:
             return {'error': 'Could not get end-period portfolio data'}
 
-        # Get benchmark weights at start (use latest available before start_date)
+        # Get benchmark weights (use latest available data)
+        # Note: We use the latest snapshot since we don't have historical benchmark constituents
         latest_bench_date = self.db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
-            and_(
-                BenchmarkConstituent.benchmark_code == benchmark_code,
-                BenchmarkConstituent.as_of_date <= start_date
-            )
+            BenchmarkConstituent.benchmark_code == benchmark_code
         ).scalar()
 
         if not latest_bench_date:
