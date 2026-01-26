@@ -577,35 +577,45 @@ class BenchmarkService:
     async def _refresh_sp500(self) -> Dict[str, Any]:
         """Refresh S&P 500 holdings from State Street SPY ETF"""
         try:
-            logger.info(f"Fetching S&P 500 holdings from SPY ETF: {self.SPY_HOLDINGS_URL}")
+            logger.warning(f"Fetching S&P 500 holdings from SPY ETF: {self.SPY_HOLDINGS_URL}")
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 response = await client.get(self.SPY_HOLDINGS_URL)
-                logger.info(f"SPY response status: {response.status_code}, content-type: {response.headers.get('content-type')}")
+                logger.warning(f"SPY response status: {response.status_code}")
                 response.raise_for_status()
 
-                # Parse Excel file
+                # Parse Excel file - try different skip rows
                 df = pd.read_excel(io.BytesIO(response.content), skiprows=4)
-                logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
-                logger.info(f"SPY DataFrame rows: {len(df)}")
+                logger.warning(f"SPY DataFrame columns: {df.columns.tolist()}")
+                logger.warning(f"SPY DataFrame shape: {df.shape}")
+                logger.warning(f"SPY first 5 rows:\n{df.head(5).to_string()}")
 
-                # Debug: log first few rows to understand format
-                logger.info(f"SPY DataFrame sample:\n{df.head(3).to_string()}")
+                # Find the correct column names (case-insensitive)
+                columns_lower = {col.lower().strip(): col for col in df.columns}
+                ticker_col = columns_lower.get('ticker') or columns_lower.get('symbol') or columns_lower.get('name')
+                weight_col = columns_lower.get('weight') or columns_lower.get('% weight') or columns_lower.get('weight (%)')
+
+                logger.warning(f"Using columns - ticker: {ticker_col}, weight: {weight_col}")
+
+                if not ticker_col or not weight_col:
+                    return {"success": False, "error": f"Could not find ticker/weight columns. Available: {df.columns.tolist()}"}
 
                 # Build holdings dict to deduplicate by ticker
-                # (the file may contain multiple dates or duplicate entries)
                 holdings_dict = {}
+                raw_count = 0
                 for _, row in df.iterrows():
-                    ticker = row.get("Ticker") or row.get("Symbol")
-                    weight = row.get("Weight") or row.get("% Weight")
+                    ticker = row.get(ticker_col)
+                    weight = row.get(weight_col)
 
                     if pd.notna(ticker) and pd.notna(weight):
-                        normalized_ticker = TickerNormalizer.normalize(str(ticker))
+                        raw_count += 1
+                        ticker_str = str(ticker).strip()
+                        normalized_ticker = TickerNormalizer.normalize(ticker_str)
 
-                        # Skip non-equity entries (like cash, futures, etc.)
-                        if normalized_ticker in ['USD', 'CASH', '']:
+                        # Skip non-equity entries
+                        if normalized_ticker in ['USD', 'CASH', '', 'NAN']:
                             continue
 
-                        # Parse weight - ensure it's in decimal form (0.07 for 7%)
+                        # Parse weight
                         if isinstance(weight, str):
                             weight_val = float(weight.strip('%')) / 100.0
                         else:
@@ -616,7 +626,6 @@ class BenchmarkService:
 
                         # Only keep the first occurrence of each ticker (dedup)
                         if normalized_ticker not in holdings_dict:
-                            # Look up sector from static mapping
                             sector_info = ClassificationService.STATIC_MAPPING.get(normalized_ticker, {})
                             sector = sector_info.get("sector") if sector_info else None
 
@@ -627,14 +636,16 @@ class BenchmarkService:
                             }
 
                 holdings = list(holdings_dict.values())
-
-                # Verify total weight is reasonable (~1.0)
                 total_weight = sum(h["weight"] for h in holdings)
-                logger.info(f"Parsed {len(holdings)} unique S&P 500 holdings, total weight: {total_weight:.4f}")
 
-                # Sanity check: if total is way off, something is wrong
+                logger.warning(f"Raw rows with data: {raw_count}, Unique tickers: {len(holdings)}, Total weight: {total_weight:.4f}")
+
+                # If total is way off, the file format might be different
                 if total_weight < 0.5 or total_weight > 1.5:
                     logger.warning(f"Total weight {total_weight:.4f} is outside expected range [0.5, 1.5]")
+                    # Log sample of what we parsed
+                    sample = list(holdings_dict.items())[:5]
+                    logger.warning(f"Sample holdings: {sample}")
 
                 if len(holdings) == 0:
                     return {"success": False, "error": "No holdings parsed from Excel file"}
