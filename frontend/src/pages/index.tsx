@@ -113,31 +113,45 @@ export default function Dashboard() {
       a.date.localeCompare(b.date)
     );
 
-    // Find first date where ALL series have data
-    const series = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
-    const firstCompleteDate = merged.find((point: any) =>
-      series.every(s => point[s] !== undefined && point[s] !== null)
-    );
-
-    if (!firstCompleteDate) {
-      // If no common date found, just use portfolio data
-      setChartData(merged);
+    if (merged.length === 0) {
+      setChartData([]);
       return;
     }
 
-    // Get baseline values for normalization
+    // Determine which series are available
+    const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+    const availableSeries = allSeries.filter(s =>
+      merged.some((point: any) => point[s] !== undefined && point[s] !== null)
+    );
+
+    // Find the first date where portfolio has data (minimum requirement)
+    const firstPortfolioDate = merged.find((point: any) =>
+      point.Portfolio !== undefined && point.Portfolio !== null
+    );
+
+    if (!firstPortfolioDate) {
+      setChartData([]);
+      return;
+    }
+
+    // Get baseline values for each series from their first available value
+    // within or after the portfolio's first date
     const baselineValues: any = {};
-    series.forEach(s => {
-      baselineValues[s] = firstCompleteDate[s] || 1.0;
+    availableSeries.forEach(s => {
+      const firstWithSeries = merged.find((point: any) =>
+        point.date >= firstPortfolioDate.date &&
+        point[s] !== undefined &&
+        point[s] !== null
+      );
+      baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
     });
 
-    // Normalize all series to start at 1.0
-    // Filter to only include dates from first common date onwards
+    // Normalize all series to start at 1.0 from portfolio's first date
     const normalized = merged
-      .filter((point: any) => point.date >= firstCompleteDate.date)
+      .filter((point: any) => point.date >= firstPortfolioDate.date)
       .map((point: any) => {
         const normalizedPoint: any = { date: point.date };
-        series.forEach(s => {
+        availableSeries.forEach(s => {
           if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
             normalizedPoint[s] = point[s] / baselineValues[s];
           }
