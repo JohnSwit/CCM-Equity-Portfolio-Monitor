@@ -588,14 +588,22 @@ class BenchmarkService:
                 logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
                 logger.info(f"SPY DataFrame rows: {len(df)}")
 
-                # Expecting columns: Ticker, Name, Weight, etc.
-                holdings = []
+                # Debug: log first few rows to understand format
+                logger.info(f"SPY DataFrame sample:\n{df.head(3).to_string()}")
+
+                # Build holdings dict to deduplicate by ticker
+                # (the file may contain multiple dates or duplicate entries)
+                holdings_dict = {}
                 for _, row in df.iterrows():
                     ticker = row.get("Ticker") or row.get("Symbol")
                     weight = row.get("Weight") or row.get("% Weight")
 
                     if pd.notna(ticker) and pd.notna(weight):
                         normalized_ticker = TickerNormalizer.normalize(str(ticker))
+
+                        # Skip non-equity entries (like cash, futures, etc.)
+                        if normalized_ticker in ['USD', 'CASH', '']:
+                            continue
 
                         # Parse weight - ensure it's in decimal form (0.07 for 7%)
                         if isinstance(weight, str):
@@ -606,17 +614,27 @@ class BenchmarkService:
                             if weight_val > 1.0:
                                 weight_val = weight_val / 100.0
 
-                        # Look up sector from static mapping
-                        sector_info = ClassificationService.STATIC_MAPPING.get(normalized_ticker, {})
-                        sector = sector_info.get("sector") if sector_info else None
+                        # Only keep the first occurrence of each ticker (dedup)
+                        if normalized_ticker not in holdings_dict:
+                            # Look up sector from static mapping
+                            sector_info = ClassificationService.STATIC_MAPPING.get(normalized_ticker, {})
+                            sector = sector_info.get("sector") if sector_info else None
 
-                        holdings.append({
-                            "ticker": normalized_ticker,
-                            "weight": weight_val,
-                            "sector": sector,
-                        })
+                            holdings_dict[normalized_ticker] = {
+                                "ticker": normalized_ticker,
+                                "weight": weight_val,
+                                "sector": sector,
+                            }
 
-                logger.info(f"Parsed {len(holdings)} S&P 500 holdings from SPY")
+                holdings = list(holdings_dict.values())
+
+                # Verify total weight is reasonable (~1.0)
+                total_weight = sum(h["weight"] for h in holdings)
+                logger.info(f"Parsed {len(holdings)} unique S&P 500 holdings, total weight: {total_weight:.4f}")
+
+                # Sanity check: if total is way off, something is wrong
+                if total_weight < 0.5 or total_weight > 1.5:
+                    logger.warning(f"Total weight {total_weight:.4f} is outside expected range [0.5, 1.5]")
 
                 if len(holdings) == 0:
                     return {"success": False, "error": "No holdings parsed from Excel file"}
