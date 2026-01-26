@@ -615,14 +615,12 @@ class BenchmarkService:
                         if normalized_ticker in ['USD', 'CASH', '', 'NAN']:
                             continue
 
-                        # Parse weight
+                        # Parse weight - State Street file uses percentages (7.7 = 7.7%)
+                        # Always divide by 100 to convert to decimal
                         if isinstance(weight, str):
                             weight_val = float(weight.strip('%')) / 100.0
                         else:
-                            weight_val = float(weight)
-                            # If weight > 1, it's likely a percentage (7.0 = 7%)
-                            if weight_val > 1.0:
-                                weight_val = weight_val / 100.0
+                            weight_val = float(weight) / 100.0
 
                         # Only keep the first occurrence of each ticker (dedup)
                         if normalized_ticker not in holdings_dict:
