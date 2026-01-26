@@ -275,16 +275,12 @@ class SectorAnalyzer:
         if 'error' in portfolio_data:
             return portfolio_data
 
-        # Get benchmark sector weights by joining with SectorClassification
-        # This gets proper sector data instead of using the unpopulated BenchmarkConstituent.sector
+        # Get benchmark sector weights using the sector stored in BenchmarkConstituent
+        # The sector is populated during refresh from static mapping
         benchmark_constituents = self.db.query(
             BenchmarkConstituent.symbol,
             BenchmarkConstituent.weight,
-            SectorClassification.sector
-        ).outerjoin(
-            Security, Security.symbol == BenchmarkConstituent.symbol
-        ).outerjoin(
-            SectorClassification, SectorClassification.security_id == Security.id
+            BenchmarkConstituent.sector
         ).filter(
             BenchmarkConstituent.benchmark_code == benchmark_code
         ).all()
@@ -387,15 +383,11 @@ class BrinsonAttributionAnalyzer:
                 'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
             }
 
-        # Get benchmark constituents with sectors
+        # Get benchmark constituents with sectors (sector is stored during refresh)
         benchmark_holdings = self.db.query(
             BenchmarkConstituent.symbol,
             BenchmarkConstituent.weight,
-            SectorClassification.sector
-        ).outerjoin(
-            Security, Security.symbol == BenchmarkConstituent.symbol
-        ).outerjoin(
-            SectorClassification, SectorClassification.security_id == Security.id
+            BenchmarkConstituent.sector
         ).filter(
             and_(
                 BenchmarkConstituent.benchmark_code == benchmark_code,

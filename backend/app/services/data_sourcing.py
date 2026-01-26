@@ -595,9 +595,25 @@ class BenchmarkService:
                     weight = row.get("Weight") or row.get("% Weight")
 
                     if pd.notna(ticker) and pd.notna(weight):
+                        normalized_ticker = TickerNormalizer.normalize(str(ticker))
+
+                        # Parse weight - ensure it's in decimal form (0.07 for 7%)
+                        if isinstance(weight, str):
+                            weight_val = float(weight.strip('%')) / 100.0
+                        else:
+                            weight_val = float(weight)
+                            # If weight > 1, it's likely a percentage (7.0 = 7%)
+                            if weight_val > 1.0:
+                                weight_val = weight_val / 100.0
+
+                        # Look up sector from static mapping
+                        sector_info = ClassificationService.STATIC_MAPPING.get(normalized_ticker, {})
+                        sector = sector_info.get("sector") if sector_info else None
+
                         holdings.append({
-                            "ticker": TickerNormalizer.normalize(str(ticker)),
-                            "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
+                            "ticker": normalized_ticker,
+                            "weight": weight_val,
+                            "sector": sector,
                         })
 
                 logger.info(f"Parsed {len(holdings)} S&P 500 holdings from SPY")
@@ -636,6 +652,7 @@ class BenchmarkService:
                     benchmark_code=benchmark_code,
                     symbol=holding["ticker"],
                     weight=holding["weight"],
+                    sector=holding.get("sector"),  # Store sector from static mapping
                     as_of_date=as_of,
                     source_url=source_url,
                 )
