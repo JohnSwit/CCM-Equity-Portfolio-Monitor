@@ -1,9 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Select from 'react-select';
 import { format } from 'date-fns';
+
+// Color palette for pie charts
+const CHART_COLORS = [
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1',
+  '#14b8a6', '#a855f7', '#eab308', '#22c55e', '#0ea5e9',
+  '#d946ef', '#64748b', '#78716c', '#0891b2', '#7c3aed'
+];
+
+// Holdings chart view modes
+type HoldingsViewMode = 'marketValue' | 'cost' | 'gain' | 'loss';
+// Sector chart view modes
+type SectorViewMode = 'sector' | 'industry' | 'country' | 'region' | 'market' | 'assetType';
 
 export default function Dashboard() {
   const [views, setViews] = useState<any[]>([]);
@@ -18,6 +31,11 @@ export default function Dashboard() {
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
+
+  // Donut chart states
+  const [holdingsViewMode, setHoldingsViewMode] = useState<HoldingsViewMode>('marketValue');
+  const [sectorViewMode, setSectorViewMode] = useState<SectorViewMode>('sector');
+  const [sectorData, setSectorData] = useState<any>(null);
 
   useEffect(() => {
     loadViews();
@@ -58,7 +76,7 @@ export default function Dashboard() {
 
     setLoading(true);
     try {
-      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, factorsData, unpricedData] = await Promise.all([
+      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, factorsData, unpricedData, sectorWeights] = await Promise.all([
         api.getSummary(selectedView.view_type, selectedView.view_id),
         api.getReturns(selectedView.view_type, selectedView.view_id),
         api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
@@ -66,6 +84,7 @@ export default function Dashboard() {
         api.getRisk(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getUnpricedInstruments().catch(() => []),
+        api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
       ]);
 
       setSummary(summaryData);
@@ -75,6 +94,7 @@ export default function Dashboard() {
       setRisk(riskData);
       setFactors(factorsData);
       setUnpriced(unpricedData);
+      setSectorData(sectorWeights);
     } catch (error) {
       console.error('Failed to load view data:', error);
     } finally {
@@ -236,6 +256,76 @@ export default function Dashboard() {
     group: v.view_type,
   }));
 
+  // Process holdings data for pie chart
+  const holdingsPieData = useMemo(() => {
+    if (!holdings?.holdings) return [];
+
+    const data = holdings.holdings.map((h: any, idx: number) => {
+      // Calculate gain/loss (market_value - cost)
+      const cost = h.cost_basis || h.market_value; // fallback to market value if no cost
+      const gain = Math.max(0, h.market_value - cost);
+      const loss = Math.max(0, cost - h.market_value);
+
+      return {
+        name: h.symbol,
+        marketValue: h.market_value,
+        cost: cost,
+        gain: gain,
+        loss: loss,
+        weight: h.weight,
+        color: CHART_COLORS[idx % CHART_COLORS.length],
+      };
+    });
+
+    // Get data based on view mode
+    switch (holdingsViewMode) {
+      case 'cost':
+        return data.filter((d: any) => d.cost > 0).map((d: any) => ({ ...d, value: d.cost }));
+      case 'gain':
+        return data.filter((d: any) => d.gain > 0).map((d: any) => ({ ...d, value: d.gain }));
+      case 'loss':
+        return data.filter((d: any) => d.loss > 0).map((d: any) => ({ ...d, value: d.loss }));
+      default: // marketValue
+        return data.filter((d: any) => d.marketValue > 0).map((d: any) => ({ ...d, value: d.marketValue }));
+    }
+  }, [holdings, holdingsViewMode]);
+
+  // Process sector data for pie chart
+  const sectorPieData = useMemo(() => {
+    if (!sectorData?.sectors) return [];
+
+    return sectorData.sectors.map((s: any, idx: number) => ({
+      name: s.sector,
+      value: s.weight,
+      marketValue: s.market_value,
+      count: s.holdings_count,
+      color: CHART_COLORS[idx % CHART_COLORS.length],
+    }));
+  }, [sectorData]);
+
+  // Custom label for pie chart
+  const renderCustomLabel = ({ name, value, cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
+    if (percent < 0.025) return null; // Don't show labels for slices < 2.5%
+    const RADIAN = Math.PI / 180;
+    const radius = outerRadius * 1.25;
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+    const pct = (percent * 100).toFixed(1);
+
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="#374151"
+        textAnchor={x > cx ? 'start' : 'end'}
+        dominantBaseline="central"
+        fontSize={11}
+      >
+        {`${name}: ${pct}%`}
+      </text>
+    );
+  };
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -297,6 +387,134 @@ export default function Dashboard() {
                     {summary.return_1y ? formatPercent(summary.return_1y) : 'N/A'}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* Portfolio Allocation Donut Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Holdings Breakdown Chart */}
+              <div className="card">
+                <div className="flex flex-wrap items-center gap-2 mb-4 border-b pb-3">
+                  {[
+                    { key: 'marketValue', label: 'Market Value' },
+                    { key: 'cost', label: 'Cost' },
+                    { key: 'gain', label: 'Gain' },
+                    { key: 'loss', label: 'Loss' },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setHoldingsViewMode(item.key as HoldingsViewMode)}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                        holdingsViewMode === item.key
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={loadViewData}
+                    className="ml-auto p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
+                    title="Refresh"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                </div>
+
+                {holdingsPieData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart>
+                      <Pie
+                        data={holdingsPieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={1}
+                        dataKey="value"
+                        label={renderCustomLabel}
+                        labelLine={{ stroke: '#9ca3af', strokeWidth: 1 }}
+                      >
+                        {holdingsPieData.map((entry: any, index: number) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any, name: any, props: any) => [
+                          holdingsViewMode === 'marketValue' || holdingsViewMode === 'cost' || holdingsViewMode === 'gain' || holdingsViewMode === 'loss'
+                            ? formatCurrency(value)
+                            : formatPercent(value),
+                          props.payload.name
+                        ]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-80 flex items-center justify-center text-gray-500">
+                    No holdings data available
+                  </div>
+                )}
+              </div>
+
+              {/* Sector Breakdown Chart */}
+              <div className="card">
+                <div className="flex flex-wrap items-center gap-2 mb-4 border-b pb-3">
+                  {[
+                    { key: 'sector', label: 'Sector' },
+                    { key: 'industry', label: 'Industry' },
+                    { key: 'country', label: 'Country' },
+                    { key: 'region', label: 'Region' },
+                    { key: 'market', label: 'Market' },
+                    { key: 'assetType', label: 'Assets Type' },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setSectorViewMode(item.key as SectorViewMode)}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                        sectorViewMode === item.key
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {sectorPieData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart>
+                      <Pie
+                        data={sectorPieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={1}
+                        dataKey="value"
+                        label={renderCustomLabel}
+                        labelLine={{ stroke: '#9ca3af', strokeWidth: 1 }}
+                      >
+                        {sectorPieData.map((entry: any, index: number) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any, name: any, props: any) => [
+                          formatPercent(value),
+                          props.payload.name
+                        ]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-80 flex items-center justify-center text-gray-500">
+                    No sector data available
+                  </div>
+                )}
               </div>
             </div>
 
