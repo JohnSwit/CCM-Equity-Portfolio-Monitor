@@ -751,3 +751,218 @@ class AdvancedFactorAnalyzer:
             'diversification_ratio': 0.0,
             'note': 'Factor crowding analysis requires factor loading data. This is a placeholder.'
         }
+
+    def calculate_historical_factor_exposures(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        end_date: date,
+        lookback_days: int = 504,  # 2 years
+        rolling_window: int = 63   # ~3 months
+    ) -> Dict:
+        """
+        Calculate rolling factor exposures over time.
+        Shows how factor tilts have evolved.
+        """
+        from app.models import ReturnsEOD, FactorReturns
+
+        start_date = end_date - timedelta(days=lookback_days)
+
+        # Get portfolio returns
+        returns = self.db.query(ReturnsEOD).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date >= start_date,
+                ReturnsEOD.date <= end_date
+            )
+        ).order_by(ReturnsEOD.date).all()
+
+        if len(returns) < rolling_window + 10:
+            return {'error': 'Insufficient returns data for rolling analysis'}
+
+        # Get factor returns
+        factor_returns_data = self.db.query(FactorReturns).filter(
+            and_(
+                FactorReturns.date >= start_date,
+                FactorReturns.date <= end_date
+            )
+        ).order_by(FactorReturns.date).all()
+
+        if not factor_returns_data:
+            return {'error': 'No factor returns data available'}
+
+        # Build DataFrames
+        portfolio_df = pd.DataFrame([{
+            'date': r.date,
+            'return': float(r.twr_return) if r.twr_return else 0
+        } for r in returns]).set_index('date')
+
+        factor_df = pd.DataFrame([{
+            'date': f.date,
+            'factor': f.factor_name,
+            'return': float(f.value)
+        } for f in factor_returns_data])
+
+        factor_pivot = factor_df.pivot(index='date', columns='factor', values='return')
+
+        # Merge
+        merged = portfolio_df.join(factor_pivot, how='inner')
+
+        if len(merged) < rolling_window + 10:
+            return {'error': 'Insufficient overlapping data'}
+
+        # Factor columns to use
+        factor_cols = [c for c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'Mom'] if c in merged.columns]
+        factor_labels = {
+            'Mkt-RF': 'Market', 'SMB': 'Size', 'HML': 'Value',
+            'RMW': 'Profitability', 'CMA': 'Investment', 'Mom': 'Momentum'
+        }
+
+        # Calculate rolling regressions
+        historical_exposures = []
+
+        for i in range(rolling_window, len(merged)):
+            window_data = merged.iloc[i-rolling_window:i]
+            window_date = merged.index[i]
+
+            y = window_data['return'].values
+            if 'RF' in window_data.columns:
+                y = y - window_data['RF'].values
+
+            X = window_data[factor_cols].values
+            X_with_intercept = np.column_stack([np.ones(len(X)), X])
+
+            try:
+                coefficients = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
+                alpha = coefficients[0]
+                betas = coefficients[1:]
+
+                exposures = {'date': window_date.isoformat(), 'alpha': float(alpha) * 252}
+                for j, col in enumerate(factor_cols):
+                    exposures[factor_labels.get(col, col)] = float(betas[j])
+
+                historical_exposures.append(exposures)
+            except Exception:
+                continue
+
+        return {
+            'historical_exposures': historical_exposures,
+            'rolling_window_days': rolling_window,
+            'factors': [factor_labels.get(c, c) for c in factor_cols]
+        }
+
+    def calculate_factor_risk_decomposition(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        start_date: date,
+        end_date: date
+    ) -> Dict:
+        """
+        Decompose portfolio risk (variance) into factor risk and specific risk.
+        Shows what % of portfolio volatility comes from each factor.
+        """
+        from app.models import ReturnsEOD, FactorReturns
+
+        # Get portfolio returns
+        returns = self.db.query(ReturnsEOD).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date >= start_date,
+                ReturnsEOD.date <= end_date
+            )
+        ).order_by(ReturnsEOD.date).all()
+
+        if len(returns) < 30:
+            return {'error': 'Insufficient returns data (need at least 30 days)'}
+
+        # Get factor returns
+        factor_returns_data = self.db.query(FactorReturns).filter(
+            and_(
+                FactorReturns.date >= start_date,
+                FactorReturns.date <= end_date
+            )
+        ).order_by(FactorReturns.date).all()
+
+        if not factor_returns_data:
+            return {'error': 'No factor returns data available'}
+
+        # Build DataFrames
+        portfolio_df = pd.DataFrame([{
+            'date': r.date,
+            'return': float(r.twr_return) if r.twr_return else 0
+        } for r in returns]).set_index('date')
+
+        factor_df = pd.DataFrame([{
+            'date': f.date,
+            'factor': f.factor_name,
+            'return': float(f.value)
+        } for f in factor_returns_data])
+
+        factor_pivot = factor_df.pivot(index='date', columns='factor', values='return')
+        merged = portfolio_df.join(factor_pivot, how='inner')
+
+        if len(merged) < 30:
+            return {'error': 'Insufficient overlapping data'}
+
+        # Factor columns
+        factor_cols = [c for c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'Mom'] if c in merged.columns]
+        factor_labels = {
+            'Mkt-RF': 'Market', 'SMB': 'Size', 'HML': 'Value',
+            'RMW': 'Profitability', 'CMA': 'Investment', 'Mom': 'Momentum'
+        }
+
+        y = merged['return'].values
+        if 'RF' in merged.columns:
+            y = y - merged['RF'].values
+
+        X = merged[factor_cols].values
+        X_with_intercept = np.column_stack([np.ones(len(X)), X])
+
+        # Run regression
+        coefficients = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
+        betas = coefficients[1:]
+
+        # Calculate predicted returns and residuals
+        y_pred = X_with_intercept @ coefficients
+        residuals = y - y_pred
+
+        # Total variance
+        total_variance = np.var(y)
+
+        # Factor variance contribution
+        # Var(factor component) = beta^2 * Var(factor) + covariance terms
+        factor_cov = np.cov(X.T)
+        factor_variance = betas @ factor_cov @ betas
+
+        # Specific (residual) variance
+        specific_variance = np.var(residuals)
+
+        # Calculate individual factor contributions
+        factor_risk_contributions = {}
+        for i, col in enumerate(factor_cols):
+            factor_var = np.var(X[:, i])
+            contribution = (betas[i] ** 2) * factor_var
+            factor_risk_contributions[factor_labels.get(col, col)] = {
+                'variance_contribution': float(contribution),
+                'pct_of_total': float(contribution / total_variance * 100) if total_variance > 0 else 0,
+                'beta': float(betas[i])
+            }
+
+        # Annualized volatilities
+        ann_factor = np.sqrt(252)
+        total_vol = np.std(y) * ann_factor
+        factor_vol = np.sqrt(factor_variance) * ann_factor
+        specific_vol = np.sqrt(specific_variance) * ann_factor
+
+        return {
+            'total_volatility': float(total_vol),
+            'factor_volatility': float(factor_vol),
+            'specific_volatility': float(specific_vol),
+            'factor_risk_pct': float(factor_variance / total_variance * 100) if total_variance > 0 else 0,
+            'specific_risk_pct': float(specific_variance / total_variance * 100) if total_variance > 0 else 0,
+            'factor_contributions': factor_risk_contributions,
+            'observation_count': len(merged)
+        }

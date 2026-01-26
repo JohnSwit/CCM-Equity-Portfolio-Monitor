@@ -294,3 +294,51 @@ def get_factor_crowding(
     vt = parse_view_type(view_type)
     analyzer = AdvancedFactorAnalyzer(db)
     return analyzer.analyze_factor_crowding(vt, view_id)
+
+
+@router.get("/factor-historical")
+def get_historical_factor_exposures(
+    view_type: str,
+    view_id: int,
+    lookback_days: int = Query(504, ge=90, le=1260, description="Lookback period in days"),
+    rolling_window: int = Query(63, ge=21, le=126, description="Rolling window for regression"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get historical factor exposures over time.
+
+    Shows how factor tilts (betas) have evolved using rolling regressions.
+    Useful for understanding changes in portfolio characteristics.
+    """
+    vt = parse_view_type(view_type)
+    analyzer = AdvancedFactorAnalyzer(db)
+    end_date = date.today()
+    return analyzer.calculate_historical_factor_exposures(vt, view_id, end_date, lookback_days, rolling_window)
+
+
+@router.get("/factor-risk-decomposition")
+def get_factor_risk_decomposition(
+    view_type: str,
+    view_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Decompose portfolio risk into factor risk and specific risk.
+
+    Shows what percentage of portfolio volatility comes from:
+    - Each factor (Market, Size, Value, Momentum, etc.)
+    - Specific/idiosyncratic risk (stock-specific)
+    """
+    vt = parse_view_type(view_type)
+    analyzer = AdvancedFactorAnalyzer(db)
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=252)
+
+    return analyzer.calculate_factor_risk_decomposition(vt, view_id, start_date, end_date)
