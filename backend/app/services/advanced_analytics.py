@@ -275,14 +275,29 @@ class SectorAnalyzer:
         if 'error' in portfolio_data:
             return portfolio_data
 
+        # Get the latest benchmark data date
+        latest_bench_date = self.db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
+            BenchmarkConstituent.benchmark_code == benchmark_code
+        ).scalar()
+
+        if not latest_bench_date:
+            return {
+                'error': f'No benchmark data available for {benchmark_code}',
+                'missing_data': 'benchmark_constituents',
+                'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
+            }
+
         # Get benchmark sector weights using the sector stored in BenchmarkConstituent
-        # The sector is populated during refresh from static mapping
+        # Filter by latest date to ensure we only use current data
         benchmark_constituents = self.db.query(
             BenchmarkConstituent.symbol,
             BenchmarkConstituent.weight,
             BenchmarkConstituent.sector
         ).filter(
-            BenchmarkConstituent.benchmark_code == benchmark_code
+            and_(
+                BenchmarkConstituent.benchmark_code == benchmark_code,
+                BenchmarkConstituent.as_of_date == latest_bench_date
+            )
         ).all()
 
         if not benchmark_constituents:
@@ -294,9 +309,15 @@ class SectorAnalyzer:
 
         # Aggregate weights by sector
         benchmark_weights = {}
+        total_weight = 0.0
         for constituent in benchmark_constituents:
             sector = constituent.sector or 'Unclassified'
-            benchmark_weights[sector] = benchmark_weights.get(sector, 0) + float(constituent.weight)
+            weight = float(constituent.weight)
+            benchmark_weights[sector] = benchmark_weights.get(sector, 0) + weight
+            total_weight += weight
+
+        # Log for debugging - total should be ~1.0
+        logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, total weight={total_weight:.4f}")
 
         # Build portfolio sector dict
         portfolio_weights = {s['sector']: s['weight'] for s in portfolio_data['sectors']}
