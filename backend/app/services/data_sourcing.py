@@ -1,10 +1,12 @@
 """
 Data sourcing services for classifications, benchmark constituents, and factor returns.
-Updated: 2026-01-23
+Updated: 2026-01-26
 """
 import os
 import httpx
 import pandas as pd
+import yfinance as yf
+import asyncio
 import io
 import zipfile
 from datetime import datetime, date, timedelta
@@ -23,16 +25,308 @@ logger = logging.getLogger(__name__)
 class ClassificationService:
     """
     Service for fetching and storing security classifications from multiple sources.
+    Priority order: yfinance (free, no API key) -> Polygon -> IEX -> Static mapping
     """
+
+    # Expanded static mapping for S&P 500 and common securities
+    STATIC_MAPPING = {
+        # Technology
+        "AAPL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
+        "MSFT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "NVDA": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "AVGO": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "ORCL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CRM": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CSCO": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Communications Equipment"},
+        "ACN": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "IT Consulting"},
+        "ADBE": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "IBM": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "IT Consulting"},
+        "INTC": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "AMD": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "QCOM": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "TXN": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "NOW": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "INTU": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "AMAT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductor Equipment"},
+        "MU": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "LRCX": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductor Equipment"},
+        "ADI": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "KLAC": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductor Equipment"},
+        "SNPS": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CDNS": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "PANW": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "MRVL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "FTNT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "MSI": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Communications Equipment"},
+        "APH": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Electronic Equipment"},
+        "NXPI": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "ON": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        # Communication Services
+        "GOOGL": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
+        "GOOG": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
+        "META": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
+        "NFLX": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "DIS": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "CMCSA": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Cable & Satellite"},
+        "VZ": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Telecom Services"},
+        "T": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Telecom Services"},
+        "TMUS": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Wireless Telecom"},
+        "CHTR": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Cable & Satellite"},
+        "EA": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "WBD": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "TTWO": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        # Consumer Discretionary
+        "AMZN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
+        "TSLA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
+        "HD": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Home Improvement Retail"},
+        "MCD": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "NKE": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Footwear"},
+        "LOW": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Home Improvement Retail"},
+        "SBUX": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "TJX": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Apparel Retail"},
+        "BKNG": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Hotels & Resorts"},
+        "CMG": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "ORLY": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automotive Retail"},
+        "AZO": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automotive Retail"},
+        "ROST": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Apparel Retail"},
+        "MAR": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Hotels & Resorts"},
+        "HLT": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Hotels & Resorts"},
+        "GM": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
+        "F": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
+        "YUM": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "DHI": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Homebuilding"},
+        "LEN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Homebuilding"},
+        # Consumer Staples
+        "WMT": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Hypermarkets"},
+        "PG": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
+        "COST": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Hypermarkets"},
+        "KO": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Soft Drinks"},
+        "PEP": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Soft Drinks"},
+        "PM": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Tobacco"},
+        "MO": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Tobacco"},
+        "MDLZ": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
+        "CL": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
+        "KMB": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
+        "GIS": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
+        "K": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
+        "SYY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Food Distributors"},
+        "STZ": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Distillers & Vintners"},
+        "KR": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Food Retail"},
+        "HSY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
+        "KDP": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Soft Drinks"},
+        "EL": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Personal Products"},
+        # Financials
+        "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Banks"},
+        "V": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Transaction & Payment Services"},
+        "MA": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Transaction & Payment Services"},
+        "BAC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Banks"},
+        "WFC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Banks"},
+        "GS": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Investment Banking"},
+        "MS": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Investment Banking"},
+        "BLK": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Asset Management"},
+        "SCHW": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Investment Banking"},
+        "AXP": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Consumer Finance"},
+        "C": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Banks"},
+        "SPGI": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Exchanges & Data"},
+        "CB": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Property & Casualty Insurance"},
+        "MMC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Insurance Brokers"},
+        "PGR": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Property & Casualty Insurance"},
+        "ICE": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Exchanges & Data"},
+        "CME": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Exchanges & Data"},
+        "AON": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Insurance Brokers"},
+        "USB": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Regional Banks"},
+        "PNC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Regional Banks"},
+        "TFC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Regional Banks"},
+        "AIG": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Multi-line Insurance"},
+        "MET": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Life & Health Insurance"},
+        "AFL": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Life & Health Insurance"},
+        "PRU": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Life & Health Insurance"},
+        "COF": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Consumer Finance"},
+        "BK": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Asset Management & Custody"},
+        "PYPL": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Transaction & Payment Services"},
+        # Healthcare
+        "JNJ": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "UNH": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Managed Health Care"},
+        "LLY": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "PFE": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "ABBV": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "MRK": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "TMO": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Life Sciences Tools"},
+        "ABT": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "DHR": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "BMY": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "AMGN": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "CVS": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Services"},
+        "MDT": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "CI": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Managed Health Care"},
+        "ELV": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Managed Health Care"},
+        "ISRG": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "GILD": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "VRTX": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "SYK": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "REGN": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "BSX": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "ZTS": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "BDX": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "HCA": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Facilities"},
+        "MRNA": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "MCK": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Distributors"},
+        "EW": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "A": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Life Sciences Tools"},
+        "IQV": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Life Sciences Tools"},
+        "HUM": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Managed Health Care"},
+        "BIIB": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "IDXX": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        # Industrials
+        "CAT": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Construction Machinery"},
+        "UNP": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Railroads"},
+        "GE": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "RTX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "HON": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Conglomerates"},
+        "BA": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "UPS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Air Freight & Logistics"},
+        "LMT": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "DE": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Agricultural Machinery"},
+        "ADP": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Human Resource Services"},
+        "ETN": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Electrical Components"},
+        "WM": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Environmental Services"},
+        "ITW": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Machinery"},
+        "FDX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Air Freight & Logistics"},
+        "NOC": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "EMR": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Electrical Components"},
+        "GD": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "CSX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Railroads"},
+        "NSC": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Railroads"},
+        "MMM": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Conglomerates"},
+        "TT": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Building Products"},
+        "JCI": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Building Products"},
+        "PH": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Machinery"},
+        "CARR": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Building Products"},
+        "PCAR": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Trucking"},
+        "RSG": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Environmental Services"},
+        "LHX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "CMI": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Machinery"},
+        "CTAS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Diversified Support Services"},
+        "FAST": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Building Products & Equipment"},
+        "PAYX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Human Resource Services"},
+        # Energy
+        "XOM": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Integrated Oil & Gas"},
+        "CVX": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Integrated Oil & Gas"},
+        "COP": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Exploration"},
+        "SLB": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Equipment"},
+        "EOG": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Exploration"},
+        "MPC": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Refining"},
+        "PXD": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Exploration"},
+        "PSX": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Refining"},
+        "VLO": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Refining"},
+        "OXY": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Exploration"},
+        "WMB": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Storage"},
+        "HAL": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Equipment"},
+        "KMI": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Storage"},
+        "DVN": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Exploration"},
+        "HES": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Exploration"},
+        "BKR": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Equipment"},
+        # Materials
+        "LIN": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Industrial Gases"},
+        "APD": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Industrial Gases"},
+        "SHW": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Specialty Chemicals"},
+        "FCX": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Copper"},
+        "ECL": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Specialty Chemicals"},
+        "NEM": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Gold"},
+        "DOW": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Commodity Chemicals"},
+        "DD": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Specialty Chemicals"},
+        "NUE": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Steel"},
+        "CTVA": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Fertilizers & Agri Chemicals"},
+        "PPG": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Specialty Chemicals"},
+        "VMC": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Construction Materials"},
+        "MLM": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Construction Materials"},
+        "ALB": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Specialty Chemicals"},
+        "BALL": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Metal & Glass Containers"},
+        # Utilities
+        "NEE": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "DUK": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "SO": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "D": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "SRE": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Multi-Utilities"},
+        "AEP": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "EXC": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "XEL": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "PCG": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "ED": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "WEC": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "PEG": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "AWK": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Water Utilities"},
+        "ES": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Multi-Utilities"},
+        "DTE": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "EIX": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "ETR": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "FE": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "PPL": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "CMS": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Multi-Utilities"},
+        # Real Estate
+        "AMT": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Telecom Tower REITs"},
+        "PLD": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Industrial REITs"},
+        "CCI": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Telecom Tower REITs"},
+        "EQIX": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Data Center REITs"},
+        "PSA": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Self Storage REITs"},
+        "SBAC": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Telecom Tower REITs"},
+        "O": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Retail REITs"},
+        "WELL": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Health Care REITs"},
+        "DLR": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Data Center REITs"},
+        "SPG": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Retail REITs"},
+        "VICI": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Diversified REITs"},
+        "AVB": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Residential REITs"},
+        "EQR": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Residential REITs"},
+        "ARE": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Office REITs"},
+        "EXR": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Self Storage REITs"},
+        "CBRE": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Real Estate Services"},
+        # ETFs (common factor ETFs)
+        "SPY": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Index Fund"},
+        "QQQ": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Index Fund"},
+        "IWM": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Index Fund"},
+        "VTI": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Index Fund"},
+        "VOO": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Index Fund"},
+        "IVV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Index Fund"},
+        "VEA": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "International Fund"},
+        "VWO": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Emerging Markets Fund"},
+        "EFA": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "International Fund"},
+        "AGG": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Bond Fund"},
+        "BND": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Bond Fund"},
+        "LQD": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Bond Fund"},
+        "GLD": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Commodity Fund"},
+        "SLV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Commodity Fund"},
+        "XLK": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLF": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLI": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLY": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLP": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLU": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLB": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLRE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "XLC": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Sector Fund"},
+        "VTV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Style Fund"},
+        "VUG": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Style Fund"},
+        "IWF": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Style Fund"},
+        "IWD": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Style Fund"},
+        "MTUM": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
+        "QUAL": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
+        "VLUE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
+        "SIZE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
+        "USMV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
+    }
 
     def __init__(self, db: Session):
         self.db = db
         self.polygon_api_key = os.getenv("POLYGON_API_KEY")
         self.iex_api_key = os.getenv("IEX_API_KEY")
+        self.request_delay = 0.5  # Delay between requests to avoid rate limiting
 
     async def refresh_classification(self, security_id: int) -> Optional[Dict[str, Any]]:
         """
         Refresh classification for a single security.
+        Priority: yfinance (free) -> Polygon -> IEX -> Static mapping
 
         Args:
             security_id: Security ID to refresh
@@ -48,19 +342,26 @@ class ClassificationService:
         ticker = security.symbol
         logger.info(f"Refreshing classification for {ticker}")
 
-        # Try Polygon.io first
+        # Try yfinance first (free, no API key required)
+        classification = self._fetch_from_yfinance(ticker)
+        if classification:
+            return self._save_classification(security_id, classification, "yfinance")
+
+        # Fallback to Polygon.io
         if self.polygon_api_key:
+            await asyncio.sleep(self.request_delay)  # Rate limiting
             classification = await self._fetch_from_polygon(ticker)
             if classification:
                 return self._save_classification(security_id, classification, "polygon")
 
         # Fallback to IEX Cloud
         if self.iex_api_key:
+            await asyncio.sleep(self.request_delay)  # Rate limiting
             classification = await self._fetch_from_iex(ticker)
             if classification:
                 return self._save_classification(security_id, classification, "iex")
 
-        # Fallback to static mapping (basic SIC code mapping)
+        # Fallback to static mapping (expanded to 200+ tickers)
         classification = self._fetch_from_static(ticker)
         if classification:
             return self._save_classification(security_id, classification, "static")
@@ -83,10 +384,14 @@ class ClassificationService:
             query = query.limit(limit)
 
         securities = query.all()
-        results = {"total": len(securities), "success": 0, "failed": 0, "errors": []}
+        results = {"total": len(securities), "success": 0, "failed": 0, "errors": [], "sources": {}}
 
-        for security in securities:
+        for i, security in enumerate(securities):
             try:
+                # Log progress every 10 securities
+                if i > 0 and i % 10 == 0:
+                    logger.info(f"Classification progress: {i}/{len(securities)} ({results['success']} success, {results['failed']} failed)")
+
                 classification = await self.refresh_classification(security.id)
                 if classification:
                     results["success"] += 1
@@ -99,6 +404,34 @@ class ClassificationService:
 
         logger.info(f"Classification refresh complete: {results['success']}/{results['total']} successful")
         return results
+
+    def _fetch_from_yfinance(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch classification from yfinance (free, no API key required)"""
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+
+            if not info:
+                logger.warning(f"yfinance returned no info for {ticker}")
+                return None
+
+            sector = info.get("sector", "")
+            industry = info.get("industry", "")
+            market_cap = info.get("marketCap")
+
+            if not sector and not industry:
+                logger.warning(f"yfinance has no sector/industry for {ticker}")
+                return None
+
+            return {
+                "gics_sector": sector,
+                "sector": SectorMapper.normalize_sector(sector) if sector else None,
+                "gics_industry": industry,
+                "market_cap_category": self._categorize_market_cap(market_cap),
+            }
+        except Exception as e:
+            logger.warning(f"yfinance fetch failed for {ticker}: {str(e)}")
+            return None
 
     async def _fetch_from_polygon(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Fetch classification from Polygon.io"""
@@ -151,19 +484,8 @@ class ClassificationService:
 
     def _fetch_from_static(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Fallback to static sector mapping for common tickers"""
-        # Basic static mapping for major tech/fin stocks
-        STATIC_MAPPING = {
-            "AAPL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
-            "MSFT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
-            "GOOGL": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
-            "AMZN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
-            "TSLA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
-            "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banking"},
-            "JNJ": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
-        }
-
         normalized = TickerNormalizer.normalize(ticker)
-        return STATIC_MAPPING.get(normalized)
+        return self.STATIC_MAPPING.get(normalized)
 
     def _categorize_market_cap(self, market_cap: Optional[float]) -> Optional[str]:
         """Categorize market cap into Large/Mid/Small"""
