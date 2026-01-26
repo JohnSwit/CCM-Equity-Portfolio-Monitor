@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class ClassificationService:
     """
     Service for fetching and storing security classifications from multiple sources.
-    Priority order: yfinance (free, no API key) -> Polygon -> IEX -> Static mapping
+    Priority order: Static mapping (instant, no API) -> yfinance -> Polygon -> IEX
     """
 
     # Expanded static mapping for S&P 500 and common securities
@@ -61,6 +61,7 @@ class ClassificationService:
         "APH": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Electronic Equipment"},
         "NXPI": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
         "ON": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "GRAB": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Internet Services"},
         # Communication Services
         "GOOGL": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
         "GOOG": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
@@ -96,6 +97,7 @@ class ClassificationService:
         "YUM": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
         "DHI": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Homebuilding"},
         "LEN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Homebuilding"},
+        "CPNG": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
         # Consumer Staples
         "WMT": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Hypermarkets"},
         "PG": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
@@ -115,6 +117,7 @@ class ClassificationService:
         "HSY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
         "KDP": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Soft Drinks"},
         "EL": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Personal Products"},
+        "KVUE": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Personal Products"},
         # Financials
         "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Banks"},
         "V": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Transaction & Payment Services"},
@@ -209,6 +212,8 @@ class ClassificationService:
         "CTAS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Diversified Support Services"},
         "FAST": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Building Products & Equipment"},
         "PAYX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Human Resource Services"},
+        "OTIS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Machinery"},
+        "TDY": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
         # Energy
         "XOM": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Integrated Oil & Gas"},
         "CVX": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Integrated Oil & Gas"},
@@ -315,18 +320,21 @@ class ClassificationService:
         "VLUE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
         "SIZE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
         "USMV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
+        "IVE": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Style Fund"},
+        "IVW": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Style Fund"},
+        "SPLV": {"sector": "ETF", "gics_sector": "ETF", "gics_industry": "Factor Fund"},
     }
 
     def __init__(self, db: Session):
         self.db = db
         self.polygon_api_key = os.getenv("POLYGON_API_KEY")
         self.iex_api_key = os.getenv("IEX_API_KEY")
-        self.request_delay = 0.5  # Delay between requests to avoid rate limiting
+        self.request_delay = 2.0  # Delay between API requests to avoid rate limiting
 
     async def refresh_classification(self, security_id: int) -> Optional[Dict[str, Any]]:
         """
         Refresh classification for a single security.
-        Priority: yfinance (free) -> Polygon -> IEX -> Static mapping
+        Priority: Static mapping (instant) -> yfinance -> Polygon -> IEX
 
         Args:
             security_id: Security ID to refresh
@@ -340,31 +348,34 @@ class ClassificationService:
             return None
 
         ticker = security.symbol
+        normalized_ticker = TickerNormalizer.normalize(ticker)
         logger.info(f"Refreshing classification for {ticker}")
 
-        # Try yfinance first (free, no API key required)
+        # 1. Try static mapping FIRST (instant, no API calls, no rate limits)
+        classification = self._fetch_from_static(normalized_ticker)
+        if classification:
+            logger.info(f"Found {ticker} in static mapping")
+            return self._save_classification(security_id, classification, "static")
+
+        # 2. Fallback to yfinance (free, but rate limited)
+        await asyncio.sleep(self.request_delay)  # Rate limiting
         classification = self._fetch_from_yfinance(ticker)
         if classification:
             return self._save_classification(security_id, classification, "yfinance")
 
-        # Fallback to Polygon.io
+        # 3. Fallback to Polygon.io
         if self.polygon_api_key:
             await asyncio.sleep(self.request_delay)  # Rate limiting
             classification = await self._fetch_from_polygon(ticker)
             if classification:
                 return self._save_classification(security_id, classification, "polygon")
 
-        # Fallback to IEX Cloud
+        # 4. Fallback to IEX Cloud
         if self.iex_api_key:
             await asyncio.sleep(self.request_delay)  # Rate limiting
             classification = await self._fetch_from_iex(ticker)
             if classification:
                 return self._save_classification(security_id, classification, "iex")
-
-        # Fallback to static mapping (expanded to 200+ tickers)
-        classification = self._fetch_from_static(ticker)
-        if classification:
-            return self._save_classification(security_id, classification, "static")
 
         logger.warning(f"Could not fetch classification for {ticker}")
         return None
