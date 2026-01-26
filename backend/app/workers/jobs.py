@@ -10,6 +10,7 @@ from app.services.benchmarks import BenchmarksEngine
 from app.services.baskets import BasketsEngine
 from app.services.factors import FactorsEngine
 from app.services.risk import RiskEngine
+from app.services.data_sourcing import BenchmarkService, ClassificationService
 from app.models import (
     Account, Group, ViewType, Transaction,
     PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
@@ -250,6 +251,24 @@ async def recompute_analytics_job(db: Session = None):
         logger.info("Clearing old analytics data...")
         clear_analytics_for_accounts_without_transactions(db)
         clear_group_and_firm_analytics(db)
+
+        # 0.5. Refresh benchmark constituents (SP500 holdings for sector comparison)
+        logger.info("Refreshing benchmark constituents (SP500)...")
+        try:
+            benchmark_service = BenchmarkService(db)
+            benchmark_refresh_result = await benchmark_service.refresh_benchmark("SP500")
+            logger.info(f"Benchmark constituents refresh: {benchmark_refresh_result}")
+        except Exception as e:
+            logger.error(f"Failed to refresh benchmark constituents: {e}")
+
+        # 0.6. Refresh security classifications
+        logger.info("Refreshing security classifications...")
+        try:
+            classification_service = ClassificationService(db)
+            classification_result = await classification_service.refresh_all_classifications()
+            logger.info(f"Classifications refresh: {classification_result}")
+        except Exception as e:
+            logger.error(f"Failed to refresh classifications: {e}")
 
         # 1. Build positions
         logger.info("Building positions...")

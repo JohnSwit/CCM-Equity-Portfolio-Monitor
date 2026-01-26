@@ -275,15 +275,32 @@ class SectorAnalyzer:
         if 'error' in portfolio_data:
             return portfolio_data
 
-        # Get benchmark sector weights
+        # Get benchmark sector weights by joining with SectorClassification
+        # This gets proper sector data instead of using the unpopulated BenchmarkConstituent.sector
         benchmark_constituents = self.db.query(
-            BenchmarkConstituent.sector,
-            func.sum(BenchmarkConstituent.weight).label('total_weight')
+            BenchmarkConstituent.symbol,
+            BenchmarkConstituent.weight,
+            SectorClassification.sector
+        ).outerjoin(
+            Security, Security.symbol == BenchmarkConstituent.symbol
+        ).outerjoin(
+            SectorClassification, SectorClassification.security_id == Security.id
         ).filter(
             BenchmarkConstituent.benchmark_code == benchmark_code
-        ).group_by(BenchmarkConstituent.sector).all()
+        ).all()
 
-        benchmark_weights = {b.sector: float(b.total_weight) for b in benchmark_constituents}
+        if not benchmark_constituents:
+            return {
+                'error': f'No benchmark data available for {benchmark_code}',
+                'missing_data': 'benchmark_constituents',
+                'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
+            }
+
+        # Aggregate weights by sector
+        benchmark_weights = {}
+        for constituent in benchmark_constituents:
+            sector = constituent.sector or 'Unclassified'
+            benchmark_weights[sector] = benchmark_weights.get(sector, 0) + float(constituent.weight)
 
         # Build portfolio sector dict
         portfolio_weights = {s['sector']: s['weight'] for s in portfolio_data['sectors']}
