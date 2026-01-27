@@ -415,7 +415,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="border-l-4 border-blue-500 pl-4">
                   <div className="text-sm text-gray-600">1 Month</div>
                   <div className="text-lg font-semibold">
@@ -438,6 +438,12 @@ export default function Dashboard() {
                   <div className="text-sm text-gray-600">1 Year</div>
                   <div className="text-lg font-semibold">
                     {summary.return_1y ? formatPercent(summary.return_1y) : 'N/A'}
+                  </div>
+                </div>
+                <div className="border-l-4 border-teal-500 pl-4">
+                  <div className="text-sm text-gray-600">All Time</div>
+                  <div className="text-lg font-semibold">
+                    {summary.return_inception != null ? formatPercent(summary.return_inception) : 'N/A'}
                   </div>
                 </div>
               </div>
