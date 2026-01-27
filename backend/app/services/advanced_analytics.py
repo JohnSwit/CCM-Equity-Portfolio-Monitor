@@ -572,20 +572,44 @@ class BrinsonAttributionAnalyzer:
 
         return sector_returns
 
+    # Mapping from GICS sector names to SPDR sector ETFs
+    SECTOR_ETF_MAP = {
+        'Information Technology': 'XLK',
+        'Technology': 'XLK',
+        'Health Care': 'XLV',
+        'Healthcare': 'XLV',
+        'Financials': 'XLF',
+        'Consumer Discretionary': 'XLY',
+        'Communication Services': 'XLC',
+        'Communication': 'XLC',
+        'Industrials': 'XLI',
+        'Consumer Staples': 'XLP',
+        'Energy': 'XLE',
+        'Utilities': 'XLU',
+        'Real Estate': 'XLRE',
+        'Materials': 'XLB',
+    }
+
     def _calculate_benchmark_sector_returns(self, holdings: List, start_date: date, end_date: date) -> Dict[str, float]:
-        """Calculate sector returns for benchmark holdings"""
+        """Calculate sector returns for benchmark holdings.
+
+        Uses local price data where available, then falls back to sector ETF
+        proxies (SPDR ETFs) for sectors without local price data.
+        """
         sector_returns = {}
         sector_weighted_returns = {}
         sector_weights = {}
+        all_benchmark_sectors = set()
 
         for holding in holdings:
             sector = holding.sector or _resolve_sector_for_symbol(self.db, holding.symbol)
             if not sector:
-                continue  # Skip unclassifiable benchmark constituents
+                continue
+            all_benchmark_sectors.add(sector)
             ticker = holding.symbol
             weight = float(holding.weight)
 
-            # Find security by ticker
+            # Find security by ticker in local DB
             security = self.db.query(Security).filter(
                 Security.symbol == TickerNormalizer.normalize(ticker)
             ).first()
@@ -614,12 +638,80 @@ class BrinsonAttributionAnalyzer:
                 sector_weighted_returns[sector] = sector_weighted_returns.get(sector, 0) + (security_return * weight)
                 sector_weights[sector] = sector_weights.get(sector, 0) + weight
 
-        # Calculate sector returns (weighted average)
+        # Calculate sector returns from local data (weighted average)
         for sector in sector_weights:
             if sector_weights[sector] > 0:
                 sector_returns[sector] = sector_weighted_returns[sector] / sector_weights[sector]
 
+        # Identify sectors missing returns and fill via sector ETF proxies
+        missing_sectors = all_benchmark_sectors - set(sector_returns.keys())
+        if missing_sectors:
+            etf_returns = self._fetch_sector_etf_returns(missing_sectors, start_date, end_date)
+            for sector, ret in etf_returns.items():
+                sector_returns[sector] = ret
+
         return sector_returns
+
+    def _fetch_sector_etf_returns(self, sectors: set, start_date: date, end_date: date) -> Dict[str, float]:
+        """Fetch sector returns using SPDR sector ETF proxies via yfinance."""
+        import yfinance as yf
+
+        results = {}
+        # Collect unique ETF tickers needed
+        etf_to_sectors: Dict[str, List[str]] = {}
+        for sector in sectors:
+            etf = self.SECTOR_ETF_MAP.get(sector)
+            if etf:
+                etf_to_sectors.setdefault(etf, []).append(sector)
+
+        if not etf_to_sectors:
+            return results
+
+        tickers = list(etf_to_sectors.keys())
+        try:
+            # Fetch prices for all needed ETFs in one call
+            # Add buffer days to ensure we get prices on or before start_date
+            fetch_start = start_date - timedelta(days=10)
+            fetch_end = end_date + timedelta(days=1)
+            data = yf.download(tickers, start=fetch_start, end=fetch_end, progress=False)
+
+            if data.empty:
+                logger.warning("No ETF price data returned from yfinance")
+                return results
+
+            if isinstance(data.columns, pd.MultiIndex):
+                close = data['Close']
+            else:
+                # Single ticker - no multi-index
+                close = pd.DataFrame({tickers[0]: data['Close']})
+
+            for etf, sector_list in etf_to_sectors.items():
+                col = etf if etf in close.columns else None
+                if col is None:
+                    continue
+                series = close[col].dropna()
+                if series.empty:
+                    continue
+
+                # Get price on or before start_date
+                start_prices = series[series.index.date <= start_date]
+                end_prices = series[series.index.date <= end_date]
+
+                if start_prices.empty or end_prices.empty:
+                    continue
+
+                p_start = float(start_prices.iloc[-1])
+                p_end = float(end_prices.iloc[-1])
+
+                if p_start > 0:
+                    etf_return = (p_end / p_start) - 1
+                    for sector in sector_list:
+                        results[sector] = etf_return
+
+        except Exception as e:
+            logger.error(f"Error fetching sector ETF returns: {e}")
+
+        return results
 
 
 class AdvancedFactorAnalyzer:
