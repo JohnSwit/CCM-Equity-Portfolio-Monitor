@@ -35,7 +35,14 @@ class PortfolioStatisticsEngine:
         if not end_date:
             end_date = date.today()
         if not start_date:
-            start_date = end_date - timedelta(days=365)
+            # Use earliest available returns date for "all time"
+            earliest = self.db.query(func.min(ReturnsEOD.date)).filter(
+                and_(
+                    ReturnsEOD.view_type == view_type,
+                    ReturnsEOD.view_id == view_id
+                )
+            ).scalar()
+            start_date = earliest if earliest else end_date - timedelta(days=365)
 
         # Get portfolio returns for the period
         portfolio_returns = self.db.query(ReturnsEOD).filter(

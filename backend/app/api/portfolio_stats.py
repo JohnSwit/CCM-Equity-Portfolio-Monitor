@@ -45,8 +45,6 @@ def get_contribution_to_returns(
 
     if not end_date:
         end_date = date.today()
-    if not start_date:
-        start_date = end_date - timedelta(days=90)  # Default to 90 days
 
     return engine.get_contribution_to_returns(vt, view_id, start_date, end_date, top_n)
 
