@@ -16,6 +16,34 @@ from scipy import stats
 logger = logging.getLogger(__name__)
 
 
+def _resolve_sector_for_symbol(db: Session, symbol: str):
+    """
+    Resolve sector for a symbol using multiple fallback sources.
+    Tries: Static mapping -> SectorClassification table.
+    Returns the sector string or None if unresolvable.
+    """
+    from app.services.data_sourcing import ClassificationService
+
+    if not symbol:
+        return None
+
+    normalized = TickerNormalizer.normalize(symbol)
+
+    # 1. Try static mapping (fast, in-memory)
+    static = ClassificationService.STATIC_MAPPING.get(normalized)
+    if static and static.get('sector'):
+        return static['sector']
+
+    # 2. Try SectorClassification table
+    result = db.query(SectorClassification.sector).join(
+        Security, SectorClassification.security_id == Security.id
+    ).filter(Security.symbol == normalized).first()
+    if result and result.sector:
+        return result.sector
+
+    return None
+
+
 class TurnoverAnalyzer:
     """Calculate portfolio turnover metrics"""
 
@@ -214,7 +242,7 @@ class SectorAnalyzer:
             if p.security_id not in price_dict:
                 price_dict[p.security_id] = p.close
 
-        # Calculate market values and weights
+        # Calculate market values, resolve sectors, and compute weights
         holdings = []
         total_value = 0
 
@@ -223,14 +251,21 @@ class SectorAnalyzer:
                 continue
 
             market_value = pos.shares * price_dict[pos.security_id]
+
+            # Resolve sector: DB classification first, then static mapping fallback
+            resolved_sector = pos.sector or _resolve_sector_for_symbol(self.db, pos.symbol)
+            if not resolved_sector:
+                # Skip holdings that cannot be classified into any sector
+                continue
+
             total_value += market_value
 
             holdings.append({
                 'security_id': pos.security_id,
                 'symbol': pos.symbol,
                 'asset_name': pos.asset_name,
-                'sector': pos.sector or 'Unclassified',
-                'gics_sector': pos.gics_sector or 'Unclassified',
+                'sector': resolved_sector,
+                'gics_sector': pos.gics_sector or resolved_sector,
                 'shares': pos.shares,
                 'price': price_dict[pos.security_id],
                 'market_value': market_value
@@ -307,17 +342,24 @@ class SectorAnalyzer:
                 'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
             }
 
-        # Aggregate weights by sector
+        # Aggregate weights by sector, resolving unclassified via fallback
         benchmark_weights = {}
-        total_weight = 0.0
+        total_classified_weight = 0.0
         for constituent in benchmark_constituents:
-            sector = constituent.sector or 'Unclassified'
+            sector = constituent.sector or _resolve_sector_for_symbol(self.db, constituent.symbol)
+            if not sector:
+                continue  # Skip constituents that cannot be classified
             weight = float(constituent.weight)
             benchmark_weights[sector] = benchmark_weights.get(sector, 0) + weight
-            total_weight += weight
+            total_classified_weight += weight
 
-        # Log for debugging - total should be ~1.0
-        logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, total weight={total_weight:.4f}")
+        # Renormalize benchmark weights so they sum to 1.0
+        if total_classified_weight > 0 and abs(total_classified_weight - 1.0) > 0.001:
+            for sector in benchmark_weights:
+                benchmark_weights[sector] /= total_classified_weight
+
+        # Log for debugging
+        logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, classified weight={total_classified_weight:.4f}")
 
         # Build portfolio sector dict
         portfolio_weights = {s['sector']: s['weight'] for s in portfolio_data['sectors']}
@@ -426,11 +468,21 @@ class BrinsonAttributionAnalyzer:
         # Build portfolio sector weights dict (use start weights)
         port_weights = {s['sector']: s['weight'] for s in port_start['sectors']}
 
-        # Build benchmark sector weights dict
+        # Build benchmark sector weights dict, resolving unclassified via fallback
         bench_weights = {}
+        total_bench_classified = 0.0
         for holding in benchmark_holdings:
-            sector = holding.sector or 'Unclassified'
-            bench_weights[sector] = bench_weights.get(sector, 0) + float(holding.weight)
+            sector = holding.sector or _resolve_sector_for_symbol(self.db, holding.symbol)
+            if not sector:
+                continue  # Skip unclassifiable benchmark constituents
+            weight = float(holding.weight)
+            bench_weights[sector] = bench_weights.get(sector, 0) + weight
+            total_bench_classified += weight
+
+        # Renormalize benchmark weights so they sum to 1.0
+        if total_bench_classified > 0 and abs(total_bench_classified - 1.0) > 0.001:
+            for sector in bench_weights:
+                bench_weights[sector] /= total_bench_classified
 
         # Get all sectors
         all_sectors = set(port_weights.keys()) | set(bench_weights.keys())
@@ -527,7 +579,9 @@ class BrinsonAttributionAnalyzer:
         sector_weights = {}
 
         for holding in holdings:
-            sector = holding.sector or 'Unclassified'
+            sector = holding.sector or _resolve_sector_for_symbol(self.db, holding.symbol)
+            if not sector:
+                continue  # Skip unclassifiable benchmark constituents
             ticker = holding.symbol
             weight = float(holding.weight)
 

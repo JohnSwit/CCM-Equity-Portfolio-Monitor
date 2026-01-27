@@ -627,6 +627,18 @@ class BenchmarkService:
                             sector_info = ClassificationService.STATIC_MAPPING.get(normalized_ticker, {})
                             sector = sector_info.get("sector") if sector_info else None
 
+                            # If not in static mapping, try SectorClassification table
+                            if not sector:
+                                security = self.db.query(Security).filter(
+                                    Security.symbol == normalized_ticker
+                                ).first()
+                                if security:
+                                    classification = self.db.query(SectorClassification).filter(
+                                        SectorClassification.security_id == security.id
+                                    ).first()
+                                    if classification and classification.sector:
+                                        sector = classification.sector
+
                             holdings_dict[normalized_ticker] = {
                                 "ticker": normalized_ticker,
                                 "weight": weight_val,

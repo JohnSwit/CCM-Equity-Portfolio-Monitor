@@ -225,7 +225,23 @@ async def get_benchmark_weights(
     total_weight = 0.0
 
     for c in constituents:
-        sector = c.sector or "Unclassified"
+        # Resolve sector: stored value first, then static mapping, then SectorClassification table
+        sector = c.sector
+        if not sector:
+            from app.utils.ticker_utils import TickerNormalizer
+            normalized = TickerNormalizer.normalize(c.symbol)
+            static = ClassificationService.STATIC_MAPPING.get(normalized, {})
+            sector = static.get("sector") if static else None
+        if not sector:
+            security = db.query(Security).filter(Security.symbol == c.symbol).first()
+            if security:
+                classification = db.query(SectorClassification).filter(
+                    SectorClassification.security_id == security.id
+                ).first()
+                if classification and classification.sector:
+                    sector = classification.sector
+        if not sector:
+            continue  # Skip unclassifiable constituents
         weight = float(c.weight)
         sector_weights[sector] = sector_weights.get(sector, 0) + weight
         total_weight += weight
