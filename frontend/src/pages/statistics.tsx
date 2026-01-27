@@ -4,12 +4,13 @@ import { api } from '@/lib/api';
 import { format, subDays, subMonths, startOfYear } from 'date-fns';
 import Select from 'react-select';
 
-// Brinson time period options
+// Time period options
+type TimePeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
 type BrinsonPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'custom';
 
-const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date; end: Date } => {
+const getDateRange = (period: TimePeriod): { start: Date | null; end: Date } => {
   const end = new Date();
-  let start: Date;
+  let start: Date | null;
 
   switch (period) {
     case '1M':
@@ -24,11 +25,19 @@ const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date; end: Date } 
     case '1Y':
       start = subMonths(end, 12);
       break;
+    case 'ALL':
+      start = null;
+      break;
     default:
       start = subMonths(end, 3);
   }
 
   return { start, end };
+};
+
+const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date; end: Date } => {
+  const range = getDateRange(period === 'custom' ? '3M' : period as TimePeriod);
+  return { start: range.start || subMonths(new Date(), 3), end: range.end };
 };
 
 export default function PortfolioStatisticsPage() {
@@ -56,6 +65,10 @@ export default function PortfolioStatisticsPage() {
   const [factorRiskData, setFactorRiskData] = useState<any>(null);
   const [historicalFactorData, setHistoricalFactorData] = useState<any>(null);
 
+  // Contribution to Returns time period
+  const [contributionPeriod, setContributionPeriod] = useState<TimePeriod>('ALL');
+  const [contributionLoading, setContributionLoading] = useState(false);
+
   // Brinson time period
   const [brinsonPeriod, setBrinsonPeriod] = useState<BrinsonPeriod>('3M');
   const [brinsonLoading, setBrinsonLoading] = useState(false);
@@ -76,12 +89,40 @@ export default function PortfolioStatisticsPage() {
     }
   }, [selectedView, benchmark, window]);
 
+  // Reload Contribution to Returns when period changes
+  useEffect(() => {
+    if (selectedView) {
+      loadContributionData();
+    }
+  }, [selectedView, contributionPeriod]);
+
   // Reload Brinson when period changes
   useEffect(() => {
     if (selectedView) {
       loadBrinsonData();
     }
   }, [selectedView, brinsonPeriod]);
+
+  const loadContributionData = async () => {
+    if (!selectedView) return;
+
+    setContributionLoading(true);
+    try {
+      const { start, end } = getDateRange(contributionPeriod);
+      const contrib = await api.getContributionToReturns(
+        selectedView.view_type,
+        selectedView.view_id,
+        start ? format(start, 'yyyy-MM-dd') : undefined,
+        format(end, 'yyyy-MM-dd'),
+        20
+      );
+      setContributionData(contrib);
+    } catch (error) {
+      console.error('Failed to load contribution data:', error);
+    } finally {
+      setContributionLoading(false);
+    }
+  };
 
   const loadBrinsonData = async () => {
     if (!selectedView) return;
@@ -122,8 +163,7 @@ export default function PortfolioStatisticsPage() {
 
     setLoading(true);
     try {
-      const [contrib, vol, dd, varCvar, factors, turnover, sectors, sectorComp, factorAttr, factorRisk, histFactors] = await Promise.all([
-        api.getContributionToReturns(selectedView.view_type, selectedView.view_id, undefined, undefined, 20).catch(() => null),
+      const [vol, dd, varCvar, factors, turnover, sectors, sectorComp, factorAttr, factorRisk, histFactors] = await Promise.all([
         api.getVolatilityMetrics(selectedView.view_type, selectedView.view_id, benchmark, window).catch(() => null),
         api.getDrawdownAnalysis(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getVarCvar(selectedView.view_type, selectedView.view_id, '95,99', window).catch(() => null),
@@ -132,14 +172,13 @@ export default function PortfolioStatisticsPage() {
         api.getTurnoverAnalysis(selectedView.view_type, selectedView.view_id, undefined, undefined, 'monthly').catch(() => null),
         api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getSectorComparison(selectedView.view_type, selectedView.view_id, 'SP500').catch(() => null),
-        // Note: Brinson is loaded separately with time period via loadBrinsonData
+        // Note: Brinson and Contribution are loaded separately with time period
         api.getFactorAttribution(selectedView.view_type, selectedView.view_id).catch(() => null),
         // Enhanced Factor Analysis
         api.getFactorRiskDecomposition(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getHistoricalFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
       ]);
 
-      setContributionData(contrib);
       setVolatilityData(vol);
       setDrawdownData(dd);
       setVarData(varCvar);
@@ -812,43 +851,73 @@ export default function PortfolioStatisticsPage() {
             )}
 
             {/* Contribution to Returns */}
-            {contributionData && !contributionData.error && contributionData.contributions && contributionData.contributions.length > 0 && (
+            {(contributionData || contributionLoading) && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Contribution to Returns</h2>
-                <div className="mb-4 p-3 bg-blue-50 rounded">
-                  <div className="text-sm">
-                    <span className="font-semibold">Total Return:</span> {formatPercent(contributionData.total_return)}
-                    <span className="ml-4 text-gray-600">
-                      Period: {contributionData.period_start && format(new Date(contributionData.period_start), 'MMM d, yyyy')} -
-                      {contributionData.period_end && format(new Date(contributionData.period_end), 'MMM d, yyyy')}
-                    </span>
+                <div className="flex justify-between items-start mb-4">
+                  <h2 className="text-xl font-bold">Contribution to Returns</h2>
+                  <div className="flex gap-1">
+                    {(['1M', '3M', 'YTD', '1Y', 'ALL'] as TimePeriod[]).map((period) => (
+                      <button
+                        key={period}
+                        onClick={() => setContributionPeriod(period)}
+                        className={`px-3 py-1 text-sm rounded ${
+                          contributionPeriod === period
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {period === 'ALL' ? 'All Time' : period}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                <table className="table text-sm">
-                  <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th>Name</th>
-                      <th className="text-right">Avg Weight</th>
-                      <th className="text-right">Contribution</th>
-                      <th className="text-right">% of Total Return</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {contributionData.contributions.map((contrib: any, idx: number) => (
-                      <tr key={idx}>
-                        <td className="font-semibold">{contrib.symbol}</td>
-                        <td className="max-w-xs truncate">{contrib.asset_name}</td>
-                        <td className="text-right">{formatPercent(contrib.avg_weight)}</td>
-                        <td className={`text-right font-semibold ${contrib.contribution >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {formatPercent(contrib.contribution)}
-                        </td>
-                        <td className="text-right">{formatNumber(contrib.contribution_pct, 1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {contributionLoading ? (
+                  <div className="text-center py-4 text-gray-500">Loading contribution data...</div>
+                ) : contributionData && !contributionData.error && contributionData.contributions && contributionData.contributions.length > 0 ? (
+                  <>
+                    <div className="mb-4 p-3 bg-blue-50 rounded">
+                      <div className="text-sm">
+                        <span className="font-semibold">Total Return:</span> {formatPercent(contributionData.total_return)}
+                        <span className="ml-4 text-gray-600">
+                          Period: {contributionData.period_start && format(new Date(contributionData.period_start), 'MMM d, yyyy')} -
+                          {contributionData.period_end && format(new Date(contributionData.period_end), 'MMM d, yyyy')}
+                        </span>
+                      </div>
+                    </div>
+
+                    <table className="table text-sm">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Name</th>
+                          <th className="text-right">Avg Weight</th>
+                          <th className="text-right">Contribution</th>
+                          <th className="text-right">% of Total Return</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {contributionData.contributions.map((contrib: any, idx: number) => (
+                          <tr key={idx}>
+                            <td className="font-semibold">{contrib.symbol}</td>
+                            <td className="max-w-xs truncate">{contrib.asset_name}</td>
+                            <td className="text-right">{formatPercent(contrib.avg_weight)}</td>
+                            <td className={`text-right font-semibold ${contrib.contribution >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatPercent(contrib.contribution)}
+                            </td>
+                            <td className="text-right">{formatNumber(contrib.contribution_pct, 1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                ) : contributionData?.error ? (
+                  <div className="p-4 bg-red-50 rounded border border-red-200">
+                    <p className="text-sm text-red-800">{contributionData.error}</p>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-500">No contribution data available for this period.</div>
+                )}
               </div>
             )}
 
