@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func, and_
 from typing import Optional, List
 from datetime import date, timedelta
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, ViewType
+from app.models import User, ViewType, ReturnsEOD
 from app.services.portfolio_statistics import PortfolioStatisticsEngine
 from app.services.advanced_analytics import (
     TurnoverAnalyzer, SectorAnalyzer,
@@ -14,6 +15,16 @@ import logging
 
 router = APIRouter(prefix="/portfolio-stats", tags=["portfolio-statistics"])
 logger = logging.getLogger(__name__)
+
+
+def _get_earliest_returns_date(db: Session, view_type: ViewType, view_id: int) -> Optional[date]:
+    """Get the earliest available returns date for a view."""
+    return db.query(func.min(ReturnsEOD.date)).filter(
+        and_(
+            ReturnsEOD.view_type == view_type,
+            ReturnsEOD.view_id == view_id
+        )
+    ).scalar()
 
 
 def parse_view_type(view_type_str: str) -> ViewType:
@@ -181,7 +192,7 @@ def get_turnover_analysis(
     if not end_date:
         end_date = date.today()
     if not start_date:
-        start_date = end_date - timedelta(days=365)
+        start_date = _get_earliest_returns_date(db, vt, view_id) or end_date - timedelta(days=365)
 
     return analyzer.calculate_turnover(vt, view_id, start_date, end_date, period)
 
@@ -245,7 +256,7 @@ def get_brinson_attribution(
     if not end_date:
         end_date = date.today()
     if not start_date:
-        start_date = end_date - timedelta(days=90)
+        start_date = _get_earliest_returns_date(db, vt, view_id) or end_date - timedelta(days=90)
 
     return analyzer.calculate_brinson_attribution(vt, view_id, benchmark, start_date, end_date)
 
@@ -271,7 +282,7 @@ def get_factor_attribution(
     if not end_date:
         end_date = date.today()
     if not start_date:
-        start_date = end_date - timedelta(days=90)
+        start_date = _get_earliest_returns_date(db, vt, view_id) or end_date - timedelta(days=90)
 
     return analyzer.calculate_factor_attribution(vt, view_id, start_date, end_date)
 
@@ -337,6 +348,6 @@ def get_factor_risk_decomposition(
     if not end_date:
         end_date = date.today()
     if not start_date:
-        start_date = end_date - timedelta(days=252)
+        start_date = _get_earliest_returns_date(db, vt, view_id) or end_date - timedelta(days=252)
 
     return analyzer.calculate_factor_risk_decomposition(vt, view_id, start_date, end_date)

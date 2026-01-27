@@ -4,9 +4,8 @@ import { api } from '@/lib/api';
 import { format, subDays, subMonths, startOfYear } from 'date-fns';
 import Select from 'react-select';
 
-// Time period options
+// Time period options (shared across Contribution, Brinson, etc.)
 type TimePeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
-type BrinsonPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'custom';
 
 const getDateRange = (period: TimePeriod): { start: Date | null; end: Date } => {
   const end = new Date();
@@ -33,11 +32,6 @@ const getDateRange = (period: TimePeriod): { start: Date | null; end: Date } => 
   }
 
   return { start, end };
-};
-
-const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date; end: Date } => {
-  const range = getDateRange(period === 'custom' ? '3M' : period as TimePeriod);
-  return { start: range.start || subMonths(new Date(), 3), end: range.end };
 };
 
 export default function PortfolioStatisticsPage() {
@@ -70,7 +64,7 @@ export default function PortfolioStatisticsPage() {
   const [contributionLoading, setContributionLoading] = useState(false);
 
   // Brinson time period
-  const [brinsonPeriod, setBrinsonPeriod] = useState<BrinsonPeriod>('3M');
+  const [brinsonPeriod, setBrinsonPeriod] = useState<TimePeriod>('3M');
   const [brinsonLoading, setBrinsonLoading] = useState(false);
   const [expandedSectors, setExpandedSectors] = useState<Set<string>>(new Set());
 
@@ -129,12 +123,12 @@ export default function PortfolioStatisticsPage() {
 
     setBrinsonLoading(true);
     try {
-      const { start, end } = getBrinsonDateRange(brinsonPeriod);
+      const { start, end } = getDateRange(brinsonPeriod);
       const brinson = await api.getBrinsonAttribution(
         selectedView.view_type,
         selectedView.view_id,
         'SP500',
-        format(start, 'yyyy-MM-dd'),
+        start ? format(start, 'yyyy-MM-dd') : undefined,
         format(end, 'yyyy-MM-dd')
       );
       setBrinsonData(brinson);
@@ -1020,7 +1014,7 @@ export default function PortfolioStatisticsPage() {
                 <div className="flex justify-between items-start mb-4">
                   <h2 className="text-xl font-bold">Brinson Attribution Analysis</h2>
                   <div className="flex gap-1">
-                    {(['1M', '3M', 'YTD', '1Y'] as BrinsonPeriod[]).map((period) => (
+                    {(['1M', '3M', 'YTD', '1Y', 'ALL'] as TimePeriod[]).map((period) => (
                       <button
                         key={period}
                         onClick={() => setBrinsonPeriod(period)}
@@ -1030,7 +1024,7 @@ export default function PortfolioStatisticsPage() {
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
                       >
-                        {period}
+                        {period === 'ALL' ? 'All Time' : period}
                       </button>
                     ))}
                   </div>

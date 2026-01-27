@@ -3,7 +3,10 @@ import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Select from 'react-select';
-import { format } from 'date-fns';
+import { format, subMonths, startOfYear } from 'date-fns';
+
+// Time period options for the performance chart
+type ChartPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
 
 // Color palette for pie charts
 const CHART_COLORS = [
@@ -31,6 +34,7 @@ export default function Dashboard() {
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
+  const [chartPeriod, setChartPeriod] = useState<ChartPeriod>('ALL');
 
   // Donut chart states
   const [holdingsViewMode, setHoldingsViewMode] = useState<HoldingsViewMode>('marketValue');
@@ -303,6 +307,55 @@ export default function Dashboard() {
     }));
   }, [sectorData]);
 
+  // Filter chart data by selected time period
+  const filteredChartData = useMemo(() => {
+    if (!chartData.length || chartPeriod === 'ALL') return chartData;
+
+    const now = new Date();
+    let cutoffDate: Date;
+    switch (chartPeriod) {
+      case '1M':
+        cutoffDate = subMonths(now, 1);
+        break;
+      case '3M':
+        cutoffDate = subMonths(now, 3);
+        break;
+      case 'YTD':
+        cutoffDate = startOfYear(now);
+        break;
+      case '1Y':
+        cutoffDate = subMonths(now, 12);
+        break;
+      default:
+        return chartData;
+    }
+
+    const cutoffStr = format(cutoffDate, 'yyyy-MM-dd');
+    const filtered = chartData.filter((d: any) => d.date >= cutoffStr);
+
+    if (filtered.length === 0) return chartData;
+
+    // Re-normalize so the filtered window starts at 1.0
+    const first = filtered[0];
+    const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+    const baselineValues: any = {};
+    allSeries.forEach(s => {
+      if (first[s] !== undefined && first[s] !== null) {
+        baselineValues[s] = first[s];
+      }
+    });
+
+    return filtered.map((point: any) => {
+      const normalized: any = { date: point.date };
+      allSeries.forEach(s => {
+        if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
+          normalized[s] = point[s] / baselineValues[s];
+        }
+      });
+      return normalized;
+    });
+  }, [chartData, chartPeriod]);
+
   // Custom label for pie chart
   const renderCustomLabel = ({ name, value, cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
     if (percent < 0.025) return null; // Don't show labels for slices < 2.5%
@@ -522,31 +575,48 @@ export default function Dashboard() {
             <div className="card">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-semibold">Performance vs Benchmarks</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setReturnMode('TWR')}
-                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                      returnMode === 'TWR'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
-                  >
-                    TWR (Time-Weighted)
-                  </button>
-                  <button
-                    onClick={() => setReturnMode('Simple')}
-                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                      returnMode === 'Simple'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
-                  >
-                    Simple Return
-                  </button>
+                <div className="flex items-center gap-4">
+                  <div className="flex gap-1">
+                    {(['1M', '3M', 'YTD', '1Y', 'ALL'] as ChartPeriod[]).map((period) => (
+                      <button
+                        key={period}
+                        onClick={() => setChartPeriod(period)}
+                        className={`px-3 py-1 text-sm rounded ${
+                          chartPeriod === period
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {period === 'ALL' ? 'All Time' : period}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setReturnMode('TWR')}
+                      className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                        returnMode === 'TWR'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      TWR (Time-Weighted)
+                    </button>
+                    <button
+                      onClick={() => setReturnMode('Simple')}
+                      className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                        returnMode === 'Simple'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      Simple Return
+                    </button>
+                  </div>
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={chartData}>
+                <LineChart data={filteredChartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
