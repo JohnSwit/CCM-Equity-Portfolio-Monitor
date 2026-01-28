@@ -58,6 +58,17 @@ export default function PortfolioStatisticsPage() {
   const [factorBenchmarking, setFactorBenchmarking] = useState<any>(null);
   const [factorBenchPeriod, setFactorBenchPeriod] = useState<FactorBenchPeriod>('1Y');
   const [factorBenchLoading, setFactorBenchLoading] = useState(false);
+  const [useExcessReturns, setUseExcessReturns] = useState(false);
+  const [useRobustMode, setUseRobustMode] = useState(false);
+  const [selectedBenchmark, setSelectedBenchmark] = useState<string | null>(null);
+  const [availableBenchmarks, setAvailableBenchmarks] = useState<any[]>([]);
+  const [factorRollingData, setFactorRollingData] = useState<any>(null);
+  const [factorContribOverTime, setFactorContribOverTime] = useState<any>(null);
+  const [rollingWindow, setRollingWindow] = useState<number>(63);
+  const [contribFrequency, setContribFrequency] = useState<'M' | 'Q'>('M');
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [factorSortBy, setFactorSortBy] = useState<string>('contribution');
+  const [hideInsignificant, setHideInsignificant] = useState(false);
 
   // Contribution to Returns time period
   const [contributionPeriod, setContributionPeriod] = useState<TimePeriod>('ALL');
@@ -75,7 +86,17 @@ export default function PortfolioStatisticsPage() {
   useEffect(() => {
     loadViews();
     loadDataStatus();
+    loadAvailableBenchmarks();
   }, []);
+
+  const loadAvailableBenchmarks = async () => {
+    try {
+      const benchmarks = await api.getAvailableBenchmarks();
+      setAvailableBenchmarks(benchmarks);
+    } catch (error) {
+      console.error('Failed to load benchmarks:', error);
+    }
+  };
 
   useEffect(() => {
     if (selectedView) {
@@ -97,12 +118,20 @@ export default function PortfolioStatisticsPage() {
     }
   }, [selectedView, brinsonPeriod]);
 
-  // Reload Factor Benchmarking when period changes
+  // Reload Factor Benchmarking when settings change
   useEffect(() => {
     if (selectedView) {
       loadFactorBenchmarking();
     }
-  }, [selectedView, factorBenchPeriod]);
+  }, [selectedView, factorBenchPeriod, useExcessReturns, useRobustMode, selectedBenchmark]);
+
+  // Load rolling analysis when settings change
+  useEffect(() => {
+    if (selectedView && showDiagnostics) {
+      loadFactorRollingAnalysis();
+      loadFactorContributionOverTime();
+    }
+  }, [selectedView, factorBenchPeriod, useExcessReturns, rollingWindow, contribFrequency, showDiagnostics]);
 
   const loadFactorBenchmarking = async () => {
     if (!selectedView) return;
@@ -113,7 +142,10 @@ export default function PortfolioStatisticsPage() {
         selectedView.view_type,
         selectedView.view_id,
         'US_CORE',
-        factorBenchPeriod
+        factorBenchPeriod,
+        useExcessReturns,
+        useRobustMode,
+        selectedBenchmark || undefined
       );
       setFactorBenchmarking(data);
     } catch (error) {
@@ -121,6 +153,44 @@ export default function PortfolioStatisticsPage() {
       setFactorBenchmarking(null);
     } finally {
       setFactorBenchLoading(false);
+    }
+  };
+
+  const loadFactorRollingAnalysis = async () => {
+    if (!selectedView) return;
+
+    try {
+      const data = await api.getFactorRollingAnalysis(
+        selectedView.view_type,
+        selectedView.view_id,
+        'US_CORE',
+        factorBenchPeriod,
+        rollingWindow,
+        useExcessReturns
+      );
+      setFactorRollingData(data);
+    } catch (error) {
+      console.error('Failed to load rolling analysis:', error);
+      setFactorRollingData(null);
+    }
+  };
+
+  const loadFactorContributionOverTime = async () => {
+    if (!selectedView) return;
+
+    try {
+      const data = await api.getFactorContributionOverTime(
+        selectedView.view_type,
+        selectedView.view_id,
+        'US_CORE',
+        factorBenchPeriod,
+        contribFrequency,
+        useExcessReturns
+      );
+      setFactorContribOverTime(data);
+    } catch (error) {
+      console.error('Failed to load contribution over time:', error);
+      setFactorContribOverTime(null);
     }
   };
 
@@ -936,55 +1006,175 @@ export default function PortfolioStatisticsPage() {
 
             {/* Factor Benchmarking + Attribution (uses free data sources: Stooq, yfinance) */}
             <div className="card">
-              <div className="flex justify-between items-center mb-4">
+              {/* Header with Controls */}
+              <div className="flex flex-wrap justify-between items-start gap-4 mb-4">
                 <h2 className="text-xl font-bold">Factor Benchmarking + Attribution</h2>
-                <div className="flex gap-1">
-                  {(['1M', '3M', '6M', 'YTD', '1Y', 'ALL'] as FactorBenchPeriod[]).map((period) => (
-                    <button
-                      key={period}
-                      onClick={() => setFactorBenchPeriod(period)}
-                      className={`px-3 py-1 text-sm rounded ${
-                        factorBenchPeriod === period
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      {period === 'ALL' ? 'All Time' : period}
-                    </button>
-                  ))}
+                <div className="flex flex-wrap gap-2 items-center">
+                  {/* Period Toggle */}
+                  <div className="flex gap-1">
+                    {(['1M', '3M', '6M', 'YTD', '1Y', 'ALL'] as FactorBenchPeriod[]).map((period) => (
+                      <button
+                        key={period}
+                        onClick={() => setFactorBenchPeriod(period)}
+                        className={`px-3 py-1 text-sm rounded ${
+                          factorBenchPeriod === period
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {period === 'ALL' ? 'All' : period}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+              </div>
+
+              {/* Settings Row */}
+              <div className="flex flex-wrap gap-4 mb-4 p-3 bg-gray-50 rounded-lg">
+                {/* Excess Returns Toggle */}
+                <label className="flex items-center gap-2 cursor-pointer" title="Subtract risk-free rate from returns before regression">
+                  <input
+                    type="checkbox"
+                    checked={useExcessReturns}
+                    onChange={(e) => setUseExcessReturns(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300"
+                  />
+                  <span className="text-sm text-gray-700">Excess Returns</span>
+                  <span className="text-xs text-gray-400" title="Uses 5% annual risk-free rate">(?)</span>
+                </label>
+
+                {/* Robust Mode Toggle */}
+                <label className="flex items-center gap-2 cursor-pointer" title="Winsorize returns at 2.5% to reduce outlier impact">
+                  <input
+                    type="checkbox"
+                    checked={useRobustMode}
+                    onChange={(e) => setUseRobustMode(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300"
+                  />
+                  <span className="text-sm text-gray-700">Robust Mode</span>
+                </label>
+
+                {/* Benchmark Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700">vs Benchmark:</span>
+                  <select
+                    value={selectedBenchmark || ''}
+                    onChange={(e) => setSelectedBenchmark(e.target.value || null)}
+                    className="text-sm border border-gray-300 rounded px-2 py-1"
+                  >
+                    <option value="">None</option>
+                    {availableBenchmarks.map((bm) => (
+                      <option key={bm.code} value={bm.code}>{bm.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Show Diagnostics Toggle */}
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showDiagnostics}
+                    onChange={(e) => setShowDiagnostics(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300"
+                  />
+                  <span className="text-sm text-gray-700">Show Diagnostics</span>
+                </label>
               </div>
 
               {factorBenchLoading ? (
                 <div className="py-8 text-center text-gray-500">Loading factor analysis...</div>
               ) : factorBenchmarking ? (
                 <>
+                  {/* Warnings Banner */}
+                  {factorBenchmarking.warnings && factorBenchmarking.warnings.length > 0 && (
+                    <div className="mb-4 space-y-2">
+                      {factorBenchmarking.warnings.map((warning: any, idx: number) => (
+                        <div
+                          key={idx}
+                          className={`p-3 rounded-lg text-sm ${
+                            warning.severity === 'error'
+                              ? 'bg-red-50 border border-red-200 text-red-800'
+                              : 'bg-yellow-50 border border-yellow-200 text-yellow-800'
+                          }`}
+                        >
+                          <span className="font-medium">
+                            {warning.severity === 'error' ? '!' : 'Note:'}
+                          </span>{' '}
+                          {warning.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Summary Stats */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
                     <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Total Return</div>
+                      <div className="text-sm text-gray-600">
+                        {useExcessReturns ? 'Excess Return' : 'Total Return'}
+                      </div>
                       <div className={`text-xl font-bold ${factorBenchmarking.total_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {factorBenchmarking.total_return_pct?.toFixed(2)}%
                       </div>
                     </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="bg-gray-50 rounded-lg p-3" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
                       <div className="text-sm text-gray-600">Alpha (Ann.)</div>
                       <div className={`text-xl font-bold ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
                       </div>
-                    </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">R-Squared</div>
-                      <div className="text-xl font-bold text-gray-800">
-                        {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%
+                      <div className="text-xs text-gray-400">
+                        IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
                       </div>
                     </div>
                     <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Residual Vol</div>
+                      <div className="text-sm text-gray-600">Adj. R-Squared</div>
                       <div className="text-xl font-bold text-gray-800">
-                        {factorBenchmarking.regression?.residual_std?.toFixed(2)}%
+                        {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        (R²: {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%)
                       </div>
                     </div>
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-sm text-gray-600">Residual Vol (Ann.)</div>
+                      <div className="text-xl font-bold text-gray-800">
+                        {factorBenchmarking.regression?.residual_std_ann?.toFixed(2)}%
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-sm text-gray-600">Factor Explained</div>
+                      <div className="text-xl font-bold text-indigo-600">
+                        {factorBenchmarking.factor_explained?.toFixed(2)}%
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        ({factorBenchmarking.factor_explained_pct?.toFixed(0)}% of return)
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Table Controls */}
+                  <div className="flex flex-wrap gap-4 mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Sort by:</span>
+                      <select
+                        value={factorSortBy}
+                        onChange={(e) => setFactorSortBy(e.target.value)}
+                        className="text-sm border border-gray-300 rounded px-2 py-1"
+                      >
+                        <option value="contribution">Contribution</option>
+                        <option value="beta">Beta</option>
+                        <option value="t_stat">t-Stat</option>
+                        <option value="name">Name</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={hideInsignificant}
+                        onChange={(e) => setHideInsignificant(e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm text-gray-600">Hide insignificant (p &gt; 0.10)</span>
+                    </label>
                   </div>
 
                   {/* Factor Exposures and Attribution Table */}
@@ -993,29 +1183,47 @@ export default function PortfolioStatisticsPage() {
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="text-left py-2 px-3">Factor</th>
-                          <th className="text-right py-2 px-3">Beta</th>
+                          <th className="text-right py-2 px-3" title="Factor exposure coefficient">Beta</th>
+                          <th className="text-right py-2 px-3" title="95% confidence interval">Beta CI</th>
                           <th className="text-right py-2 px-3">Factor Return</th>
-                          <th className="text-right py-2 px-3">Contribution</th>
-                          <th className="text-right py-2 px-3">% of Total</th>
+                          <th className="text-right py-2 px-3" title="Beta × Factor Return">Contribution</th>
+                          <th className="text-right py-2 px-3" title="% of total return explained by this factor">% of Total</th>
                           <th className="text-right py-2 px-3">t-Stat</th>
-                          <th className="text-right py-2 px-3">Significance</th>
+                          <th className="text-right py-2 px-3" title="Variance Inflation Factor - warn if > 5">VIF</th>
+                          <th className="text-right py-2 px-3" title="*p<0.10, **p<0.05, ***p<0.01">Sig.</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.entries(factorBenchmarking.factor_contributions || {}).map(([key, factor]: [string, any]) => (
+                        {Object.entries(factorBenchmarking.factor_contributions || {})
+                          .filter(([_, factor]: [string, any]) => !hideInsignificant || factor.p_value < 0.10)
+                          .sort((a: any, b: any) => {
+                            const [_, fa] = a;
+                            const [__, fb] = b;
+                            if (factorSortBy === 'contribution') return Math.abs(fb.contribution) - Math.abs(fa.contribution);
+                            if (factorSortBy === 'beta') return Math.abs(fb.beta) - Math.abs(fa.beta);
+                            if (factorSortBy === 't_stat') return Math.abs(fb.t_stat) - Math.abs(fa.t_stat);
+                            return fa.name.localeCompare(fb.name);
+                          })
+                          .map(([key, factor]: [string, any]) => (
                           <tr key={key} className="border-b border-gray-100 hover:bg-gray-50">
                             <td className="py-2 px-3 font-medium">{factor.name}</td>
                             <td className="text-right py-2 px-3">{factor.beta?.toFixed(3)}</td>
+                            <td className="text-right py-2 px-3 text-xs text-gray-500">
+                              [{factor.beta_ci?.lower?.toFixed(2)}, {factor.beta_ci?.upper?.toFixed(2)}]
+                            </td>
                             <td className={`text-right py-2 px-3 ${(factor.factor_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                               {factor.factor_return?.toFixed(2)}%
                             </td>
-                            <td className={`text-right py-2 px-3 ${(factor.contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            <td className={`text-right py-2 px-3 font-medium ${(factor.contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                               {factor.contribution?.toFixed(2)}%
                             </td>
                             <td className="text-right py-2 px-3">
                               {factor.contribution_pct?.toFixed(1)}%
                             </td>
                             <td className="text-right py-2 px-3">{factor.t_stat?.toFixed(2)}</td>
+                            <td className={`text-right py-2 px-3 ${factor.vif > 10 ? 'text-red-600 font-bold' : factor.vif > 5 ? 'text-yellow-600' : ''}`}>
+                              {factor.vif?.toFixed(1)}
+                            </td>
                             <td className="text-right py-2 px-3">
                               {factor.p_value < 0.01 ? (
                                 <span className="text-green-600 font-semibold">***</span>
@@ -1031,41 +1239,382 @@ export default function PortfolioStatisticsPage() {
                         ))}
                         {/* Alpha row */}
                         <tr className="border-b border-gray-100 bg-indigo-50">
-                          <td className="py-2 px-3 font-medium">Alpha</td>
+                          <td className="py-2 px-3 font-medium">Alpha (Skill)</td>
                           <td className="text-right py-2 px-3">-</td>
+                          <td className="text-right py-2 px-3 text-xs text-gray-500">
+                            [{factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, {factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]
+                          </td>
                           <td className="text-right py-2 px-3">-</td>
-                          <td className={`text-right py-2 px-3 ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <td className={`text-right py-2 px-3 font-medium ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                             {factorBenchmarking.alpha_contribution?.toFixed(2)}%
                           </td>
                           <td className="text-right py-2 px-3">
                             {factorBenchmarking.alpha_contribution_pct?.toFixed(1)}%
                           </td>
-                          <td className="text-right py-2 px-3" colSpan={2}>-</td>
+                          <td colSpan={3} className="text-right py-2 px-3 text-xs text-gray-500">
+                            IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
+                          </td>
                         </tr>
                         {/* Residual row */}
                         <tr className="border-b border-gray-100 bg-gray-50">
                           <td className="py-2 px-3 font-medium">Residual (Unexplained)</td>
                           <td className="text-right py-2 px-3">-</td>
                           <td className="text-right py-2 px-3">-</td>
-                          <td className={`text-right py-2 px-3 ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <td className="text-right py-2 px-3">-</td>
+                          <td className={`text-right py-2 px-3 font-medium ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                             {factorBenchmarking.residual_contribution?.toFixed(2)}%
                           </td>
                           <td className="text-right py-2 px-3">
                             {factorBenchmarking.residual_contribution_pct?.toFixed(1)}%
                           </td>
-                          <td className="text-right py-2 px-3" colSpan={2}>-</td>
+                          <td colSpan={3}></td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
 
+                  {/* Benchmark-Relative Attribution */}
+                  {factorBenchmarking.benchmark_attribution && (
+                    <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                      <h3 className="font-semibold text-blue-900 mb-3">
+                        Active Attribution vs {factorBenchmarking.benchmark_attribution.benchmark_name}
+                      </h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                        <div>
+                          <div className="text-sm text-blue-700">Portfolio Return</div>
+                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {factorBenchmarking.benchmark_attribution.portfolio_return?.toFixed(2)}%
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-blue-700">Benchmark Return</div>
+                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {factorBenchmarking.benchmark_attribution.benchmark_return?.toFixed(2)}%
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-blue-700">Active Return</div>
+                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {factorBenchmarking.benchmark_attribution.active_return >= 0 ? '+' : ''}
+                            {factorBenchmarking.benchmark_attribution.active_return?.toFixed(2)}%
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-sm text-blue-700">Active Alpha</div>
+                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? '+' : ''}
+                            {factorBenchmarking.benchmark_attribution.active_alpha?.toFixed(2)}%
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Active Factor Tilts */}
+                      <div className="mt-3">
+                        <div className="text-sm font-medium text-blue-800 mb-2">Active Factor Contributions:</div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(factorBenchmarking.benchmark_attribution.active_factor_contributions || {}).map(([factor, contrib]: [string, any]) => (
+                            <div key={factor} className={`px-2 py-1 rounded text-xs ${contrib >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                              {factor}: {contrib >= 0 ? '+' : ''}{contrib?.toFixed(2)}%
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Diagnostics Panel */}
+                  {showDiagnostics && factorBenchmarking.diagnostics && (
+                    <div className="mt-6 border-t pt-4">
+                      <h3 className="font-semibold text-gray-700 mb-4">Regression Diagnostics</h3>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* VIF Summary */}
+                        <div className="bg-gray-50 rounded-lg p-4">
+                          <h4 className="text-sm font-medium text-gray-700 mb-2">Multicollinearity (VIF)</h4>
+                          <div className="space-y-1">
+                            {Object.entries(factorBenchmarking.diagnostics.vif || {}).map(([factor, vif]: [string, any]) => (
+                              <div key={factor} className="flex justify-between text-sm">
+                                <span>{factor}</span>
+                                <span className={`font-medium ${vif > 10 ? 'text-red-600' : vif > 5 ? 'text-yellow-600' : 'text-green-600'}`}>
+                                  {vif?.toFixed(2)}
+                                  {vif > 10 ? ' (Severe!)' : vif > 5 ? ' (Warning)' : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2 text-xs text-gray-500">
+                            Max VIF: {factorBenchmarking.diagnostics.max_vif?.toFixed(2)} |
+                            {factorBenchmarking.diagnostics.multicollinearity_severe
+                              ? ' Severe multicollinearity detected!'
+                              : factorBenchmarking.diagnostics.multicollinearity_warning
+                                ? ' Moderate multicollinearity detected'
+                                : ' No multicollinearity issues'}
+                          </div>
+                        </div>
+
+                        {/* Residual Diagnostics */}
+                        <div className="bg-gray-50 rounded-lg p-4">
+                          <h4 className="text-sm font-medium text-gray-700 mb-2">Residual Tests</h4>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span>Durbin-Watson</span>
+                              <span className={`font-medium ${
+                                factorBenchmarking.diagnostics.residual_diagnostics?.durbin_watson < 1.5 ||
+                                factorBenchmarking.diagnostics.residual_diagnostics?.durbin_watson > 2.5
+                                  ? 'text-yellow-600' : 'text-green-600'
+                              }`}>
+                                {factorBenchmarking.diagnostics.residual_diagnostics?.durbin_watson?.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {factorBenchmarking.diagnostics.residual_diagnostics?.dw_interpretation}
+                            </div>
+                            <div className="flex justify-between mt-2">
+                              <span>Jarque-Bera (Normality)</span>
+                              <span className={`font-medium ${
+                                factorBenchmarking.diagnostics.residual_diagnostics?.normality_ok ? 'text-green-600' : 'text-yellow-600'
+                              }`}>
+                                {factorBenchmarking.diagnostics.residual_diagnostics?.normality_ok ? 'OK' : 'Non-normal'}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Breusch-Pagan (Homosked.)</span>
+                              <span className={`font-medium ${
+                                factorBenchmarking.diagnostics.residual_diagnostics?.homoskedasticity_ok ? 'text-green-600' : 'text-yellow-600'
+                              }`}>
+                                {factorBenchmarking.diagnostics.residual_diagnostics?.homoskedasticity_ok ? 'OK' : 'Heteroskedastic'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Factor Correlation Matrix */}
+                        {factorBenchmarking.diagnostics.factor_correlations && (
+                          <div className="bg-gray-50 rounded-lg p-4 md:col-span-2">
+                            <h4 className="text-sm font-medium text-gray-700 mb-2">Factor Correlation Matrix</h4>
+                            <div className="overflow-x-auto">
+                              <table className="text-xs">
+                                <thead>
+                                  <tr>
+                                    <th className="px-2 py-1"></th>
+                                    {factorBenchmarking.diagnostics.factor_correlations.factors?.map((f: string) => (
+                                      <th key={f} className="px-2 py-1 font-medium">{f}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {factorBenchmarking.diagnostics.factor_correlations.factors?.map((row: string) => (
+                                    <tr key={row}>
+                                      <td className="px-2 py-1 font-medium">{row}</td>
+                                      {factorBenchmarking.diagnostics.factor_correlations.factors?.map((col: string) => {
+                                        const corr = factorBenchmarking.diagnostics.factor_correlations.matrix?.[row]?.[col];
+                                        const absCorr = Math.abs(corr || 0);
+                                        const bgColor = row === col ? 'bg-gray-200' :
+                                          absCorr > 0.7 ? 'bg-red-100' :
+                                          absCorr > 0.5 ? 'bg-yellow-100' : '';
+                                        return (
+                                          <td key={col} className={`px-2 py-1 text-center ${bgColor}`}>
+                                            {corr?.toFixed(2)}
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="mt-2 text-xs text-gray-500">
+                              High correlations (&gt;0.7) highlighted in red, moderate (&gt;0.5) in yellow
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Outliers */}
+                        {factorBenchmarking.diagnostics.outliers && factorBenchmarking.diagnostics.outliers.length > 0 && (
+                          <div className="bg-gray-50 rounded-lg p-4 md:col-span-2">
+                            <h4 className="text-sm font-medium text-gray-700 mb-2">
+                              Extreme Return Days ({factorBenchmarking.diagnostics.outlier_count} detected)
+                            </h4>
+                            <div className="flex flex-wrap gap-2">
+                              {factorBenchmarking.diagnostics.outliers.slice(0, 5).map((outlier: any, idx: number) => (
+                                <div key={idx} className={`px-2 py-1 rounded text-xs ${outlier.return >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                  {outlier.date}: {outlier.return >= 0 ? '+' : ''}{outlier.return?.toFixed(2)}%
+                                </div>
+                              ))}
+                            </div>
+                            {useRobustMode && (
+                              <div className="mt-2 text-xs text-green-600">
+                                Robust mode enabled: returns winsorized at 2.5% to reduce outlier impact
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Rolling Analysis */}
+                      {factorRollingData && factorRollingData.rolling_data && (
+                        <div className="mt-6">
+                          <div className="flex items-center gap-4 mb-3">
+                            <h4 className="text-sm font-medium text-gray-700">Rolling Analysis</h4>
+                            <select
+                              value={rollingWindow}
+                              onChange={(e) => setRollingWindow(Number(e.target.value))}
+                              className="text-sm border border-gray-300 rounded px-2 py-1"
+                            >
+                              <option value={30}>30-Day</option>
+                              <option value={63}>63-Day (3M)</option>
+                              <option value={126}>126-Day (6M)</option>
+                              <option value={252}>252-Day (1Y)</option>
+                            </select>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {/* Rolling Alpha */}
+                            <div className="bg-white border rounded p-3">
+                              <div className="text-xs text-gray-500 mb-1">Rolling Alpha (Ann.)</div>
+                              <div className="h-24 flex items-end gap-px">
+                                {factorRollingData.rolling_data.slice(-30).map((d: any, i: number) => {
+                                  const val = d.alpha_ann || 0;
+                                  const maxAbs = Math.max(...factorRollingData.rolling_data.slice(-30).map((x: any) => Math.abs(x.alpha_ann || 0)));
+                                  const height = Math.abs(val) / (maxAbs || 1) * 100;
+                                  return (
+                                    <div
+                                      key={i}
+                                      className={`flex-1 ${val >= 0 ? 'bg-green-400' : 'bg-red-400'}`}
+                                      style={{ height: `${Math.max(height, 2)}%` }}
+                                      title={`${d.date}: ${val?.toFixed(2)}%`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                Latest: {factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.alpha_ann?.toFixed(2)}%
+                              </div>
+                            </div>
+
+                            {/* Rolling R² */}
+                            <div className="bg-white border rounded p-3">
+                              <div className="text-xs text-gray-500 mb-1">Rolling R²</div>
+                              <div className="h-24 flex items-end gap-px">
+                                {factorRollingData.rolling_data.slice(-30).map((d: any, i: number) => {
+                                  const val = (d.r_squared || 0) * 100;
+                                  return (
+                                    <div
+                                      key={i}
+                                      className="flex-1 bg-indigo-400"
+                                      style={{ height: `${val}%` }}
+                                      title={`${d.date}: ${val?.toFixed(1)}%`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                Latest: {(factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.r_squared * 100)?.toFixed(1)}%
+                              </div>
+                            </div>
+
+                            {/* Rolling Residual Vol */}
+                            <div className="bg-white border rounded p-3">
+                              <div className="text-xs text-gray-500 mb-1">Rolling Tracking Error (Ann.)</div>
+                              <div className="h-24 flex items-end gap-px">
+                                {factorRollingData.rolling_data.slice(-30).map((d: any, i: number) => {
+                                  const val = d.residual_vol_ann || 0;
+                                  const maxVal = Math.max(...factorRollingData.rolling_data.slice(-30).map((x: any) => x.residual_vol_ann || 0));
+                                  const height = val / (maxVal || 1) * 100;
+                                  return (
+                                    <div
+                                      key={i}
+                                      className="flex-1 bg-orange-400"
+                                      style={{ height: `${Math.max(height, 2)}%` }}
+                                      title={`${d.date}: ${val?.toFixed(2)}%`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                Latest: {factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.residual_vol_ann?.toFixed(2)}%
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Contribution Over Time */}
+                      {factorContribOverTime && factorContribOverTime.periods && (
+                        <div className="mt-6">
+                          <div className="flex items-center gap-4 mb-3">
+                            <h4 className="text-sm font-medium text-gray-700">Factor Contribution Over Time</h4>
+                            <select
+                              value={contribFrequency}
+                              onChange={(e) => setContribFrequency(e.target.value as 'M' | 'Q')}
+                              className="text-sm border border-gray-300 rounded px-2 py-1"
+                            >
+                              <option value="M">Monthly</option>
+                              <option value="Q">Quarterly</option>
+                            </select>
+                          </div>
+
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th className="text-left py-2 px-2">Period</th>
+                                  <th className="text-right py-2 px-2">Portfolio</th>
+                                  {factorContribOverTime.factors?.map((f: string) => (
+                                    <th key={f} className="text-right py-2 px-2">{f}</th>
+                                  ))}
+                                  <th className="text-right py-2 px-2">Alpha</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {factorContribOverTime.periods.slice(-12).map((period: any, idx: number) => (
+                                  <tr key={idx} className="border-b border-gray-100">
+                                    <td className="py-2 px-2 font-medium">{period.period}</td>
+                                    <td className={`text-right py-2 px-2 font-medium ${period.portfolio_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {period.portfolio_return?.toFixed(2)}%
+                                    </td>
+                                    {factorContribOverTime.factors?.map((f: string) => (
+                                      <td key={f} className={`text-right py-2 px-2 ${(period.factor_contributions?.[f] || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {period.factor_contributions?.[f]?.toFixed(2)}%
+                                      </td>
+                                    ))}
+                                    <td className={`text-right py-2 px-2 ${period.alpha_contribution >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {period.alpha_contribution?.toFixed(2)}%
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot className="bg-gray-100 font-medium">
+                                <tr>
+                                  <td className="py-2 px-2">Cumulative</td>
+                                  <td className={`text-right py-2 px-2 ${(factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_portfolio || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_portfolio?.toFixed(2)}%
+                                  </td>
+                                  <td colSpan={factorContribOverTime.factors?.length || 0} className="text-right py-2 px-2">
+                                    Factor: {factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_factor_explained?.toFixed(2)}%
+                                  </td>
+                                  <td className={`text-right py-2 px-2 ${(factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_alpha || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_alpha?.toFixed(2)}%
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Period info */}
-                  <div className="mt-4 pt-4 border-t text-sm text-gray-500">
-                    <span>Analysis period: {factorBenchmarking.period?.start_date} to {factorBenchmarking.period?.end_date}</span>
-                    <span className="mx-2">|</span>
-                    <span>{factorBenchmarking.period?.trading_days || factorBenchmarking.regression?.n_observations} trading days</span>
-                    <span className="mx-2">|</span>
-                    <span>Durbin-Watson: {factorBenchmarking.regression?.durbin_watson?.toFixed(2)}</span>
+                  <div className="mt-4 pt-4 border-t text-sm text-gray-500 flex flex-wrap gap-4">
+                    <span>Period: {factorBenchmarking.period?.start_date} to {factorBenchmarking.period?.end_date}</span>
+                    <span>{factorBenchmarking.regression?.n_observations} trading days</span>
+                    {useExcessReturns && (
+                      <span>Risk-free rate: {factorBenchmarking.risk_free_rate_annual?.toFixed(1)}% annual</span>
+                    )}
+                    {useRobustMode && (
+                      <span className="text-indigo-600">Robust mode active</span>
+                    )}
                   </div>
                 </>
               ) : (
