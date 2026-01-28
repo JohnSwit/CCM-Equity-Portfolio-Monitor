@@ -47,20 +47,14 @@ export default function PortfolioStatisticsPage() {
   const [volatilityData, setVolatilityData] = useState<any>(null);
   const [drawdownData, setDrawdownData] = useState<any>(null);
   const [varData, setVarData] = useState<any>(null);
-  const [factorData, setFactorData] = useState<any>(null);
 
   // Phase 2 data
   const [turnoverData, setTurnoverData] = useState<any>(null);
   const [sectorData, setSectorData] = useState<any>(null);
   const [sectorComparisonData, setSectorComparisonData] = useState<any>(null);
   const [brinsonData, setBrinsonData] = useState<any>(null);
-  const [factorAttributionData, setFactorAttributionData] = useState<any>(null);
 
-  // Enhanced Factor Analysis
-  const [factorRiskData, setFactorRiskData] = useState<any>(null);
-  const [historicalFactorData, setHistoricalFactorData] = useState<any>(null);
-
-  // Factor Benchmarking + Attribution (new)
+  // Factor Benchmarking + Attribution (uses free data sources)
   const [factorBenchmarking, setFactorBenchmarking] = useState<any>(null);
   const [factorBenchPeriod, setFactorBenchPeriod] = useState<FactorBenchPeriod>('1Y');
   const [factorBenchLoading, setFactorBenchLoading] = useState(false);
@@ -190,32 +184,23 @@ export default function PortfolioStatisticsPage() {
 
     setLoading(true);
     try {
-      const [vol, dd, varCvar, factors, turnover, sectors, sectorComp, factorAttr, factorRisk, histFactors] = await Promise.all([
+      const [vol, dd, varCvar, turnover, sectors, sectorComp] = await Promise.all([
         api.getVolatilityMetrics(selectedView.view_type, selectedView.view_id, benchmark, window).catch(() => null),
         api.getDrawdownAnalysis(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getVarCvar(selectedView.view_type, selectedView.view_id, '95,99', window).catch(() => null),
-        api.getFactorAnalysis(selectedView.view_type, selectedView.view_id).catch(() => null),
         // Phase 2
         api.getTurnoverAnalysis(selectedView.view_type, selectedView.view_id, undefined, undefined, 'monthly').catch(() => null),
         api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getSectorComparison(selectedView.view_type, selectedView.view_id, 'SP500').catch(() => null),
-        // Note: Brinson and Contribution are loaded separately with time period
-        api.getFactorAttribution(selectedView.view_type, selectedView.view_id).catch(() => null),
-        // Enhanced Factor Analysis
-        api.getFactorRiskDecomposition(selectedView.view_type, selectedView.view_id).catch(() => null),
-        api.getHistoricalFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
+        // Note: Brinson, Contribution, and Factor Benchmarking are loaded separately with time period
       ]);
 
       setVolatilityData(vol);
       setDrawdownData(dd);
       setVarData(varCvar);
-      setFactorData(factors);
       setTurnoverData(turnover);
       setSectorData(sectors);
       setSectorComparisonData(sectorComp);
-      setFactorAttributionData(factorAttr);
-      setFactorRiskData(factorRisk);
-      setHistoricalFactorData(histFactors);
     } catch (error) {
       console.error('Failed to load statistics:', error);
     } finally {
@@ -257,21 +242,6 @@ export default function PortfolioStatisticsPage() {
     } catch (error) {
       console.error('Failed to refresh S&P 500:', error);
       alert('Failed to refresh S&P 500. See console for details.');
-    } finally {
-      setRefreshingData(null);
-    }
-  };
-
-  const handleRefreshFactors = async () => {
-    setRefreshingData('factors');
-    try {
-      const result = await api.refreshFactorReturns();
-      alert(`Factor returns refreshed: ${result.success} records loaded`);
-      loadDataStatus();
-      if (selectedView) loadStatistics();
-    } catch (error) {
-      console.error('Failed to refresh factor returns:', error);
-      alert('Failed to refresh factor returns. See console for details.');
     } finally {
       setRefreshingData(null);
     }
@@ -404,47 +374,6 @@ export default function PortfolioStatisticsPage() {
                 </div>
               </div>
 
-              {/* Factor Returns Status */}
-              <div className="border rounded p-4">
-                <h3 className="font-semibold text-gray-700 mb-2">Factor Returns</h3>
-                <div className="space-y-2 text-sm">
-                  {dataStatus.factor_returns.start_date && dataStatus.factor_returns.end_date ? (
-                    <>
-                      <div>
-                        <span className="text-gray-600">Date Range:</span>{' '}
-                        <div className="text-xs mt-1">
-                          {dataStatus.factor_returns.start_date} to {dataStatus.factor_returns.end_date}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Trading Days:</span>{' '}
-                        <span className="font-medium">{dataStatus.factor_returns.trading_days}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Factors:</span>
-                        <div className="text-xs mt-1">
-                          {Object.keys(dataStatus.factor_returns.factors || {}).join(', ')}
-                        </div>
-                      </div>
-                      {dataStatus.factor_returns.last_updated && (
-                        <div>
-                          <span className="text-gray-600">Last Updated:</span>{' '}
-                          <span className="font-medium text-xs">{new Date(dataStatus.factor_returns.last_updated).toLocaleString()}</span>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="text-red-600">No factor data available</div>
-                  )}
-                  <button
-                    onClick={handleRefreshFactors}
-                    disabled={refreshingData === 'factors'}
-                    className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
-                  >
-                    {refreshingData === 'factors' ? 'Refreshing...' : 'Refresh Factor Returns'}
-                  </button>
-                </div>
-              </div>
             </div>
 
             {/* Data Readiness Indicators */}
@@ -454,10 +383,6 @@ export default function PortfolioStatisticsPage() {
                 <div className="flex items-center gap-2">
                   <span className={`w-3 h-3 rounded-full ${dataStatus.data_readiness.brinson_attribution_ready ? 'bg-green-500' : 'bg-red-500'}`}></span>
                   <span className="text-sm">Brinson Attribution</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`w-3 h-3 rounded-full ${dataStatus.data_readiness.factor_attribution_ready ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                  <span className="text-sm">Factor Attribution</span>
                 </div>
               </div>
             </div>
@@ -612,267 +537,6 @@ export default function PortfolioStatisticsPage() {
                 </div>
                 <div className="mt-4 text-xs text-gray-500">
                   Historical simulation method | Window: {window} days
-                </div>
-              </div>
-            )}
-
-            {/* Enhanced Factor Analysis */}
-            {factorData && !factorData.error && (
-              <div className="card">
-                <h2 className="text-xl font-bold mb-4">Factor Analysis (Fama-French + Momentum)</h2>
-
-                {/* Summary Metrics */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                  <div className="border-l-4 border-blue-500 pl-4">
-                    <div className="text-sm text-gray-600">Alpha (Annualized)</div>
-                    <div className="text-2xl font-bold">{formatPercent(factorData.alpha_annualized)}</div>
-                  </div>
-                  <div className="border-l-4 border-green-500 pl-4">
-                    <div className="text-sm text-gray-600">R-Squared</div>
-                    <div className="text-2xl font-bold">{formatPercent(factorData.r_squared)}</div>
-                  </div>
-                  <div className="border-l-4 border-purple-500 pl-4">
-                    <div className="text-sm text-gray-600">Factor Risk</div>
-                    <div className="text-2xl font-bold">{formatNumber(factorData.factor_variance_pct, 1)}%</div>
-                  </div>
-                  <div className="border-l-4 border-orange-500 pl-4">
-                    <div className="text-sm text-gray-600">Idiosyncratic Risk</div>
-                    <div className="text-2xl font-bold">{formatNumber(factorData.idiosyncratic_variance_pct, 1)}%</div>
-                  </div>
-                </div>
-
-                {/* Factor Exposure Bar Chart */}
-                {factorData.factor_exposures && Object.keys(factorData.factor_exposures).length > 0 && (
-                  <div className="mb-6">
-                    <h3 className="text-sm font-semibold mb-3">Factor Exposures (Beta)</h3>
-                    <div className="space-y-2">
-                      {Object.entries(factorData.factor_exposures).map(([factor, beta]: [string, any]) => {
-                        const maxBeta = Math.max(...Object.values(factorData.factor_exposures).map((b: any) => Math.abs(b)));
-                        const barWidth = Math.abs(beta) / (maxBeta || 1) * 100;
-                        const isPositive = beta >= 0;
-                        return (
-                          <div key={factor} className="flex items-center gap-3">
-                            <div className="w-28 text-sm text-gray-700">{factor}</div>
-                            <div className="flex-1 h-6 bg-gray-100 rounded relative">
-                              <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
-                              <div
-                                className={`absolute top-0 h-full rounded ${isPositive ? 'bg-green-500 left-1/2' : 'bg-red-500 right-1/2'}`}
-                                style={{ width: `${barWidth / 2}%` }}
-                              ></div>
-                            </div>
-                            <div className={`w-16 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                              {formatNumber(beta, 2)}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="flex justify-between text-xs text-gray-500 mt-1 px-28">
-                      <span>← Negative</span>
-                      <span>Positive →</span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-4 text-xs text-gray-500">
-                  As of {factorData.as_of_date && format(new Date(factorData.as_of_date), 'MMM d, yyyy')} |
-                  Window: {factorData.window_days} days
-                </div>
-              </div>
-            )}
-
-            {/* Factor Attribution Waterfall */}
-            {factorAttributionData && !factorAttributionData.error && factorAttributionData.factor_contributions && (
-              <div className="card">
-                <h2 className="text-xl font-bold mb-4">Factor Contribution to Returns</h2>
-                <div className="mb-4 p-3 bg-blue-50 rounded flex justify-between items-center">
-                  <div className="text-sm">
-                    <span className="font-semibold">Total Return:</span> {formatPercent(factorAttributionData.total_return)}
-                  </div>
-                  <div className="text-sm">
-                    <span className="font-semibold">Alpha:</span>{' '}
-                    <span className={factorAttributionData.alpha >= 0 ? 'text-green-600' : 'text-red-600'}>
-                      {formatPercent(factorAttributionData.alpha)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Waterfall Chart */}
-                <div className="space-y-2 mb-4">
-                  {Object.entries(factorAttributionData.factor_contributions)
-                    .sort(([,a]: any, [,b]: any) => Math.abs(b) - Math.abs(a))
-                    .map(([factor, contrib]: [string, any]) => {
-                      const maxContrib = Math.max(
-                        ...Object.values(factorAttributionData.factor_contributions).map((c: any) => Math.abs(c)),
-                        Math.abs(factorAttributionData.alpha || 0)
-                      );
-                      const barWidth = Math.abs(contrib) / (maxContrib || 0.01) * 100;
-                      const isPositive = contrib >= 0;
-                      return (
-                        <div key={factor} className="flex items-center gap-3">
-                          <div className="w-32 text-sm text-gray-700">{factor}</div>
-                          <div className="flex-1 h-5 bg-gray-100 rounded relative">
-                            <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
-                            <div
-                              className={`absolute top-0 h-full rounded ${isPositive ? 'bg-green-500 left-1/2' : 'bg-red-500 right-1/2'}`}
-                              style={{ width: `${Math.min(barWidth / 2, 50)}%` }}
-                            ></div>
-                          </div>
-                          <div className={`w-20 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                            {isPositive ? '+' : ''}{formatPercent(contrib)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  {/* Alpha row */}
-                  <div className="flex items-center gap-3 border-t pt-2 mt-2">
-                    <div className="w-32 text-sm text-gray-700 font-semibold">Alpha (Selection)</div>
-                    <div className="flex-1 h-5 bg-gray-100 rounded relative">
-                      <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
-                      <div
-                        className={`absolute top-0 h-full rounded ${(factorAttributionData.alpha || 0) >= 0 ? 'bg-blue-500 left-1/2' : 'bg-orange-500 right-1/2'}`}
-                        style={{ width: `${Math.min(Math.abs(factorAttributionData.alpha || 0) / (Math.max(...Object.values(factorAttributionData.factor_contributions).map((c: any) => Math.abs(c)), 0.01)) * 50, 50)}%` }}
-                      ></div>
-                    </div>
-                    <div className={`w-20 text-right text-sm font-semibold ${(factorAttributionData.alpha || 0) >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
-                      {(factorAttributionData.alpha || 0) >= 0 ? '+' : ''}{formatPercent(factorAttributionData.alpha)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="text-xs text-gray-500">
-                  R²: {formatPercent(factorAttributionData.r_squared)} | {factorAttributionData.observation_count} observations
-                </div>
-              </div>
-            )}
-
-            {/* Risk Decomposition */}
-            {factorRiskData && !factorRiskData.error && (
-              <div className="card">
-                <h2 className="text-xl font-bold mb-4">Factor Risk Decomposition</h2>
-
-                {/* Summary */}
-                <div className="grid grid-cols-3 gap-4 mb-6">
-                  <div className="text-center p-4 bg-gray-50 rounded">
-                    <div className="text-2xl font-bold">{formatPercent(factorRiskData.total_volatility / 100)}</div>
-                    <div className="text-sm text-gray-600">Total Volatility</div>
-                  </div>
-                  <div className="text-center p-4 bg-purple-50 rounded">
-                    <div className="text-2xl font-bold text-purple-700">{formatPercent(factorRiskData.factor_volatility / 100)}</div>
-                    <div className="text-sm text-gray-600">Factor Volatility</div>
-                  </div>
-                  <div className="text-center p-4 bg-orange-50 rounded">
-                    <div className="text-2xl font-bold text-orange-700">{formatPercent(factorRiskData.specific_volatility / 100)}</div>
-                    <div className="text-sm text-gray-600">Specific Volatility</div>
-                  </div>
-                </div>
-
-                {/* Risk Pie Breakdown */}
-                <div className="mb-4">
-                  <h3 className="text-sm font-semibold mb-2">Risk Attribution</h3>
-                  <div className="flex items-center gap-4">
-                    <div className="w-full h-6 rounded-full overflow-hidden bg-gray-200 flex">
-                      <div
-                        className="bg-purple-500 h-full"
-                        style={{ width: `${factorRiskData.factor_risk_pct}%` }}
-                      ></div>
-                      <div
-                        className="bg-orange-400 h-full"
-                        style={{ width: `${factorRiskData.specific_risk_pct}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                  <div className="flex justify-between mt-1 text-xs">
-                    <span className="text-purple-700">Factor Risk: {formatNumber(factorRiskData.factor_risk_pct, 1)}%</span>
-                    <span className="text-orange-700">Specific Risk: {formatNumber(factorRiskData.specific_risk_pct, 1)}%</span>
-                  </div>
-                </div>
-
-                {/* Individual Factor Risk Contributions */}
-                {factorRiskData.factor_contributions && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">Risk by Factor</h3>
-                    <div className="space-y-2">
-                      {Object.entries(factorRiskData.factor_contributions)
-                        .sort(([,a]: any, [,b]: any) => b.pct_of_total - a.pct_of_total)
-                        .map(([factor, data]: [string, any]) => (
-                          <div key={factor} className="flex items-center gap-3">
-                            <div className="w-28 text-sm text-gray-700">{factor}</div>
-                            <div className="flex-1 h-4 bg-gray-100 rounded overflow-hidden">
-                              <div
-                                className="bg-indigo-500 h-full"
-                                style={{ width: `${Math.min(data.pct_of_total, 100)}%` }}
-                              ></div>
-                            </div>
-                            <div className="w-16 text-right text-sm">{formatNumber(data.pct_of_total, 1)}%</div>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Historical Factor Exposures */}
-            {historicalFactorData && !historicalFactorData.error && historicalFactorData.historical_exposures && historicalFactorData.historical_exposures.length > 0 && (
-              <div className="card">
-                <h2 className="text-xl font-bold mb-4">Historical Factor Exposures</h2>
-                <p className="text-sm text-gray-600 mb-4">
-                  Rolling {historicalFactorData.rolling_window_days}-day factor betas over time
-                </p>
-
-                {/* Mini sparkline table */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left py-2 pr-4">Factor</th>
-                        <th className="text-center py-2 px-2">Trend (Last 12 points)</th>
-                        <th className="text-right py-2 px-2">Current</th>
-                        <th className="text-right py-2 px-2">Avg</th>
-                        <th className="text-right py-2 pl-2">Min/Max</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historicalFactorData.factors && historicalFactorData.factors.map((factor: string) => {
-                        const values = historicalFactorData.historical_exposures.map((h: any) => h[factor] || 0);
-                        const current = values[values.length - 1] || 0;
-                        const avg = values.reduce((a: number, b: number) => a + b, 0) / values.length;
-                        const min = Math.min(...values);
-                        const max = Math.max(...values);
-                        const lastN = values.slice(-12);
-                        const sparklineMax = Math.max(...lastN.map(Math.abs));
-
-                        return (
-                          <tr key={factor} className="border-b border-gray-100">
-                            <td className="py-2 pr-4 font-medium">{factor}</td>
-                            <td className="py-2 px-2">
-                              <div className="flex items-end justify-center h-8 gap-px">
-                                {lastN.map((v: number, i: number) => (
-                                  <div
-                                    key={i}
-                                    className={`w-2 ${v >= 0 ? 'bg-green-400' : 'bg-red-400'}`}
-                                    style={{ height: `${Math.abs(v) / (sparklineMax || 1) * 100}%`, minHeight: '2px' }}
-                                  ></div>
-                                ))}
-                              </div>
-                            </td>
-                            <td className={`py-2 px-2 text-right font-semibold ${current >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {formatNumber(current, 2)}
-                            </td>
-                            <td className="py-2 px-2 text-right text-gray-600">{formatNumber(avg, 2)}</td>
-                            <td className="py-2 pl-2 text-right text-gray-500 text-xs">
-                              {formatNumber(min, 2)} / {formatNumber(max, 2)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="mt-4 text-xs text-gray-500">
-                  {historicalFactorData.historical_exposures.length} data points
                 </div>
               </div>
             )}
@@ -1270,61 +934,7 @@ export default function PortfolioStatisticsPage() {
               </div>
             )}
 
-            {/* Factor Attribution */}
-            {factorAttributionData && (
-              <div className="card">
-                <h2 className="text-xl font-bold mb-4">Factor Attribution of Returns</h2>
-                {factorAttributionData.error ? (
-                  <div className="p-4 bg-red-50 rounded border border-red-200">
-                    <p className="text-sm font-semibold text-red-800 mb-2">{factorAttributionData.error}</p>
-                    {factorAttributionData.missing_data && (
-                      <p className="text-xs text-red-700 mt-1">
-                        Missing Data: <span className="font-mono">{factorAttributionData.missing_data}</span>
-                      </p>
-                    )}
-                    {factorAttributionData.action_required && (
-                      <div className="mt-3 p-2 bg-white rounded border border-red-300">
-                        <p className="text-xs text-gray-700 font-medium">Action Required:</p>
-                        <p className="text-xs text-gray-600 font-mono mt-1">{factorAttributionData.action_required}</p>
-                      </div>
-                    )}
-                  </div>
-                ) : factorAttributionData.note ? (
-                  <div className="p-4 bg-yellow-50 rounded border border-yellow-200">
-                    <p className="text-sm text-yellow-800">{factorAttributionData.note}</p>
-                    <p className="text-xs text-yellow-700 mt-2">
-                      Factor attribution requires factor return data over time. This feature will be enabled once factor
-                      return history is available.
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="mb-4 p-3 bg-blue-50 rounded">
-                      <div className="text-sm">
-                        <span className="font-semibold">Total Return:</span> {formatPercent(factorAttributionData.total_return)}
-                      </div>
-                    </div>
-                    <h3 className="text-sm font-semibold mb-2">Factor Contributions</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                      {Object.entries(factorAttributionData.factor_contributions || {}).map(([factor, contrib]: [string, any]) => (
-                        <div key={factor} className="p-3 bg-gray-50 rounded">
-                          <div className="text-xs text-gray-600 uppercase">{factor}</div>
-                          <div className="text-lg font-semibold">{formatPercent(contrib)}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 p-3 bg-green-50 rounded">
-                      <div className="text-sm">
-                        <span className="font-semibold">Alpha:</span> {formatPercent(factorAttributionData.alpha)}
-                      </div>
-                      <div className="text-xs text-gray-600 mt-1">Return from security selection beyond factor tilts</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Factor Benchmarking + Attribution (NEW - using free data sources) */}
+            {/* Factor Benchmarking + Attribution (uses free data sources: Stooq, yfinance) */}
             <div className="card">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold">Factor Benchmarking + Attribution</h2>
