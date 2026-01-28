@@ -532,6 +532,9 @@ def get_factor_benchmarking(
         # Rollback the session to clear any pending errors
         db.rollback()
 
+    # Check factor data status first
+    data_status = service.check_factor_data_status(model_code, start_date, end_date)
+
     # Compute attribution with new parameters
     result = service.compute_attribution(
         db_vt, view_id, model_code, start_date, end_date,
@@ -541,10 +544,34 @@ def get_factor_benchmarking(
     )
 
     if not result:
-        raise HTTPException(
-            status_code=404,
-            detail="Could not compute factor analysis. Ensure sufficient data is available."
-        )
+        # Provide detailed error message
+        if not data_status['available']:
+            detail = data_status.get('message', 'Factor data unavailable')
+            missing_symbols = [
+                s for s, info in data_status.get('symbols', {}).items()
+                if not info.get('has_data', False)
+            ]
+            if missing_symbols:
+                detail += f" Missing data for: {', '.join(missing_symbols[:5])}"
+                if len(missing_symbols) > 5:
+                    detail += f" and {len(missing_symbols) - 5} more."
+            raise HTTPException(
+                status_code=503,  # Service Unavailable
+                detail=detail
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not compute factor analysis. Portfolio may have insufficient return data (need at least 30 trading days)."
+            )
+
+    # Add data status info to result for transparency
+    result['data_status'] = {
+        'symbols_with_data': data_status['symbols_with_data'],
+        'symbols_total': data_status['symbols_total'],
+        'min_coverage_pct': data_status['min_coverage_pct'],
+        'status_message': data_status['message']
+    }
 
     return result
 
@@ -641,6 +668,7 @@ def get_factor_rolling_analysis(
     except Exception as e:
         import logging
         logging.warning(f"Failed to refresh factor data: {e}")
+        db.rollback()
 
     result = service.compute_rolling_analysis(
         db_vt, view_id, model_code, start_date, end_date,
@@ -715,6 +743,7 @@ def get_factor_contribution_over_time(
     except Exception as e:
         import logging
         logging.warning(f"Failed to refresh factor data: {e}")
+        db.rollback()
 
     result = service.compute_contribution_over_time(
         db_vt, view_id, model_code, start_date, end_date,
@@ -743,3 +772,41 @@ def get_available_benchmarks(
 
     service = FactorBenchmarkingService(db)
     return service.get_available_benchmarks()
+
+
+@router.get("/factor-data-status")
+def get_factor_data_status(
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check factor data availability and status.
+    Useful for diagnosing why factor analysis may not be working.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    end_date = date.today()
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == '2Y':
+        start_date = end_date - timedelta(days=365 * 2)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    return service.check_factor_data_status(model_code, start_date, end_date)

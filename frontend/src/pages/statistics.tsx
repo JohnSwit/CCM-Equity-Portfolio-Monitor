@@ -58,6 +58,7 @@ export default function PortfolioStatisticsPage() {
   const [factorBenchmarking, setFactorBenchmarking] = useState<any>(null);
   const [factorBenchPeriod, setFactorBenchPeriod] = useState<FactorBenchPeriod>('1Y');
   const [factorBenchLoading, setFactorBenchLoading] = useState(false);
+  const [factorBenchError, setFactorBenchError] = useState<string | null>(null);
   const [useExcessReturns, setUseExcessReturns] = useState(false);
   const [useRobustMode, setUseRobustMode] = useState(false);
   const [selectedBenchmark, setSelectedBenchmark] = useState<string | null>(null);
@@ -137,6 +138,7 @@ export default function PortfolioStatisticsPage() {
     if (!selectedView) return;
 
     setFactorBenchLoading(true);
+    setFactorBenchError(null);
     try {
       const data = await api.getFactorBenchmarking(
         selectedView.view_type,
@@ -148,9 +150,19 @@ export default function PortfolioStatisticsPage() {
         selectedBenchmark || undefined
       );
       setFactorBenchmarking(data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load factor benchmarking:', error);
       setFactorBenchmarking(null);
+      // Extract detailed error message from API response
+      const errorDetail = error.response?.data?.detail || error.message || 'Unknown error';
+      const statusCode = error.response?.status;
+      if (statusCode === 503) {
+        setFactorBenchError(`Factor data unavailable: ${errorDetail}`);
+      } else if (statusCode === 404) {
+        setFactorBenchError(`${errorDetail}`);
+      } else {
+        setFactorBenchError(`Failed to load factor analysis: ${errorDetail}`);
+      }
     } finally {
       setFactorBenchLoading(false);
     }
@@ -1618,8 +1630,28 @@ export default function PortfolioStatisticsPage() {
                   </div>
                 </>
               ) : (
-                <div className="py-8 text-center text-gray-500">
-                  Factor analysis not available. Ensure sufficient return data exists.
+                <div className="py-8 text-center">
+                  {factorBenchError ? (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-xl mx-auto">
+                      <div className="flex items-start gap-3">
+                        <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div className="text-left">
+                          <p className="text-red-800 text-sm font-medium">Factor Analysis Unavailable</p>
+                          <p className="text-red-600 text-sm mt-1">{factorBenchError}</p>
+                          <p className="text-gray-500 text-xs mt-2">
+                            This may be due to external data sources being temporarily unavailable.
+                            Try refreshing data from the Data Management tab or try again later.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-gray-500">
+                      Factor analysis not available. Ensure sufficient return data exists.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

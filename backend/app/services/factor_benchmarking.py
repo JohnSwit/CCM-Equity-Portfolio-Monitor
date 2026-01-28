@@ -1122,3 +1122,94 @@ class FactorBenchmarkingService:
             {'code': code, 'name': config['name'], 'symbol': config['symbol']}
             for code, config in BENCHMARK_CONFIGS.items()
         ]
+
+    def check_factor_data_status(
+        self,
+        model_code: str,
+        start_date: date,
+        end_date: date
+    ) -> Dict:
+        """
+        Check the availability and status of factor data.
+        Returns detailed info about what data is available vs missing.
+        """
+        model = self.get_factor_model(model_code)
+        if not model:
+            return {
+                'available': False,
+                'error': f'Factor model {model_code} not found',
+                'symbols': {}
+            }
+
+        all_symbols = set()
+        for config in model.factors_config.values():
+            all_symbols.add(config['symbol'])
+            if config.get('spread_vs'):
+                all_symbols.add(config['spread_vs'])
+
+        symbol_status = {}
+        total_expected_days = len(pd.bdate_range(start=start_date, end=end_date))
+
+        for symbol in all_symbols:
+            # Count available data points
+            count = self.db.query(func.count(FactorProxySeries.id)).filter(
+                and_(
+                    FactorProxySeries.symbol == symbol,
+                    FactorProxySeries.date >= start_date,
+                    FactorProxySeries.date <= end_date
+                )
+            ).scalar() or 0
+
+            # Get date range
+            date_range = self.db.query(
+                func.min(FactorProxySeries.date),
+                func.max(FactorProxySeries.date)
+            ).filter(
+                and_(
+                    FactorProxySeries.symbol == symbol,
+                    FactorProxySeries.date >= start_date,
+                    FactorProxySeries.date <= end_date
+                )
+            ).first()
+
+            symbol_status[symbol] = {
+                'available_days': count,
+                'expected_days': total_expected_days,
+                'coverage_pct': round(count / total_expected_days * 100, 1) if total_expected_days > 0 else 0,
+                'earliest_date': str(date_range[0]) if date_range[0] else None,
+                'latest_date': str(date_range[1]) if date_range[1] else None,
+                'has_data': count > 0
+            }
+
+        # Overall status
+        symbols_with_data = sum(1 for s in symbol_status.values() if s['has_data'])
+        min_coverage = min((s['coverage_pct'] for s in symbol_status.values()), default=0)
+
+        return {
+            'available': symbols_with_data == len(all_symbols) and min_coverage > 50,
+            'model_code': model_code,
+            'symbols_total': len(all_symbols),
+            'symbols_with_data': symbols_with_data,
+            'min_coverage_pct': min_coverage,
+            'period': {
+                'start_date': str(start_date),
+                'end_date': str(end_date),
+                'expected_business_days': total_expected_days
+            },
+            'symbols': symbol_status,
+            'message': self._generate_status_message(symbols_with_data, len(all_symbols), min_coverage)
+        }
+
+    def _generate_status_message(self, symbols_with_data: int, total_symbols: int, min_coverage: float) -> str:
+        """Generate a human-readable status message."""
+        if symbols_with_data == 0:
+            return "No factor data available. External data sources may be unavailable. Try refreshing later."
+        elif symbols_with_data < total_symbols:
+            missing = total_symbols - symbols_with_data
+            return f"Missing data for {missing} factor proxies. Results may be incomplete."
+        elif min_coverage < 50:
+            return f"Limited data coverage ({min_coverage:.0f}%). Results may be unreliable."
+        elif min_coverage < 80:
+            return f"Partial data coverage ({min_coverage:.0f}%). Some dates may be missing."
+        else:
+            return "Factor data available."
