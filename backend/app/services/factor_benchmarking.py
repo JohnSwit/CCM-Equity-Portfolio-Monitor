@@ -345,14 +345,21 @@ class FactorBenchmarkingService:
             try:
                 vif_data[name] = float(variance_inflation_factor(X, i))
             except Exception:
-                vif_data[name] = np.nan
+                vif_data[name] = None  # Use None instead of np.nan for JSON compatibility
         return vif_data
 
     def _compute_factor_correlations(self, factor_df: pd.DataFrame) -> Dict:
         """Compute correlation matrix for factors."""
         corr_matrix = factor_df.corr()
+        # Convert numpy types to Python native types for JSON serialization
+        matrix_dict = {}
+        for col in corr_matrix.columns:
+            matrix_dict[col] = {
+                row: float(corr_matrix.loc[row, col]) if not pd.isna(corr_matrix.loc[row, col]) else None
+                for row in corr_matrix.index
+            }
         return {
-            'matrix': corr_matrix.to_dict(),
+            'matrix': matrix_dict,
             'factors': list(corr_matrix.columns)
         }
 
@@ -405,7 +412,7 @@ class FactorBenchmarkingService:
             jb_stat, jb_pvalue = jarque_bera(residuals)
             diagnostics['jarque_bera_stat'] = float(jb_stat)
             diagnostics['jarque_bera_pvalue'] = float(jb_pvalue)
-            diagnostics['normality_ok'] = jb_pvalue > 0.05
+            diagnostics['normality_ok'] = bool(jb_pvalue > 0.05)
         except Exception:
             diagnostics['normality_ok'] = None
 
@@ -415,7 +422,7 @@ class FactorBenchmarkingService:
             bp_stat, bp_pvalue, _, _ = het_breuschpagan(residuals, X_with_const)
             diagnostics['breusch_pagan_stat'] = float(bp_stat)
             diagnostics['breusch_pagan_pvalue'] = float(bp_pvalue)
-            diagnostics['homoskedasticity_ok'] = bp_pvalue > 0.05
+            diagnostics['homoskedasticity_ok'] = bool(bp_pvalue > 0.05)
         except Exception:
             diagnostics['homoskedasticity_ok'] = None
 
@@ -566,9 +573,10 @@ class FactorBenchmarkingService:
 
             # VIF for multicollinearity
             vif = self._compute_vif(X, factor_names)
-            max_vif = max(vif.values()) if vif else 0
-            multicollinearity_warning = max_vif > 5
-            multicollinearity_severe = max_vif > 10
+            vif_values = [v for v in vif.values() if v is not None]
+            max_vif = float(max(vif_values)) if vif_values else 0.0
+            multicollinearity_warning = bool(max_vif > 5)
+            multicollinearity_severe = bool(max_vif > 10)
 
             # Factor correlations
             factor_correlations = self._compute_factor_correlations(merged[factor_names])
