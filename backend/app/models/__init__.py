@@ -8,6 +8,7 @@ from app.models.models import (
     FactorProxySeries, FactorModelDefinition, FactorAttributionResult,
     TransactionType, AssetClass, ViewType, GroupType, FactorDataSource
 )
+from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
 
 __all__ = [
     "User", "Account", "Security", "Transaction", "TransactionTypeMap",
@@ -17,5 +18,6 @@ __all__ = [
     "FactorSet", "FactorReturn", "FactorRegression", "RiskEOD",
     "ImportLog", "ManualPrice",
     "FactorProxySeries", "FactorModelDefinition", "FactorAttributionResult",
+    "SectorClassification", "BenchmarkConstituent", "FactorReturns",
     "TransactionType", "AssetClass", "ViewType", "GroupType", "FactorDataSource"
 ]
