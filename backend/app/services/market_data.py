@@ -27,11 +27,17 @@ class MarketDataProvider:
     def tiingo_client(self) -> Optional[TiingoClient]:
         """Lazy initialization of Tiingo client"""
         if self._tiingo_client is None and settings.TIINGO_API_KEY:
-            config = {
-                'api_key': settings.TIINGO_API_KEY,
-                'session': True  # Reuse HTTP session for performance
-            }
-            self._tiingo_client = TiingoClient(config)
+            try:
+                logger.info(f"Initializing TiingoClient with API key: {settings.TIINGO_API_KEY[:8]}...")
+                config = {
+                    'api_key': settings.TIINGO_API_KEY,
+                    'session': True  # Reuse HTTP session for performance
+                }
+                self._tiingo_client = TiingoClient(config)
+                logger.info("TiingoClient initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize TiingoClient: {e}", exc_info=True)
+                return None
         return self._tiingo_client
 
     def normalize_symbol(self, symbol: str) -> str:

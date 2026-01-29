@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -5,6 +6,19 @@ from app.core.database import init_db, get_db
 from app.core.security import get_password_hash
 from app.models import User
 from app.api import auth, imports, views, analytics, baskets, jobs, transactions, portfolio_stats, data_management
+
+# Configure logging for all modules
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+# Ensure our app modules log at INFO level
+logging.getLogger('app').setLevel(logging.INFO)
+logging.getLogger('app.services').setLevel(logging.INFO)
+logging.getLogger('app.services.market_data').setLevel(logging.INFO)
+logging.getLogger('app.workers').setLevel(logging.INFO)
+
+logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
@@ -37,6 +51,10 @@ app.include_router(data_management.router)
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and create default admin user"""
+    logger.info("=== Portfolio Monitor API Starting ===")
+    logger.info(f"Tiingo API Key configured: {bool(settings.TIINGO_API_KEY)}")
+    logger.info(f"yfinance fallback enabled: {settings.ENABLE_YFINANCE_FALLBACK}")
+
     # Create tables
     init_db()
 
