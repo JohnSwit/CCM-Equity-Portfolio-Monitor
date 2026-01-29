@@ -23,12 +23,14 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: portfolio_backend
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql://portfolio_user:portfolio_pass@postgres:5432/portfolio_db
-      SECRET_KEY: dev-secret-key-change-in-production
-      TIINGO_API_KEY: ${TIINGO_API_KEY:-}
-      ENABLE_YFINANCE_FALLBACK: "true"
-      CORS_ORIGINS: http://localhost:3000
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
+      TIINGO_API_KEY: ${TIINGO_API_KEY}
+      ENABLE_YFINANCE_FALLBACK: ${ENABLE_YFINANCE_FALLBACK:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     ports:
       - "8000:8000"
     volumes:
@@ -43,11 +45,13 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: portfolio_worker
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql://portfolio_user:portfolio_pass@postgres:5432/portfolio_db
-      SECRET_KEY: dev-secret-key-change-in-production
-      TIINGO_API_KEY: ${TIINGO_API_KEY:-}
-      ENABLE_YFINANCE_FALLBACK: "true"
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
+      TIINGO_API_KEY: ${TIINGO_API_KEY}
+      ENABLE_YFINANCE_FALLBACK: ${ENABLE_YFINANCE_FALLBACK:-true}
     volumes:
       - ../backend:/app
     depends_on:
