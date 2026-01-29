@@ -331,8 +331,14 @@ class MarketDataProvider:
         """Update prices for all securities with transactions"""
         from app.models import Transaction
 
+        # Log Tiingo client status
+        logger.info(f"Tiingo API key configured: {bool(settings.TIINGO_API_KEY)}")
+        logger.info(f"Tiingo client initialized: {self.tiingo_client is not None}")
+
         # Get all securities with transactions
         securities = self.db.query(Security).join(Transaction).distinct().all()
+
+        logger.info(f"Found {len(securities)} securities with transactions to update")
 
         results = {
             'total_securities': len(securities),
@@ -342,7 +348,9 @@ class MarketDataProvider:
 
         for security in securities:
             try:
+                logger.info(f"Processing security: {security.symbol} (id={security.id})")
                 count = await self.update_security_prices(security.id, security.symbol)
+                logger.info(f"Updated {count} prices for {security.symbol}")
                 if count > 0:
                     results['updated'] += 1
             except Exception as e:
