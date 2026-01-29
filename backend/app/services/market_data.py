@@ -102,11 +102,13 @@ class MarketDataProvider:
                 return None
 
             # Use adjusted close for accuracy (accounts for splits/dividends)
-            df = df.rename(columns={'date': 'date', 'adjClose': 'close'})
+            # Select only the columns we need to avoid duplicate 'close' columns
+            df = df[['date', 'adjClose']].copy()
+            df = df.rename(columns={'adjClose': 'close'})
 
             # Parse date - Tiingo returns ISO format strings
             df['date'] = pd.to_datetime(df['date']).dt.date
-            df = df[['date', 'close']].dropna()
+            df = df.dropna()
 
             logger.info(f"Tiingo returned {len(df)} price records for {symbol}")
             return df
@@ -219,9 +221,11 @@ class MarketDataProvider:
             if df.empty or 'adjClose' not in df.columns:
                 return None
 
-            df = df.rename(columns={'date': 'date', 'adjClose': 'close'})
+            # Select only the columns we need to avoid duplicate 'close' columns
+            df = df[['date', 'adjClose']].copy()
+            df = df.rename(columns={'adjClose': 'close'})
             df['date'] = pd.to_datetime(df['date']).dt.date
-            df = df[['date', 'close']].dropna()
+            df = df.dropna()
 
             logger.info(f"Tiingo returned {len(df)} benchmark records for {tiingo_symbol}")
             return df
