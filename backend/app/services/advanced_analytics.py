@@ -319,6 +319,12 @@ class SectorAnalyzer:
         # Log for debugging - total should be ~1.0
         logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, total weight={total_weight:.4f}")
 
+        # Normalize benchmark weights if they're stored as percentages (total near 100)
+        # Portfolio weights are decimals (0.05 for 5%), benchmark might be percentages (5.0 for 5%)
+        if total_weight > 10:  # Weights stored as percentages
+            for sector in benchmark_weights:
+                benchmark_weights[sector] = benchmark_weights[sector] / total_weight
+
         # Build portfolio sector dict
         portfolio_weights = {s['sector']: s['weight'] for s in portfolio_data['sectors']}
 
@@ -428,9 +434,17 @@ class BrinsonAttributionAnalyzer:
 
         # Build benchmark sector weights dict
         bench_weights = {}
+        total_bench_weight = 0.0
         for holding in benchmark_holdings:
             sector = holding.sector or 'Unclassified'
-            bench_weights[sector] = bench_weights.get(sector, 0) + float(holding.weight)
+            weight = float(holding.weight)
+            bench_weights[sector] = bench_weights.get(sector, 0) + weight
+            total_bench_weight += weight
+
+        # Normalize benchmark weights if stored as percentages (total near 100)
+        if total_bench_weight > 10:
+            for sector in bench_weights:
+                bench_weights[sector] = bench_weights[sector] / total_bench_weight
 
         # Get all sectors
         all_sectors = set(port_weights.keys()) | set(bench_weights.keys())
