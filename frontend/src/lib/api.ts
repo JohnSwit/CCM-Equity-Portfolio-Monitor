@@ -311,6 +311,20 @@ class APIClient {
     return response.data;
   }
 
+  async getHistoricalFactorExposures(viewType: string, viewId: number, lookbackDays: number = 504, rollingWindow: number = 63) {
+    const response = await this.client.get('/portfolio-stats/factor-historical', {
+      params: { view_type: viewType, view_id: viewId, lookback_days: lookbackDays, rolling_window: rollingWindow },
+    });
+    return response.data;
+  }
+
+  async getFactorRiskDecomposition(viewType: string, viewId: number, startDate?: string, endDate?: string) {
+    const response = await this.client.get('/portfolio-stats/factor-risk-decomposition', {
+      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
   // Data Management
   async refreshClassifications(limit?: number) {
     const response = await this.client.post('/data-management/refresh-classifications', null, {

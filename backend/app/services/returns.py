@@ -186,7 +186,7 @@ class ReturnsEngine:
 
         # Compute returns using start-of-day holdings
         returns_data = []
-        index_value = 100.0
+        index_value = 1.0  # Start at 1.0 to match benchmark convention
 
         for i in range(1, len(portfolio_values)):
             date_t = portfolio_values.index[i]
@@ -236,9 +236,10 @@ class ReturnsEngine:
             ).first()
 
             if existing:
-                if existing.twr_return != row['twr_return']:
-                    existing.twr_return = row['twr_return']
-                    existing.twr_index = row['twr_index']
+                # Always update both twr_return and twr_index to ensure consistency
+                # This is important when the index convention changes (e.g., 100 -> 1.0)
+                existing.twr_return = row['twr_return']
+                existing.twr_index = row['twr_index']
             else:
                 ret = ReturnsEOD(
                     view_type=ViewType.ACCOUNT,

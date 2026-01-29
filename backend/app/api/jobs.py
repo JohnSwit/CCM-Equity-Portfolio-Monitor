@@ -22,7 +22,7 @@ def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
 
 @router.post("/run", response_model=JobRunResponse)
 async def run_job(
-    job_name: str = Query(..., regex="^(market_data_update|recompute_analytics|force_refresh_prices)$"),
+    job_name: str = Query(..., regex="^(market_data_update|recompute_analytics|force_refresh_prices|reset_returns)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_admin_user)
 ):
@@ -31,6 +31,7 @@ async def run_job(
     - market_data_update: Fetch latest market data
     - recompute_analytics: Recompute positions, returns, and analytics
     - force_refresh_prices: Delete all prices and re-fetch from Tiingo (use if data is stale/corrupt)
+    - reset_returns: Clear ALL returns and recompute from scratch (use after TWR index fix)
     """
     started_at = datetime.utcnow()
 
@@ -49,6 +50,14 @@ async def run_job(
             from app.workers.jobs import force_refresh_prices_job
             await force_refresh_prices_job(db)
             message = "Force refresh of all prices completed successfully"
+
+        elif job_name == "reset_returns":
+            from app.workers.jobs import clear_all_returns, recompute_analytics_job
+            # First clear all returns data
+            clear_all_returns(db)
+            # Then recompute everything
+            await recompute_analytics_job(db)
+            message = "Returns reset and recomputed successfully"
 
         else:
             raise HTTPException(status_code=400, detail="Invalid job name")

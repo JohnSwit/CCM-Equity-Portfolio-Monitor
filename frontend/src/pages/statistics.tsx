@@ -1,8 +1,35 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
-import { format } from 'date-fns';
+import { format, subDays, subMonths, startOfYear } from 'date-fns';
 import Select from 'react-select';
+
+// Brinson time period options
+type BrinsonPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'custom';
+
+const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date; end: Date } => {
+  const end = new Date();
+  let start: Date;
+
+  switch (period) {
+    case '1M':
+      start = subMonths(end, 1);
+      break;
+    case '3M':
+      start = subMonths(end, 3);
+      break;
+    case 'YTD':
+      start = startOfYear(end);
+      break;
+    case '1Y':
+      start = subMonths(end, 12);
+      break;
+    default:
+      start = subMonths(end, 3);
+  }
+
+  return { start, end };
+};
 
 export default function PortfolioStatisticsPage() {
   const [views, setViews] = useState<any[]>([]);
@@ -25,6 +52,15 @@ export default function PortfolioStatisticsPage() {
   const [brinsonData, setBrinsonData] = useState<any>(null);
   const [factorAttributionData, setFactorAttributionData] = useState<any>(null);
 
+  // Enhanced Factor Analysis
+  const [factorRiskData, setFactorRiskData] = useState<any>(null);
+  const [historicalFactorData, setHistoricalFactorData] = useState<any>(null);
+
+  // Brinson time period
+  const [brinsonPeriod, setBrinsonPeriod] = useState<BrinsonPeriod>('3M');
+  const [brinsonLoading, setBrinsonLoading] = useState(false);
+  const [expandedSectors, setExpandedSectors] = useState<Set<string>>(new Set());
+
   // Data status
   const [dataStatus, setDataStatus] = useState<any>(null);
   const [refreshingData, setRefreshingData] = useState<string | null>(null);
@@ -39,6 +75,34 @@ export default function PortfolioStatisticsPage() {
       loadStatistics();
     }
   }, [selectedView, benchmark, window]);
+
+  // Reload Brinson when period changes
+  useEffect(() => {
+    if (selectedView) {
+      loadBrinsonData();
+    }
+  }, [selectedView, brinsonPeriod]);
+
+  const loadBrinsonData = async () => {
+    if (!selectedView) return;
+
+    setBrinsonLoading(true);
+    try {
+      const { start, end } = getBrinsonDateRange(brinsonPeriod);
+      const brinson = await api.getBrinsonAttribution(
+        selectedView.view_type,
+        selectedView.view_id,
+        'SP500',
+        format(start, 'yyyy-MM-dd'),
+        format(end, 'yyyy-MM-dd')
+      );
+      setBrinsonData(brinson);
+    } catch (error) {
+      console.error('Failed to load Brinson data:', error);
+    } finally {
+      setBrinsonLoading(false);
+    }
+  };
 
   const loadViews = async () => {
     try {
@@ -58,7 +122,7 @@ export default function PortfolioStatisticsPage() {
 
     setLoading(true);
     try {
-      const [contrib, vol, dd, varCvar, factors, turnover, sectors, sectorComp, brinson, factorAttr] = await Promise.all([
+      const [contrib, vol, dd, varCvar, factors, turnover, sectors, sectorComp, factorAttr, factorRisk, histFactors] = await Promise.all([
         api.getContributionToReturns(selectedView.view_type, selectedView.view_id, undefined, undefined, 20).catch(() => null),
         api.getVolatilityMetrics(selectedView.view_type, selectedView.view_id, benchmark, window).catch(() => null),
         api.getDrawdownAnalysis(selectedView.view_type, selectedView.view_id).catch(() => null),
@@ -68,8 +132,11 @@ export default function PortfolioStatisticsPage() {
         api.getTurnoverAnalysis(selectedView.view_type, selectedView.view_id, undefined, undefined, 'monthly').catch(() => null),
         api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getSectorComparison(selectedView.view_type, selectedView.view_id, 'SP500').catch(() => null),
-        api.getBrinsonAttribution(selectedView.view_type, selectedView.view_id, 'SP500').catch(() => null),
+        // Note: Brinson is loaded separately with time period via loadBrinsonData
         api.getFactorAttribution(selectedView.view_type, selectedView.view_id).catch(() => null),
+        // Enhanced Factor Analysis
+        api.getFactorRiskDecomposition(selectedView.view_type, selectedView.view_id).catch(() => null),
+        api.getHistoricalFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
       ]);
 
       setContributionData(contrib);
@@ -80,8 +147,9 @@ export default function PortfolioStatisticsPage() {
       setTurnoverData(turnover);
       setSectorData(sectors);
       setSectorComparisonData(sectorComp);
-      setBrinsonData(brinson);
       setFactorAttributionData(factorAttr);
+      setFactorRiskData(factorRisk);
+      setHistoricalFactorData(histFactors);
     } catch (error) {
       console.error('Failed to load statistics:', error);
     } finally {
@@ -482,10 +550,12 @@ export default function PortfolioStatisticsPage() {
               </div>
             )}
 
-            {/* Factor Analysis */}
+            {/* Enhanced Factor Analysis */}
             {factorData && !factorData.error && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Factor Analysis (STYLE7)</h2>
+                <h2 className="text-xl font-bold mb-4">Factor Analysis (Fama-French + Momentum)</h2>
+
+                {/* Summary Metrics */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                   <div className="border-l-4 border-blue-500 pl-4">
                     <div className="text-sm text-gray-600">Alpha (Annualized)</div>
@@ -505,16 +575,35 @@ export default function PortfolioStatisticsPage() {
                   </div>
                 </div>
 
+                {/* Factor Exposure Bar Chart */}
                 {factorData.factor_exposures && Object.keys(factorData.factor_exposures).length > 0 && (
-                  <div>
-                    <h3 className="text-sm font-semibold mb-2">Factor Exposures (Beta)</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      {Object.entries(factorData.factor_exposures).map(([factor, beta]: [string, any]) => (
-                        <div key={factor} className="p-3 bg-gray-50 rounded">
-                          <div className="text-xs text-gray-600 uppercase">{factor}</div>
-                          <div className="text-lg font-semibold">{formatNumber(beta, 3)}</div>
-                        </div>
-                      ))}
+                  <div className="mb-6">
+                    <h3 className="text-sm font-semibold mb-3">Factor Exposures (Beta)</h3>
+                    <div className="space-y-2">
+                      {Object.entries(factorData.factor_exposures).map(([factor, beta]: [string, any]) => {
+                        const maxBeta = Math.max(...Object.values(factorData.factor_exposures).map((b: any) => Math.abs(b)));
+                        const barWidth = Math.abs(beta) / (maxBeta || 1) * 100;
+                        const isPositive = beta >= 0;
+                        return (
+                          <div key={factor} className="flex items-center gap-3">
+                            <div className="w-28 text-sm text-gray-700">{factor}</div>
+                            <div className="flex-1 h-6 bg-gray-100 rounded relative">
+                              <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
+                              <div
+                                className={`absolute top-0 h-full rounded ${isPositive ? 'bg-green-500 left-1/2' : 'bg-red-500 right-1/2'}`}
+                                style={{ width: `${barWidth / 2}%` }}
+                              ></div>
+                            </div>
+                            <div className={`w-16 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatNumber(beta, 2)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between text-xs text-gray-500 mt-1 px-28">
+                      <span>← Negative</span>
+                      <span>Positive →</span>
                     </div>
                   </div>
                 )}
@@ -522,6 +611,202 @@ export default function PortfolioStatisticsPage() {
                 <div className="mt-4 text-xs text-gray-500">
                   As of {factorData.as_of_date && format(new Date(factorData.as_of_date), 'MMM d, yyyy')} |
                   Window: {factorData.window_days} days
+                </div>
+              </div>
+            )}
+
+            {/* Factor Attribution Waterfall */}
+            {factorAttributionData && !factorAttributionData.error && factorAttributionData.factor_contributions && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Factor Contribution to Returns</h2>
+                <div className="mb-4 p-3 bg-blue-50 rounded flex justify-between items-center">
+                  <div className="text-sm">
+                    <span className="font-semibold">Total Return:</span> {formatPercent(factorAttributionData.total_return)}
+                  </div>
+                  <div className="text-sm">
+                    <span className="font-semibold">Alpha:</span>{' '}
+                    <span className={factorAttributionData.alpha >= 0 ? 'text-green-600' : 'text-red-600'}>
+                      {formatPercent(factorAttributionData.alpha)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Waterfall Chart */}
+                <div className="space-y-2 mb-4">
+                  {Object.entries(factorAttributionData.factor_contributions)
+                    .sort(([,a]: any, [,b]: any) => Math.abs(b) - Math.abs(a))
+                    .map(([factor, contrib]: [string, any]) => {
+                      const maxContrib = Math.max(
+                        ...Object.values(factorAttributionData.factor_contributions).map((c: any) => Math.abs(c)),
+                        Math.abs(factorAttributionData.alpha || 0)
+                      );
+                      const barWidth = Math.abs(contrib) / (maxContrib || 0.01) * 100;
+                      const isPositive = contrib >= 0;
+                      return (
+                        <div key={factor} className="flex items-center gap-3">
+                          <div className="w-32 text-sm text-gray-700">{factor}</div>
+                          <div className="flex-1 h-5 bg-gray-100 rounded relative">
+                            <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
+                            <div
+                              className={`absolute top-0 h-full rounded ${isPositive ? 'bg-green-500 left-1/2' : 'bg-red-500 right-1/2'}`}
+                              style={{ width: `${Math.min(barWidth / 2, 50)}%` }}
+                            ></div>
+                          </div>
+                          <div className={`w-20 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                            {isPositive ? '+' : ''}{formatPercent(contrib)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  {/* Alpha row */}
+                  <div className="flex items-center gap-3 border-t pt-2 mt-2">
+                    <div className="w-32 text-sm text-gray-700 font-semibold">Alpha (Selection)</div>
+                    <div className="flex-1 h-5 bg-gray-100 rounded relative">
+                      <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
+                      <div
+                        className={`absolute top-0 h-full rounded ${(factorAttributionData.alpha || 0) >= 0 ? 'bg-blue-500 left-1/2' : 'bg-orange-500 right-1/2'}`}
+                        style={{ width: `${Math.min(Math.abs(factorAttributionData.alpha || 0) / (Math.max(...Object.values(factorAttributionData.factor_contributions).map((c: any) => Math.abs(c)), 0.01)) * 50, 50)}%` }}
+                      ></div>
+                    </div>
+                    <div className={`w-20 text-right text-sm font-semibold ${(factorAttributionData.alpha || 0) >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
+                      {(factorAttributionData.alpha || 0) >= 0 ? '+' : ''}{formatPercent(factorAttributionData.alpha)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-xs text-gray-500">
+                  R²: {formatPercent(factorAttributionData.r_squared)} | {factorAttributionData.observation_count} observations
+                </div>
+              </div>
+            )}
+
+            {/* Risk Decomposition */}
+            {factorRiskData && !factorRiskData.error && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Factor Risk Decomposition</h2>
+
+                {/* Summary */}
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  <div className="text-center p-4 bg-gray-50 rounded">
+                    <div className="text-2xl font-bold">{formatPercent(factorRiskData.total_volatility / 100)}</div>
+                    <div className="text-sm text-gray-600">Total Volatility</div>
+                  </div>
+                  <div className="text-center p-4 bg-purple-50 rounded">
+                    <div className="text-2xl font-bold text-purple-700">{formatPercent(factorRiskData.factor_volatility / 100)}</div>
+                    <div className="text-sm text-gray-600">Factor Volatility</div>
+                  </div>
+                  <div className="text-center p-4 bg-orange-50 rounded">
+                    <div className="text-2xl font-bold text-orange-700">{formatPercent(factorRiskData.specific_volatility / 100)}</div>
+                    <div className="text-sm text-gray-600">Specific Volatility</div>
+                  </div>
+                </div>
+
+                {/* Risk Pie Breakdown */}
+                <div className="mb-4">
+                  <h3 className="text-sm font-semibold mb-2">Risk Attribution</h3>
+                  <div className="flex items-center gap-4">
+                    <div className="w-full h-6 rounded-full overflow-hidden bg-gray-200 flex">
+                      <div
+                        className="bg-purple-500 h-full"
+                        style={{ width: `${factorRiskData.factor_risk_pct}%` }}
+                      ></div>
+                      <div
+                        className="bg-orange-400 h-full"
+                        style={{ width: `${factorRiskData.specific_risk_pct}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                  <div className="flex justify-between mt-1 text-xs">
+                    <span className="text-purple-700">Factor Risk: {formatNumber(factorRiskData.factor_risk_pct, 1)}%</span>
+                    <span className="text-orange-700">Specific Risk: {formatNumber(factorRiskData.specific_risk_pct, 1)}%</span>
+                  </div>
+                </div>
+
+                {/* Individual Factor Risk Contributions */}
+                {factorRiskData.factor_contributions && (
+                  <div>
+                    <h3 className="text-sm font-semibold mb-2">Risk by Factor</h3>
+                    <div className="space-y-2">
+                      {Object.entries(factorRiskData.factor_contributions)
+                        .sort(([,a]: any, [,b]: any) => b.pct_of_total - a.pct_of_total)
+                        .map(([factor, data]: [string, any]) => (
+                          <div key={factor} className="flex items-center gap-3">
+                            <div className="w-28 text-sm text-gray-700">{factor}</div>
+                            <div className="flex-1 h-4 bg-gray-100 rounded overflow-hidden">
+                              <div
+                                className="bg-indigo-500 h-full"
+                                style={{ width: `${Math.min(data.pct_of_total, 100)}%` }}
+                              ></div>
+                            </div>
+                            <div className="w-16 text-right text-sm">{formatNumber(data.pct_of_total, 1)}%</div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Historical Factor Exposures */}
+            {historicalFactorData && !historicalFactorData.error && historicalFactorData.historical_exposures && historicalFactorData.historical_exposures.length > 0 && (
+              <div className="card">
+                <h2 className="text-xl font-bold mb-4">Historical Factor Exposures</h2>
+                <p className="text-sm text-gray-600 mb-4">
+                  Rolling {historicalFactorData.rolling_window_days}-day factor betas over time
+                </p>
+
+                {/* Mini sparkline table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-2 pr-4">Factor</th>
+                        <th className="text-center py-2 px-2">Trend (Last 12 points)</th>
+                        <th className="text-right py-2 px-2">Current</th>
+                        <th className="text-right py-2 px-2">Avg</th>
+                        <th className="text-right py-2 pl-2">Min/Max</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicalFactorData.factors && historicalFactorData.factors.map((factor: string) => {
+                        const values = historicalFactorData.historical_exposures.map((h: any) => h[factor] || 0);
+                        const current = values[values.length - 1] || 0;
+                        const avg = values.reduce((a: number, b: number) => a + b, 0) / values.length;
+                        const min = Math.min(...values);
+                        const max = Math.max(...values);
+                        const lastN = values.slice(-12);
+                        const sparklineMax = Math.max(...lastN.map(Math.abs));
+
+                        return (
+                          <tr key={factor} className="border-b border-gray-100">
+                            <td className="py-2 pr-4 font-medium">{factor}</td>
+                            <td className="py-2 px-2">
+                              <div className="flex items-end justify-center h-8 gap-px">
+                                {lastN.map((v: number, i: number) => (
+                                  <div
+                                    key={i}
+                                    className={`w-2 ${v >= 0 ? 'bg-green-400' : 'bg-red-400'}`}
+                                    style={{ height: `${Math.abs(v) / (sparklineMax || 1) * 100}%`, minHeight: '2px' }}
+                                  ></div>
+                                ))}
+                              </div>
+                            </td>
+                            <td className={`py-2 px-2 text-right font-semibold ${current >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatNumber(current, 2)}
+                            </td>
+                            <td className="py-2 px-2 text-right text-gray-600">{formatNumber(avg, 2)}</td>
+                            <td className="py-2 pl-2 text-right text-gray-500 text-xs">
+                              {formatNumber(min, 2)} / {formatNumber(max, 2)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-4 text-xs text-gray-500">
+                  {historicalFactorData.historical_exposures.length} data points
                 </div>
               </div>
             )}
@@ -659,11 +944,32 @@ export default function PortfolioStatisticsPage() {
               </div>
             )}
 
-            {/* Brinson Attribution */}
+            {/* Enhanced Brinson Attribution */}
             {brinsonData && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Brinson Attribution Analysis</h2>
-                {brinsonData.error ? (
+                {/* Header with Time Toggle */}
+                <div className="flex justify-between items-start mb-4">
+                  <h2 className="text-xl font-bold">Brinson Attribution Analysis</h2>
+                  <div className="flex gap-1">
+                    {(['1M', '3M', 'YTD', '1Y'] as BrinsonPeriod[]).map((period) => (
+                      <button
+                        key={period}
+                        onClick={() => setBrinsonPeriod(period)}
+                        className={`px-3 py-1 text-sm rounded ${
+                          brinsonPeriod === period
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {brinsonLoading ? (
+                  <div className="text-center py-4 text-gray-500">Loading attribution data...</div>
+                ) : brinsonData.error ? (
                   <div className="p-4 bg-red-50 rounded border border-red-200">
                     <p className="text-sm font-semibold text-red-800 mb-2">{brinsonData.error}</p>
                     {brinsonData.missing_data && (
@@ -687,23 +993,183 @@ export default function PortfolioStatisticsPage() {
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="border-l-4 border-blue-500 pl-4">
-                      <div className="text-sm text-gray-600">Allocation Effect</div>
-                      <div className="text-2xl font-bold">{formatPercent(brinsonData.allocation_effect)}</div>
-                      <div className="text-xs text-gray-500 mt-1">Sector weighting decisions</div>
+                  <>
+                    {/* Active Return Headline */}
+                    <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+                      <div className="text-center">
+                        <div className="text-sm text-gray-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
+                        <div className={`text-4xl font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.total_active_return)}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-2">
+                          {brinsonData.start_date && format(new Date(brinsonData.start_date), 'MMM d, yyyy')} - {brinsonData.end_date && format(new Date(brinsonData.end_date), 'MMM d, yyyy')}
+                          {' | '}Grouping: GICS Sector
+                        </div>
+                      </div>
                     </div>
-                    <div className="border-l-4 border-green-500 pl-4">
-                      <div className="text-sm text-gray-600">Selection Effect</div>
-                      <div className="text-2xl font-bold">{formatPercent(brinsonData.selection_effect)}</div>
-                      <div className="text-xs text-gray-500 mt-1">Security selection</div>
+
+                    {/* Three Drivers */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                      <div className="border-l-4 border-blue-500 pl-4">
+                        <div className="text-sm text-gray-600">Allocation Effect</div>
+                        <div className={`text-2xl font-bold ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.allocation_effect)}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">Sector weighting decisions</div>
+                      </div>
+                      <div className="border-l-4 border-green-500 pl-4">
+                        <div className="text-sm text-gray-600">Selection Effect</div>
+                        <div className={`text-2xl font-bold ${(brinsonData.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.selection_effect)}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">Security selection within sectors</div>
+                      </div>
+                      <div className="border-l-4 border-purple-500 pl-4">
+                        <div className="text-sm text-gray-600">Interaction Effect</div>
+                        <div className={`text-2xl font-bold ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.interaction_effect)}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">Combined allocation & selection</div>
+                      </div>
                     </div>
-                    <div className="border-l-4 border-purple-500 pl-4">
-                      <div className="text-sm text-gray-600">Interaction Effect</div>
-                      <div className="text-2xl font-bold">{formatPercent(brinsonData.interaction_effect)}</div>
-                      <div className="text-xs text-gray-500 mt-1">Combined effect</div>
+
+                    {/* Waterfall Chart */}
+                    <div className="mb-6">
+                      <h3 className="text-sm font-semibold mb-3">Attribution Waterfall</h3>
+                      <div className="space-y-2">
+                        {[
+                          { label: 'Allocation', value: brinsonData.allocation_effect, color: 'blue' },
+                          { label: 'Selection', value: brinsonData.selection_effect, color: 'green' },
+                          { label: 'Interaction', value: brinsonData.interaction_effect, color: 'purple' },
+                        ].map(({ label, value, color }) => {
+                          const maxVal = Math.max(
+                            Math.abs(brinsonData.allocation_effect || 0),
+                            Math.abs(brinsonData.selection_effect || 0),
+                            Math.abs(brinsonData.interaction_effect || 0),
+                            0.001
+                          );
+                          const barWidth = Math.abs(value || 0) / maxVal * 100;
+                          const isPositive = (value || 0) >= 0;
+                          const colorClass = isPositive ? `bg-${color}-500` : `bg-${color}-300`;
+
+                          return (
+                            <div key={label} className="flex items-center gap-3">
+                              <div className="w-24 text-sm text-gray-700">{label}</div>
+                              <div className="flex-1 h-6 bg-gray-100 rounded relative">
+                                <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
+                                <div
+                                  className={`absolute top-0 h-full rounded ${
+                                    isPositive
+                                      ? `bg-${color}-500 left-1/2`
+                                      : `bg-${color}-400 right-1/2`
+                                  }`}
+                                  style={{
+                                    width: `${barWidth / 2}%`,
+                                    backgroundColor: isPositive
+                                      ? (color === 'blue' ? '#3b82f6' : color === 'green' ? '#22c55e' : '#a855f7')
+                                      : (color === 'blue' ? '#93c5fd' : color === 'green' ? '#86efac' : '#d8b4fe'),
+                                  }}
+                                ></div>
+                              </div>
+                              <div className={`w-20 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                                {isPositive ? '+' : ''}{formatPercent(value)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {/* Total row */}
+                        <div className="flex items-center gap-3 pt-2 border-t mt-2">
+                          <div className="w-24 text-sm font-semibold text-gray-900">Total</div>
+                          <div className="flex-1"></div>
+                          <div className={`w-20 text-right text-sm font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.total_active_return)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+
+                    {/* Sector Drill-Down Table */}
+                    {brinsonData.by_sector && brinsonData.by_sector.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-semibold mb-3">Attribution by Sector</h3>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="text-left py-2 px-2">Sector</th>
+                                <th className="text-right py-2 px-2">Port Wt</th>
+                                <th className="text-right py-2 px-2">Bench Wt</th>
+                                <th className="text-right py-2 px-2">Active Wt</th>
+                                <th className="text-right py-2 px-2">Port Ret</th>
+                                <th className="text-right py-2 px-2">Bench Ret</th>
+                                <th className="text-right py-2 px-2">Alloc</th>
+                                <th className="text-right py-2 px-2">Select</th>
+                                <th className="text-right py-2 px-2">Inter</th>
+                                <th className="text-right py-2 px-2 font-semibold">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {brinsonData.by_sector.map((sector: any, idx: number) => {
+                                const activeWeight = (sector.portfolio_weight || 0) - (sector.benchmark_weight || 0);
+                                return (
+                                  <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
+                                    <td className="py-2 px-2 font-medium">{sector.sector}</td>
+                                    <td className="py-2 px-2 text-right">{formatPercent(sector.portfolio_weight)}</td>
+                                    <td className="py-2 px-2 text-right text-gray-600">{formatPercent(sector.benchmark_weight)}</td>
+                                    <td className={`py-2 px-2 text-right ${activeWeight >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      {activeWeight >= 0 ? '+' : ''}{formatPercent(activeWeight)}
+                                    </td>
+                                    <td className="py-2 px-2 text-right">{formatPercent(sector.portfolio_return)}</td>
+                                    <td className="py-2 px-2 text-right text-gray-600">{formatPercent(sector.benchmark_return)}</td>
+                                    <td className={`py-2 px-2 text-right ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
+                                      {(sector.allocation_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.allocation_effect)}
+                                    </td>
+                                    <td className={`py-2 px-2 text-right ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>
+                                      {(sector.selection_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.selection_effect)}
+                                    </td>
+                                    <td className={`py-2 px-2 text-right ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>
+                                      {(sector.interaction_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.interaction_effect)}
+                                    </td>
+                                    <td className={`py-2 px-2 text-right font-semibold ${(sector.total_effect || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                      {(sector.total_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.total_effect)}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot className="bg-gray-100 font-semibold">
+                              <tr>
+                                <td className="py-2 px-2">Total</td>
+                                <td className="py-2 px-2 text-right">100%</td>
+                                <td className="py-2 px-2 text-right">100%</td>
+                                <td className="py-2 px-2 text-right">-</td>
+                                <td className="py-2 px-2 text-right">-</td>
+                                <td className="py-2 px-2 text-right">-</td>
+                                <td className={`py-2 px-2 text-right ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
+                                  {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.allocation_effect)}
+                                </td>
+                                <td className={`py-2 px-2 text-right ${(brinsonData.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>
+                                  {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.selection_effect)}
+                                </td>
+                                <td className={`py-2 px-2 text-right ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>
+                                  {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.interaction_effect)}
+                                </td>
+                                <td className={`py-2 px-2 text-right ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                  {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.total_active_return)}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Context Footer */}
+                    <div className="mt-4 text-xs text-gray-500 flex justify-between">
+                      <span>Benchmark: {brinsonData.benchmark || 'SP500'}</span>
+                      <span>Benchmark data as of: {brinsonData.benchmark_data_date || 'N/A'}</span>
+                    </div>
+                  </>
                 )}
               </div>
             )}

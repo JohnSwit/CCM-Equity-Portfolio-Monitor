@@ -10,6 +10,7 @@ from app.services.benchmarks import BenchmarksEngine
 from app.services.baskets import BasketsEngine
 from app.services.factors import FactorsEngine
 from app.services.risk import RiskEngine
+from app.services.data_sourcing import BenchmarkService, ClassificationService
 from app.models import (
     Account, Group, ViewType, Transaction,
     PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
@@ -135,6 +136,29 @@ def clear_analytics_for_account(db: Session, account_id: int):
     logger.info(f"Analytics cleared for account {account_id}")
 
 
+def clear_all_returns(db: Session):
+    """
+    Clear ALL returns data for fresh recomputation.
+    Use this when the TWR index convention has changed.
+    """
+    logger.info("Clearing ALL returns data for fresh recomputation...")
+
+    # Clear all account returns
+    deleted_account_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_account_returns} account returns")
+
+    # Clear all group/firm returns
+    deleted_group_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_group_returns} group/firm returns")
+
+    db.commit()
+    logger.info("All returns data cleared")
+
+
 def clear_group_and_firm_analytics(db: Session):
     """
     Clear all group and firm level analytics.
@@ -251,6 +275,24 @@ async def recompute_analytics_job(db: Session = None):
         logger.info("Clearing old analytics data...")
         clear_analytics_for_accounts_without_transactions(db)
         clear_group_and_firm_analytics(db)
+
+        # 0.5. Refresh benchmark constituents (SP500 holdings for sector comparison)
+        logger.info("Refreshing benchmark constituents (SP500)...")
+        try:
+            benchmark_service = BenchmarkService(db)
+            benchmark_refresh_result = await benchmark_service.refresh_benchmark("SP500")
+            logger.info(f"Benchmark constituents refresh: {benchmark_refresh_result}")
+        except Exception as e:
+            logger.error(f"Failed to refresh benchmark constituents: {e}")
+
+        # 0.6. Refresh security classifications
+        logger.info("Refreshing security classifications...")
+        try:
+            classification_service = ClassificationService(db)
+            classification_result = await classification_service.refresh_all_classifications()
+            logger.info(f"Classifications refresh: {classification_result}")
+        except Exception as e:
+            logger.error(f"Failed to refresh classifications: {e}")
 
         # 1. Build positions
         logger.info("Building positions...")
