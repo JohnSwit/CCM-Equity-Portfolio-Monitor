@@ -74,8 +74,10 @@ class MarketDataProvider:
         end_date: date
     ) -> Optional[pd.DataFrame]:
         """Fetch prices from Tiingo EOD API"""
+        logger.info(f"fetch_tiingo_prices called for {symbol}")
+
         if not self.tiingo_client:
-            logger.warning("Tiingo client not configured (missing API key)")
+            logger.warning(f"Tiingo client not configured for {symbol} - API key present: {bool(settings.TIINGO_API_KEY)}")
             return None
 
         try:
@@ -96,6 +98,7 @@ class MarketDataProvider:
 
             # Convert to DataFrame
             df = pd.DataFrame(price_data)
+            logger.info(f"Tiingo raw response for {symbol}: {len(df)} rows, columns: {list(df.columns)}")
 
             if df.empty or 'adjClose' not in df.columns:
                 logger.warning(f"Tiingo returned empty or invalid data for {symbol}")
@@ -114,7 +117,7 @@ class MarketDataProvider:
             return df
 
         except Exception as e:
-            logger.warning(f"Tiingo fetch failed for {symbol}: {e}")
+            logger.error(f"Tiingo fetch failed for {symbol}: {e}", exc_info=True)
             return None
 
     def fetch_yfinance_prices(
@@ -331,15 +334,19 @@ class MarketDataProvider:
         """Update prices for a security (fill missing dates)"""
         from app.models import Transaction
 
+        logger.info(f"update_security_prices called for {symbol} (id={security_id})")
+
         first_txn = self.db.query(Transaction).filter(
             Transaction.security_id == security_id
         ).order_by(Transaction.trade_date).first()
 
         if not first_txn:
+            logger.warning(f"No transactions found for {symbol} (id={security_id})")
             return 0
 
         start_date = first_txn.trade_date
         end_date = date.today()
+        logger.info(f"Date range for {symbol}: {start_date} to {end_date}")
 
         # Fetch and store
         count = await self.fetch_and_store_prices(
