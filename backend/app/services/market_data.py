@@ -1,6 +1,7 @@
 import httpx
 import yfinance as yf
 import pandas as pd
+from tiingo import TiingoClient
 from typing import Optional, Dict, List
 from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
@@ -15,72 +16,103 @@ logger = logging.getLogger(__name__)
 
 
 class MarketDataProvider:
-    """Fetches market data from Stooq (primary) and yfinance (fallback)"""
+    """Fetches market data from Tiingo (primary) and yfinance (fallback)"""
 
     def __init__(self, db: Session):
         self.db = db
-        self.stooq_base_url = "https://stooq.com/q/d/l/"
-        self.rate_limit_delay = 0.5  # seconds between requests
+        self.rate_limit_delay = 0.2  # seconds between requests (Tiingo is more generous)
+        self._tiingo_client = None
 
-    def get_provider_symbol(self, symbol: str, is_benchmark: bool = False) -> str:
-        """Map internal symbol to provider symbol"""
-        # Handle benchmark special cases
-        if is_benchmark:
-            benchmark_map = {
-                'INDU': '^DJI',  # Dow Jones
-                'SPX': '^SPX',   # S&P 500
+    @property
+    def tiingo_client(self) -> Optional[TiingoClient]:
+        """Lazy initialization of Tiingo client"""
+        if self._tiingo_client is None and settings.TIINGO_API_KEY:
+            config = {
+                'api_key': settings.TIINGO_API_KEY,
+                'session': True  # Reuse HTTP session for performance
             }
-            if symbol in benchmark_map:
-                return benchmark_map[symbol]
+            self._tiingo_client = TiingoClient(config)
+        return self._tiingo_client
 
-        # Convert BRK.B format to BRK-B
-        if '.' in symbol:
+    def normalize_symbol(self, symbol: str) -> str:
+        """Normalize symbol for Tiingo API"""
+        # Tiingo uses standard ticker symbols
+        # Handle special cases like BRK.B -> BRK-B
+        if '.' in symbol and not symbol.startswith('^'):
             symbol = symbol.replace('.', '-')
+        return symbol.upper()
 
-        # For Stooq, US equities need .US suffix
-        if not symbol.startswith('^'):
-            return f"{symbol}.US"
+    def get_benchmark_tiingo_symbol(self, benchmark_code: str, provider_symbol: str) -> str:
+        """Map benchmark codes to Tiingo-compatible symbols"""
+        # Tiingo uses ETF symbols for major indexes
+        benchmark_map = {
+            'INDU': 'DIA',   # Dow Jones -> SPDR Dow Jones ETF
+            '^DJI': 'DIA',
+            'SPX': 'SPY',    # S&P 500 -> SPDR S&P 500 ETF
+            '^SPX': 'SPY',
+            'SPY.US': 'SPY',
+            'QQQ.US': 'QQQ',
+            'DIA.US': 'DIA',
+        }
 
-        return symbol
+        # First check if provider_symbol has a mapping
+        if provider_symbol in benchmark_map:
+            return benchmark_map[provider_symbol]
 
-    async def fetch_stooq_prices(
+        # Check benchmark code
+        if benchmark_code in benchmark_map:
+            return benchmark_map[benchmark_code]
+
+        # Strip .US suffix if present
+        clean_symbol = provider_symbol.replace('.US', '')
+        return clean_symbol
+
+    def fetch_tiingo_prices(
         self,
         symbol: str,
         start_date: date,
         end_date: date
     ) -> Optional[pd.DataFrame]:
-        """Fetch prices from Stooq"""
+        """Fetch prices from Tiingo EOD API"""
+        if not self.tiingo_client:
+            logger.warning("Tiingo client not configured (missing API key)")
+            return None
+
         try:
-            provider_symbol = self.get_provider_symbol(symbol)
+            normalized_symbol = self.normalize_symbol(symbol)
+            logger.info(f"Fetching Tiingo prices for {normalized_symbol} from {start_date} to {end_date}")
 
-            # Stooq URL format: ?s=SYMBOL&d1=YYYYMMDD&d2=YYYYMMDD&i=d
-            params = {
-                's': provider_symbol,
-                'd1': start_date.strftime('%Y%m%d'),
-                'd2': end_date.strftime('%Y%m%d'),
-                'i': 'd'  # daily
-            }
+            # Tiingo returns data as list of dicts or DataFrame
+            price_data = self.tiingo_client.get_ticker_price(
+                normalized_symbol,
+                startDate=start_date.strftime('%Y-%m-%d'),
+                endDate=end_date.strftime('%Y-%m-%d'),
+                frequency='daily'
+            )
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(self.stooq_base_url, params=params)
-                response.raise_for_status()
+            if not price_data:
+                logger.warning(f"No Tiingo data returned for {symbol}")
+                return None
 
-                # Parse CSV
-                df = pd.read_csv(
-                    pd.io.common.StringIO(response.text),
-                    parse_dates=['Date']
-                )
+            # Convert to DataFrame
+            df = pd.DataFrame(price_data)
 
-                if df.empty or 'Close' not in df.columns:
-                    return None
+            if df.empty or 'adjClose' not in df.columns:
+                logger.warning(f"Tiingo returned empty or invalid data for {symbol}")
+                return None
 
-                df = df.rename(columns={'Date': 'date', 'Close': 'close'})
-                df = df[['date', 'close']].dropna()
+            # Use adjusted close for accuracy (accounts for splits/dividends)
+            df = df.rename(columns={'date': 'date', 'adjClose': 'close'})
 
-                return df
+            # Parse date - Tiingo returns ISO format strings
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df[['date', 'close']].dropna()
+
+            logger.info(f"Tiingo returned {len(df)} price records for {symbol}")
+            return df
 
         except Exception as e:
-            logger.warning(f"Stooq fetch failed for {symbol}: {e}")
+            logger.warning(f"Tiingo fetch failed for {symbol}: {e}")
             return None
 
     def fetch_yfinance_prices(
@@ -94,6 +126,7 @@ class MarketDataProvider:
             return None
 
         try:
+            logger.info(f"Falling back to yfinance for {symbol}")
             ticker = yf.Ticker(symbol)
             df = ticker.history(start=start_date, end=end_date)
 
@@ -105,6 +138,7 @@ class MarketDataProvider:
             df['date'] = pd.to_datetime(df['date']).dt.date
             df = df[['date', 'close']].dropna()
 
+            logger.info(f"yfinance returned {len(df)} price records for {symbol}")
             return df
 
         except Exception as e:
@@ -119,11 +153,11 @@ class MarketDataProvider:
         end_date: date
     ) -> int:
         """Fetch and store prices for a security"""
-        # Try Stooq first
-        df = await self.fetch_stooq_prices(symbol, start_date, end_date)
-        source = 'stooq'
+        # Try Tiingo first (primary source)
+        df = self.fetch_tiingo_prices(symbol, start_date, end_date)
+        source = 'tiingo'
 
-        # Fallback to yfinance if Stooq fails
+        # Fallback to yfinance if Tiingo fails
         if df is None or df.empty:
             df = self.fetch_yfinance_prices(symbol, start_date, end_date)
             source = 'yfinance'
@@ -156,42 +190,44 @@ class MarketDataProvider:
         logger.info(f"Stored {count} prices for {symbol} from {source}")
         return count
 
-    async def fetch_stooq_prices_raw(
+    def fetch_tiingo_benchmark_prices(
         self,
-        provider_symbol: str,
+        tiingo_symbol: str,
         start_date: date,
         end_date: date
     ) -> Optional[pd.DataFrame]:
-        """Fetch prices from Stooq using the provider symbol directly (no transformation)"""
+        """Fetch benchmark prices from Tiingo using appropriate ETF symbol"""
+        if not self.tiingo_client:
+            logger.warning("Tiingo client not configured (missing API key)")
+            return None
+
         try:
-            # Stooq URL format: ?s=SYMBOL&d1=YYYYMMDD&d2=YYYYMMDD&i=d
-            params = {
-                's': provider_symbol,
-                'd1': start_date.strftime('%Y%m%d'),
-                'd2': end_date.strftime('%Y%m%d'),
-                'i': 'd'  # daily
-            }
+            logger.info(f"Fetching Tiingo benchmark prices for {tiingo_symbol}")
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(self.stooq_base_url, params=params)
-                response.raise_for_status()
+            price_data = self.tiingo_client.get_ticker_price(
+                tiingo_symbol,
+                startDate=start_date.strftime('%Y-%m-%d'),
+                endDate=end_date.strftime('%Y-%m-%d'),
+                frequency='daily'
+            )
 
-                # Parse CSV
-                df = pd.read_csv(
-                    pd.io.common.StringIO(response.text),
-                    parse_dates=['Date']
-                )
+            if not price_data:
+                return None
 
-                if df.empty or 'Close' not in df.columns:
-                    return None
+            df = pd.DataFrame(price_data)
 
-                df = df.rename(columns={'Date': 'date', 'Close': 'close'})
-                df = df[['date', 'close']].dropna()
+            if df.empty or 'adjClose' not in df.columns:
+                return None
 
-                return df
+            df = df.rename(columns={'date': 'date', 'adjClose': 'close'})
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df[['date', 'close']].dropna()
+
+            logger.info(f"Tiingo returned {len(df)} benchmark records for {tiingo_symbol}")
+            return df
 
         except Exception as e:
-            logger.warning(f"Stooq fetch failed for {provider_symbol}: {e}")
+            logger.warning(f"Tiingo benchmark fetch failed for {tiingo_symbol}: {e}")
             return None
 
     async def fetch_and_store_benchmark_prices(
@@ -202,11 +238,14 @@ class MarketDataProvider:
         end_date: date
     ) -> int:
         """Fetch and store benchmark prices"""
-        # For benchmarks, use the provider symbol directly without transformation
-        df = await self.fetch_stooq_prices_raw(provider_symbol, start_date, end_date)
+        # Map to Tiingo-compatible symbol
+        tiingo_symbol = self.get_benchmark_tiingo_symbol(benchmark_code, provider_symbol)
+
+        # Try Tiingo first
+        df = self.fetch_tiingo_benchmark_prices(tiingo_symbol, start_date, end_date)
 
         if df is None or df.empty:
-            # Try yfinance with the benchmark code
+            # Fallback to yfinance with benchmark code
             df = self.fetch_yfinance_prices(benchmark_code, start_date, end_date)
 
         if df is None or df.empty:
@@ -262,7 +301,6 @@ class MarketDataProvider:
 
     async def update_security_prices(self, security_id: int, symbol: str) -> int:
         """Update prices for a security (fill missing dates)"""
-        # Get date range from transactions
         from app.models import Transaction
 
         first_txn = self.db.query(Transaction).filter(

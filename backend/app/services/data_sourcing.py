@@ -1,6 +1,6 @@
 """
 Data sourcing services for classifications, benchmark constituents, and factor returns.
-Updated: 2026-01-23
+Updated: 2026-01-29 - Migrated to Tiingo API
 """
 import os
 import httpx
@@ -11,10 +11,12 @@ from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from tiingo import TiingoClient
 
 from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
 from app.models import Security
 from app.utils.ticker_utils import TickerNormalizer, SectorMapper
+from app.core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,13 +24,27 @@ logger = logging.getLogger(__name__)
 
 class ClassificationService:
     """
-    Service for fetching and storing security classifications from multiple sources.
+    Service for fetching and storing security classifications from Tiingo (primary)
+    with fallback to Polygon.io and IEX Cloud.
     """
 
     def __init__(self, db: Session):
         self.db = db
+        self._tiingo_client = None
+        # Legacy fallback API keys (optional)
         self.polygon_api_key = os.getenv("POLYGON_API_KEY")
         self.iex_api_key = os.getenv("IEX_API_KEY")
+
+    @property
+    def tiingo_client(self) -> Optional[TiingoClient]:
+        """Lazy initialization of Tiingo client"""
+        if self._tiingo_client is None and settings.TIINGO_API_KEY:
+            config = {
+                'api_key': settings.TIINGO_API_KEY,
+                'session': True
+            }
+            self._tiingo_client = TiingoClient(config)
+        return self._tiingo_client
 
     async def refresh_classification(self, security_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -48,7 +64,13 @@ class ClassificationService:
         ticker = security.symbol
         logger.info(f"Refreshing classification for {ticker}")
 
-        # Try Polygon.io first
+        # Try Tiingo first (primary source)
+        if self.tiingo_client:
+            classification = self._fetch_from_tiingo(ticker)
+            if classification:
+                return self._save_classification(security_id, classification, "tiingo")
+
+        # Fallback to Polygon.io
         if self.polygon_api_key:
             classification = await self._fetch_from_polygon(ticker)
             if classification:
@@ -100,8 +122,56 @@ class ClassificationService:
         logger.info(f"Classification refresh complete: {results['success']}/{results['total']} successful")
         return results
 
+    def _fetch_from_tiingo(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch classification from Tiingo metadata API"""
+        if not self.tiingo_client:
+            return None
+
+        try:
+            # Normalize ticker for Tiingo
+            normalized_ticker = ticker.replace('.', '-').upper()
+            logger.info(f"Fetching Tiingo metadata for {normalized_ticker}")
+
+            # Get ticker metadata from Tiingo
+            metadata = self.tiingo_client.get_ticker_metadata(normalized_ticker)
+
+            if not metadata:
+                logger.warning(f"No Tiingo metadata returned for {ticker}")
+                return None
+
+            # Extract sector/industry from Tiingo metadata
+            # Tiingo provides: description, exchangeCode, startDate, endDate, name
+            # For sector/industry, we use the SIC description if available
+            sector = metadata.get('sector', '')
+            industry = metadata.get('industry', '')
+
+            # If sector/industry not directly available, try to derive from description
+            if not sector and not industry:
+                description = metadata.get('description', '')
+                # Use name as a fallback indicator
+                name = metadata.get('name', '')
+                logger.info(f"Tiingo metadata for {ticker}: name={name}, desc={description[:100] if description else 'N/A'}")
+
+            result = {
+                "gics_sector": sector or industry,
+                "sector": SectorMapper.normalize_sector(sector) if sector else None,
+                "gics_industry": industry,
+                "market_cap_category": None,  # Tiingo metadata doesn't provide market cap directly
+            }
+
+            # Only return if we have some useful data
+            if result["gics_sector"] or result["gics_industry"]:
+                logger.info(f"Tiingo classification for {ticker}: sector={result['sector']}, industry={result['gics_industry']}")
+                return result
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"Tiingo metadata fetch failed for {ticker}: {str(e)}")
+            return None
+
     async def _fetch_from_polygon(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch classification from Polygon.io"""
+        """Fetch classification from Polygon.io (fallback)"""
         try:
             url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
             params = {"apiKey": self.polygon_api_key}
