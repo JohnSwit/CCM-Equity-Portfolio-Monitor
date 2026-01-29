@@ -28,6 +28,89 @@ class ClassificationService:
     with fallback to Polygon.io and IEX Cloud.
     """
 
+    # Class-level static mapping for common tickers (fallback when APIs fail)
+    STATIC_MAPPING = {
+        "AAPL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
+        "MSFT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "GOOGL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Interactive Media"},
+        "GOOG": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Interactive Media"},
+        "AMZN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
+        "TSLA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
+        "META": {"sector": "Technology", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
+        "NVDA": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banks"},
+        "JNJ": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "V": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Services"},
+        "MA": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Services"},
+        "UNH": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Providers"},
+        "HD": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Home Improvement Retail"},
+        "PG": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
+        "DIS": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "NFLX": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "ADBE": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CRM": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "COST": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Consumer Staples Distribution"},
+        "PEP": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Beverages"},
+        "AVGO": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "CSCO": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Communications Equipment"},
+        "ABT": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "TMO": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Life Sciences Tools"},
+        "NKE": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Footwear"},
+        "LLY": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "WFC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banks"},
+        "INTU": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CVS": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Providers"},
+        "AMGN": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "NOW": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "SBUX": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "DHR": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "HON": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Conglomerates"},
+        "LMT": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "NEE": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "UPS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Air Freight & Logistics"},
+        "BLK": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Asset Management"},
+        "MDT": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "AEP": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "DE": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Machinery"},
+        "LIN": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Chemicals"},
+        "FDX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Air Freight & Logistics"},
+        "SLB": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Equipment"},
+        # ETFs - Broad Market
+        "SPY": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "S&P 500 Index"},
+        "QQQ": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Nasdaq 100 Index"},
+        "IWM": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Russell 2000 Index"},
+        "DIA": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Dow Jones Index"},
+        "VTI": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Total Stock Market"},
+        "VOO": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "S&P 500 Index"},
+        # ETFs - Style
+        "IVE": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "S&P 500 Value"},
+        "IVW": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "S&P 500 Growth"},
+        "IWD": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 1000 Value"},
+        "IWF": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 1000 Growth"},
+        "IWN": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 2000 Value"},
+        "IWO": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 2000 Growth"},
+        "VTV": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Value"},
+        "VUG": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Growth"},
+        # ETFs - Factor
+        "QUAL": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Quality Factor"},
+        "SPLV": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Low Volatility"},
+        "MTUM": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Momentum Factor"},
+        "VLUE": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Value Factor"},
+        "SIZE": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Size Factor"},
+        # ETFs - Sector
+        "XLF": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Financials"},
+        "XLK": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Technology"},
+        "XLV": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Health Care"},
+        "XLE": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Energy"},
+        "XLI": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Industrials"},
+        "XLP": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Consumer Staples"},
+        "XLY": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Consumer Discretionary"},
+        "XLU": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Utilities"},
+        "XLB": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Materials"},
+        "XLRE": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Real Estate"},
+        "XLC": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Communication Services"},
+    }
+
     def __init__(self, db: Session):
         self.db = db
         self._tiingo_client = None
@@ -123,51 +206,51 @@ class ClassificationService:
         return results
 
     def _fetch_from_tiingo(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch classification from Tiingo metadata API"""
+        """Fetch classification from Tiingo fundamentals API"""
         if not self.tiingo_client:
             return None
 
         try:
             # Normalize ticker for Tiingo
             normalized_ticker = ticker.replace('.', '-').upper()
-            logger.info(f"Fetching Tiingo metadata for {normalized_ticker}")
+            logger.info(f"Fetching Tiingo fundamentals for {normalized_ticker}")
 
-            # Get ticker metadata from Tiingo
+            # Try fundamentals definitions first (has sector/industry)
+            try:
+                fundamentals = self.tiingo_client.get_fundamentals_definitions(normalized_ticker)
+                if fundamentals and len(fundamentals) > 0:
+                    fund_data = fundamentals[0] if isinstance(fundamentals, list) else fundamentals
+                    sector = fund_data.get('sector', '')
+                    industry = fund_data.get('industry', '')
+
+                    if sector or industry:
+                        result = {
+                            "gics_sector": sector,
+                            "sector": SectorMapper.normalize_sector(sector) if sector else None,
+                            "gics_industry": industry,
+                            "market_cap_category": None,
+                        }
+                        logger.info(f"Tiingo fundamentals for {ticker}: sector={sector}, industry={industry}")
+                        return result
+            except Exception as fund_err:
+                logger.debug(f"Tiingo fundamentals not available for {ticker}: {fund_err}")
+
+            # Fallback to basic metadata
             metadata = self.tiingo_client.get_ticker_metadata(normalized_ticker)
-
             if not metadata:
                 logger.warning(f"No Tiingo metadata returned for {ticker}")
                 return None
 
-            # Extract sector/industry from Tiingo metadata
-            # Tiingo provides: description, exchangeCode, startDate, endDate, name
-            # For sector/industry, we use the SIC description if available
-            sector = metadata.get('sector', '')
-            industry = metadata.get('industry', '')
-
-            # If sector/industry not directly available, try to derive from description
-            if not sector and not industry:
-                description = metadata.get('description', '')
-                # Use name as a fallback indicator
-                name = metadata.get('name', '')
-                logger.info(f"Tiingo metadata for {ticker}: name={name}, desc={description[:100] if description else 'N/A'}")
-
-            result = {
-                "gics_sector": sector or industry,
-                "sector": SectorMapper.normalize_sector(sector) if sector else None,
-                "gics_industry": industry,
-                "market_cap_category": None,  # Tiingo metadata doesn't provide market cap directly
-            }
-
-            # Only return if we have some useful data
-            if result["gics_sector"] or result["gics_industry"]:
-                logger.info(f"Tiingo classification for {ticker}: sector={result['sector']}, industry={result['gics_industry']}")
-                return result
+            # Check if static mapping has this ticker
+            static_data = self.STATIC_MAPPING.get(normalized_ticker)
+            if static_data:
+                logger.info(f"Using static mapping for {ticker}")
+                return static_data
 
             return None
 
         except Exception as e:
-            logger.warning(f"Tiingo metadata fetch failed for {ticker}: {str(e)}")
+            logger.warning(f"Tiingo fetch failed for {ticker}: {str(e)}")
             return None
 
     async def _fetch_from_polygon(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -221,19 +304,8 @@ class ClassificationService:
 
     def _fetch_from_static(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Fallback to static sector mapping for common tickers"""
-        # Basic static mapping for major tech/fin stocks
-        STATIC_MAPPING = {
-            "AAPL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
-            "MSFT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
-            "GOOGL": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
-            "AMZN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
-            "TSLA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
-            "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banking"},
-            "JNJ": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
-        }
-
         normalized = TickerNormalizer.normalize(ticker)
-        return STATIC_MAPPING.get(normalized)
+        return self.STATIC_MAPPING.get(normalized)
 
     def _categorize_market_cap(self, market_cap: Optional[float]) -> Optional[str]:
         """Categorize market cap into Large/Mid/Small"""
