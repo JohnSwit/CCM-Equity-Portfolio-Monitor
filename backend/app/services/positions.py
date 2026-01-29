@@ -97,7 +97,7 @@ class PositionsEngine:
             df = date_index.merge(df[['date', 'shares']], on='date', how='left')
 
             # Forward fill shares
-            df['shares'] = df['shares'].fillna(method='ffill').fillna(0)
+            df['shares'] = df['shares'].ffill().fillna(0)
 
             # Store positions
             for _, row in df.iterrows():

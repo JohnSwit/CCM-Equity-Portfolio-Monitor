@@ -152,7 +152,8 @@ class MarketDataProvider:
         security_id: int,
         symbol: str,
         start_date: date,
-        end_date: date
+        end_date: date,
+        force_refresh: bool = False
     ) -> int:
         """Fetch and store prices for a security"""
         # Try Tiingo first (primary source)
@@ -168,9 +169,21 @@ class MarketDataProvider:
             logger.warning(f"No prices fetched for {symbol}")
             return 0
 
-        # Store prices
+        # If force refresh, delete existing prices in this date range first
+        if force_refresh:
+            deleted = self.db.query(PricesEOD).filter(
+                and_(
+                    PricesEOD.security_id == security_id,
+                    PricesEOD.date >= start_date,
+                    PricesEOD.date <= end_date
+                )
+            ).delete(synchronize_session=False)
+            logger.info(f"Force refresh: deleted {deleted} existing prices for {symbol}")
+
+        # Store prices (update existing if different, insert if not exists)
         count = 0
         for _, row in df.iterrows():
+            price_value = float(row['close'])
             existing = self.db.query(PricesEOD).filter(
                 and_(
                     PricesEOD.security_id == security_id,
@@ -178,11 +191,17 @@ class MarketDataProvider:
                 )
             ).first()
 
-            if not existing:
+            if existing:
+                # Update if price changed
+                if existing.close != price_value:
+                    existing.close = price_value
+                    existing.source = source
+                    count += 1
+            else:
                 price = PricesEOD(
                     security_id=security_id,
                     date=row['date'],
-                    close=float(row['close']),
+                    close=price_value,
                     source=source
                 )
                 self.db.add(price)
@@ -303,7 +322,12 @@ class MarketDataProvider:
         missing = sorted(all_dates_set - existing_dates_set)
         return missing
 
-    async def update_security_prices(self, security_id: int, symbol: str) -> int:
+    async def update_security_prices(
+        self,
+        security_id: int,
+        symbol: str,
+        force_refresh: bool = False
+    ) -> int:
         """Update prices for a security (fill missing dates)"""
         from app.models import Transaction
 
@@ -319,7 +343,7 @@ class MarketDataProvider:
 
         # Fetch and store
         count = await self.fetch_and_store_prices(
-            security_id, symbol, start_date, end_date
+            security_id, symbol, start_date, end_date, force_refresh=force_refresh
         )
 
         # Rate limiting
@@ -327,13 +351,15 @@ class MarketDataProvider:
 
         return count
 
-    async def update_all_security_prices(self) -> Dict[str, int]:
+    async def update_all_security_prices(self, force_refresh: bool = False) -> Dict[str, int]:
         """Update prices for all securities with transactions"""
         from app.models import Transaction
 
         # Log Tiingo client status
         logger.info(f"Tiingo API key configured: {bool(settings.TIINGO_API_KEY)}")
         logger.info(f"Tiingo client initialized: {self.tiingo_client is not None}")
+        if force_refresh:
+            logger.info("Force refresh enabled - will delete and re-fetch all prices")
 
         # Get all securities with transactions
         securities = self.db.query(Security).join(Transaction).distinct().all()
@@ -349,12 +375,91 @@ class MarketDataProvider:
         for security in securities:
             try:
                 logger.info(f"Processing security: {security.symbol} (id={security.id})")
-                count = await self.update_security_prices(security.id, security.symbol)
+                count = await self.update_security_prices(
+                    security.id, security.symbol, force_refresh=force_refresh
+                )
                 logger.info(f"Updated {count} prices for {security.symbol}")
                 if count > 0:
                     results['updated'] += 1
             except Exception as e:
                 logger.error(f"Failed to update {security.symbol}: {e}")
+                results['failed'] += 1
+
+        return results
+
+    async def update_factor_etf_prices(self) -> Dict[str, int]:
+        """Update prices for factor ETFs used in STYLE7 analysis"""
+        # Factor ETFs from FactorsEngine
+        FACTOR_ETFS = ['SPY', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM']
+
+        logger.info(f"Updating factor ETF prices for: {FACTOR_ETFS}")
+
+        results = {
+            'total_etfs': len(FACTOR_ETFS),
+            'updated': 0,
+            'failed': 0
+        }
+
+        # Use 5-year lookback for factor analysis
+        end_date = date.today()
+        start_date = end_date - timedelta(days=5*365)
+
+        for symbol in FACTOR_ETFS:
+            try:
+                # Find or create the security
+                security = self.db.query(Security).filter(
+                    Security.symbol == symbol
+                ).first()
+
+                if not security:
+                    from app.models import AssetClass
+                    security = Security(
+                        symbol=symbol,
+                        asset_name=f"{symbol} ETF",
+                        asset_class=AssetClass.ETF
+                    )
+                    self.db.add(security)
+                    self.db.flush()
+                    logger.info(f"Created security for factor ETF: {symbol}")
+
+                # Fetch prices from Tiingo
+                df = self.fetch_tiingo_prices(symbol, start_date, end_date)
+
+                if df is None or df.empty:
+                    logger.warning(f"No Tiingo data for factor ETF {symbol}")
+                    results['failed'] += 1
+                    continue
+
+                # Store prices
+                count = 0
+                for _, row in df.iterrows():
+                    existing = self.db.query(PricesEOD).filter(
+                        and_(
+                            PricesEOD.security_id == security.id,
+                            PricesEOD.date == row['date']
+                        )
+                    ).first()
+
+                    if not existing:
+                        price = PricesEOD(
+                            security_id=security.id,
+                            date=row['date'],
+                            close=float(row['close']),
+                            source='tiingo'
+                        )
+                        self.db.add(price)
+                        count += 1
+
+                self.db.commit()
+                logger.info(f"Stored {count} prices for factor ETF {symbol}")
+
+                if count > 0:
+                    results['updated'] += 1
+
+                await asyncio.sleep(self.rate_limit_delay)
+
+            except Exception as e:
+                logger.error(f"Failed to update factor ETF {symbol}: {e}")
                 results['failed'] += 1
 
         return results

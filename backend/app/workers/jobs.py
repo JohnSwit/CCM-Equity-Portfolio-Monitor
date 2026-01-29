@@ -205,8 +205,9 @@ async def market_data_update_job(db: Session = None):
         factors_engine.ensure_style7_factor_set()
         factors_engine.ensure_factor_etfs_exist()
 
-        # Factor ETFs will be updated as part of security prices
-        # since they're in the Security table
+        # Update factor ETF prices from Tiingo
+        factor_etf_results = await market_data.update_factor_etf_prices()
+        logger.info(f"Factor ETF prices updated: {factor_etf_results}")
 
         logger.info("Market data fetched successfully")
 
@@ -344,6 +345,51 @@ async def recompute_analytics_job(db: Session = None):
 
     except Exception as e:
         logger.error(f"Analytics recomputation job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def force_refresh_prices_job(db: Session = None):
+    """
+    Force refresh all price data from Tiingo.
+    Use this when prices are stale, corrupt, or need to be completely refreshed.
+    This will delete existing prices and re-fetch from Tiingo.
+    """
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Starting force refresh prices job")
+
+        market_data = MarketDataProvider(db)
+
+        # Force refresh security prices
+        logger.info("Force refreshing security prices...")
+        security_results = await market_data.update_all_security_prices(force_refresh=True)
+        logger.info(f"Security prices refreshed: {security_results}")
+
+        # Force refresh factor ETF prices
+        logger.info("Force refreshing factor ETF prices...")
+        factor_etf_results = await market_data.update_factor_etf_prices()
+        logger.info(f"Factor ETF prices refreshed: {factor_etf_results}")
+
+        # Update benchmark prices
+        logger.info("Updating benchmark prices...")
+        benchmark_results = await market_data.update_benchmark_prices()
+        logger.info(f"Benchmark prices updated: {benchmark_results}")
+
+        logger.info("Force refresh prices job completed successfully")
+
+        # Recompute analytics with fresh data
+        logger.info("Recomputing analytics with fresh prices...")
+        await recompute_analytics_job(db)
+
+    except Exception as e:
+        logger.error(f"Force refresh prices job failed: {e}", exc_info=True)
         raise
     finally:
         if close_db:

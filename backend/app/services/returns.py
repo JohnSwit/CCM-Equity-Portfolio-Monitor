@@ -171,12 +171,12 @@ class ReturnsEngine:
         price_wide = prices_df.pivot(index='date', columns='security_id', values='close')
 
         # Forward fill prices (use last known price)
-        price_wide = price_wide.fillna(method='ffill')
+        price_wide = price_wide.ffill()
 
         # Align dates
         all_dates = sorted(set(pos_wide.index) | set(price_wide.index))
-        pos_wide = pos_wide.reindex(all_dates).fillna(method='ffill').fillna(0)
-        price_wide = price_wide.reindex(all_dates).fillna(method='ffill')
+        pos_wide = pos_wide.reindex(all_dates).ffill().fillna(0)
+        price_wide = price_wide.reindex(all_dates).ffill()
 
         # Compute portfolio value each day
         portfolio_values = (pos_wide * price_wide).sum(axis=1)
