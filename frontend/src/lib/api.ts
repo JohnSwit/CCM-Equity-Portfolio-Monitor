@@ -361,6 +361,26 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Factor Benchmarking + Attribution
+  async getFactorModels() {
+    const response = await this.client.get('/analytics/factor-models');
+    return response.data;
+  }
+
+  async getFactorBenchmarking(viewType: string, viewId: number, modelCode: string = 'US_CORE', period: string = '1Y') {
+    const response = await this.client.get('/analytics/factor-benchmarking', {
+      params: { view_type: viewType, view_id: viewId, model_code: modelCode, period },
+    });
+    return response.data;
+  }
+
+  async refreshFactorData(modelCode: string = 'US_CORE', startDate?: string, endDate?: string) {
+    const response = await this.client.post('/analytics/refresh-factor-data', null, {
+      params: { model_code: modelCode, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

@@ -433,3 +433,143 @@ def get_unpriced_instruments(
         )
         for u in unpriced
     ]
+
+
+# ============================================================================
+# Factor Benchmarking + Attribution Endpoints
+# ============================================================================
+
+@router.get("/factor-models")
+def get_factor_models(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get available factor models"""
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    return service.get_available_models()
+
+
+@router.get("/factor-benchmarking")
+def get_factor_benchmarking(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),  # 1M, 3M, 6M, YTD, 1Y, ALL
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get factor benchmarking and attribution analysis.
+
+    Returns:
+    - Factor betas (exposures)
+    - Alpha (daily and annualized)
+    - R-squared and diagnostics
+    - Return attribution by factor
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == 'ALL':
+        # Get earliest portfolio data
+        earliest = db.query(PortfolioValueEOD.date).filter(
+            and_(
+                PortfolioValueEOD.view_type == db_vt,
+                PortfolioValueEOD.view_id == view_id
+            )
+        ).order_by(PortfolioValueEOD.date).first()
+        start_date = earliest[0] if earliest else end_date - timedelta(days=365)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Check if we need to refresh factor data
+    # For now, always try to get latest data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        # Log but continue - we might have cached data
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+
+    # Compute attribution
+    result = service.compute_attribution(
+        db_vt, view_id, model_code, start_date, end_date
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not compute factor analysis. Ensure sufficient data is available."
+        )
+
+    return result
+
+
+@router.post("/refresh-factor-data")
+def refresh_factor_data(
+    model_code: str = Query("US_CORE"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Refresh factor proxy data from external sources.
+    Only fetches missing dates.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=365 * 2)  # Default 2 years
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    try:
+        results = service.refresh_factor_data(model_code, start_date, end_date)
+        return {
+            "status": "success",
+            "model_code": model_code,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "rows_fetched": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
