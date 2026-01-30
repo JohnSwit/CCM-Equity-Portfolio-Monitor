@@ -286,20 +286,102 @@ class YFinanceProvider(MarketDataProvider):
             return None
 
 
+class TiingoFactorProvider(MarketDataProvider):
+    """
+    Provider using Tiingo API for factor ETF data.
+    Primary provider for US ETFs with reliable, enterprise-grade data.
+    """
+
+    def __init__(self, api_key: Optional[str] = None):
+        self._api_key = api_key
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            if not self._api_key:
+                # Try to get from settings
+                try:
+                    from app.core.config import settings
+                    self._api_key = settings.TIINGO_API_KEY
+                except Exception:
+                    pass
+
+            if self._api_key:
+                try:
+                    from tiingo import TiingoClient
+                    self._client = TiingoClient({'api_key': self._api_key})
+                except Exception as e:
+                    logger.error(f"Failed to initialize Tiingo client: {e}")
+        return self._client
+
+    def get_source_name(self) -> str:
+        return "tiingo"
+
+    def fetch_series(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """Fetch historical prices from Tiingo"""
+        client = self._get_client()
+        if client is None:
+            logger.warning("Tiingo client not configured")
+            return None
+
+        try:
+            price_data = client.get_ticker_price(
+                symbol,
+                startDate=start_date.strftime('%Y-%m-%d'),
+                endDate=end_date.strftime('%Y-%m-%d'),
+                frequency='daily'
+            )
+
+            if not price_data:
+                logger.warning(f"No Tiingo data returned for {symbol}")
+                return None
+
+            df = pd.DataFrame(price_data)
+
+            if df.empty or 'adjClose' not in df.columns:
+                logger.warning(f"Tiingo returned empty or invalid data for {symbol}")
+                return None
+
+            # Select and rename columns
+            df = df[['date', 'adjClose']].copy()
+            df = df.rename(columns={'adjClose': 'close'})
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df.sort_values('date')
+
+            # Compute daily returns
+            df['daily_return'] = df['close'].pct_change()
+
+            # Validate - filter extreme outliers
+            df = df[df['daily_return'].abs() <= 0.5]
+
+            logger.info(f"Fetched {len(df)} rows from Tiingo for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.error(f"Error fetching from Tiingo for {symbol}: {e}")
+            return None
+
+
 class DataProviderManager:
     """
     Manages multiple data providers with fallback logic.
     """
 
-    def __init__(self, fred_api_key: Optional[str] = None):
+    def __init__(self, fred_api_key: Optional[str] = None, tiingo_api_key: Optional[str] = None):
         self.providers = {
+            'tiingo': TiingoFactorProvider(api_key=tiingo_api_key),
             'stooq': StooqProvider(),
             'fred': FREDProvider(api_key=fred_api_key),
             'yfinance': YFinanceProvider(),
         }
 
-        # Default provider order for ETFs
-        self.etf_provider_order = ['stooq', 'yfinance']
+        # Default provider order for ETFs - Tiingo first
+        self.etf_provider_order = ['tiingo', 'stooq', 'yfinance']
         # Default provider for macro/rates
         self.macro_provider = 'fred'
 

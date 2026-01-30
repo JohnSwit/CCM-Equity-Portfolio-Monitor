@@ -33,32 +33,32 @@ from app.services.market_data_providers import DataProviderManager
 logger = logging.getLogger(__name__)
 
 
-# Default factor model configurations
+# Default factor model configurations - using Tiingo as primary source
 DEFAULT_FACTOR_MODELS = {
     'US_CORE': {
         'name': 'US Core Factor Model',
         'description': 'Core US equity factors using liquid ETF proxies',
         'factors_config': {
-            'MKT': {'symbol': 'SPY', 'source': 'stooq', 'spread_vs': None, 'name': 'Market'},
-            'SIZE': {'symbol': 'IWM', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Size (Small-Cap)'},
-            'VALUE': {'symbol': 'IWD', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Value'},
-            'MOM': {'symbol': 'MTUM', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Momentum'},
-            'QUAL': {'symbol': 'QUAL', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Quality'},
-            'LOWVOL': {'symbol': 'USMV', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Low Volatility'},
+            'MKT': {'symbol': 'SPY', 'source': 'tiingo', 'spread_vs': None, 'name': 'Market'},
+            'SIZE': {'symbol': 'IWM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Size (Small-Cap)'},
+            'VALUE': {'symbol': 'IWD', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Value'},
+            'MOM': {'symbol': 'MTUM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Momentum'},
+            'QUAL': {'symbol': 'QUAL', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Quality'},
+            'LOWVOL': {'symbol': 'USMV', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Low Volatility'},
         }
     },
     'US_EXTENDED': {
         'name': 'US Extended Factor Model',
         'description': 'Extended factor model with growth and dividend factors',
         'factors_config': {
-            'MKT': {'symbol': 'SPY', 'source': 'stooq', 'spread_vs': None, 'name': 'Market'},
-            'SIZE': {'symbol': 'IWM', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Size'},
-            'VALUE': {'symbol': 'IWD', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Value'},
-            'GROWTH': {'symbol': 'IWF', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Growth'},
-            'MOM': {'symbol': 'MTUM', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Momentum'},
-            'QUAL': {'symbol': 'QUAL', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Quality'},
-            'LOWVOL': {'symbol': 'USMV', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Low Volatility'},
-            'DIVYLD': {'symbol': 'DVY', 'source': 'stooq', 'spread_vs': 'SPY', 'name': 'Dividend Yield'},
+            'MKT': {'symbol': 'SPY', 'source': 'tiingo', 'spread_vs': None, 'name': 'Market'},
+            'SIZE': {'symbol': 'IWM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Size'},
+            'VALUE': {'symbol': 'IWD', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Value'},
+            'GROWTH': {'symbol': 'IWF', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Growth'},
+            'MOM': {'symbol': 'MTUM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Momentum'},
+            'QUAL': {'symbol': 'QUAL', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Quality'},
+            'LOWVOL': {'symbol': 'USMV', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Low Volatility'},
+            'DIVYLD': {'symbol': 'DVY', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Dividend Yield'},
         }
     }
 }
@@ -80,11 +80,13 @@ class FactorBenchmarkingService:
     Main service for factor benchmarking and attribution.
     """
 
-    def __init__(self, db: Session, fred_api_key: Optional[str] = None):
+    def __init__(self, db: Session, fred_api_key: Optional[str] = None, tiingo_api_key: Optional[str] = None):
         self.db = db
         if fred_api_key is None:
             fred_api_key = os.environ.get('FRED_API_KEY')
-        self.data_manager = DataProviderManager(fred_api_key=fred_api_key)
+        if tiingo_api_key is None:
+            tiingo_api_key = os.environ.get('TIINGO_API_KEY')
+        self.data_manager = DataProviderManager(fred_api_key=fred_api_key, tiingo_api_key=tiingo_api_key)
 
     def ensure_default_models(self):
         """Ensure default factor models exist in database"""
@@ -251,7 +253,7 @@ class FactorBenchmarkingService:
             all_symbols.add(bm_config['symbol'])
 
         for symbol in all_symbols:
-            source = 'stooq'
+            source = 'tiingo'  # Primary source
             try:
                 missing_ranges = self._get_missing_date_ranges(symbol, source, start_date, end_date)
 
@@ -292,7 +294,7 @@ class FactorBenchmarkingService:
 
         symbol_data = {}
         for symbol in all_symbols:
-            df = self._get_cached_data(symbol, 'stooq', start_date, end_date)
+            df = self._get_cached_data(symbol, 'tiingo', start_date, end_date)
             if len(df) > 0:
                 symbol_data[symbol] = df.set_index('date')['daily_return']
 
@@ -327,7 +329,7 @@ class FactorBenchmarkingService:
             raise ValueError(f"Unknown benchmark: {benchmark_code}")
 
         symbol = BENCHMARK_CONFIGS[benchmark_code]['symbol']
-        df = self._get_cached_data(symbol, 'stooq', start_date, end_date)
+        df = self._get_cached_data(symbol, 'tiingo', start_date, end_date)
 
         if len(df) > 0:
             return df.set_index('date')['daily_return']

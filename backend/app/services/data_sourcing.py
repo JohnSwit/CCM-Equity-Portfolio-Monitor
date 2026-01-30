@@ -508,7 +508,7 @@ class BenchmarkService:
     def _save_benchmark_holdings(
         self, benchmark_code: str, holdings: List[Dict[str, Any]], source_url: str
     ) -> Dict[str, Any]:
-        """Save benchmark holdings to database"""
+        """Save benchmark holdings to database with sector enrichment"""
         try:
             as_of = date.today()
 
@@ -524,12 +524,39 @@ class BenchmarkService:
                 BenchmarkConstituent.as_of_date == as_of
             ).delete()
 
-            # Insert new holdings
+            # Build lookup of symbol -> sector from SectorClassification
+            sector_lookup = {}
+            classifications = self.db.query(
+                Security.symbol,
+                SectorClassification.sector,
+                SectorClassification.gics_sector
+            ).join(
+                SectorClassification, Security.id == SectorClassification.security_id
+            ).all()
+
+            for c in classifications:
+                # Use sector if available, otherwise use gics_sector
+                sector_lookup[c.symbol] = c.sector or c.gics_sector
+
+            logger.info(f"Loaded {len(sector_lookup)} sector classifications for benchmark enrichment")
+
+            # Insert new holdings with sector data
+            classified_count = 0
             for holding in holdings:
+                ticker = holding["ticker"]
+                # Look up sector: first from DB, then from STATIC_MAPPING
+                sector = sector_lookup.get(ticker)
+                if not sector and ticker in ClassificationService.STATIC_MAPPING:
+                    sector = ClassificationService.STATIC_MAPPING[ticker].get("sector")
+
+                if sector:
+                    classified_count += 1
+
                 constituent = BenchmarkConstituent(
                     benchmark_code=benchmark_code,
-                    symbol=holding["ticker"],
+                    symbol=ticker,
                     weight=holding["weight"],
+                    sector=sector,  # Now populated with sector data
                     as_of_date=as_of,
                     source_url=source_url,
                 )
@@ -537,11 +564,12 @@ class BenchmarkService:
 
             self.db.commit()
 
-            logger.info(f"Saved {len(holdings)} holdings for {benchmark_code}")
+            logger.info(f"Saved {len(holdings)} holdings for {benchmark_code} ({classified_count} with sectors)")
             return {
                 "success": True,
                 "benchmark": benchmark_code,
                 "count": len(holdings),
+                "classified_count": classified_count,
                 "as_of_date": as_of.isoformat(),
             }
 

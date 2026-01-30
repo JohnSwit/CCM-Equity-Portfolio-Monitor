@@ -5,7 +5,7 @@ from tiingo import TiingoClient
 from typing import Optional, Dict, List
 from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 import asyncio
 import time
 from app.models import Security, PricesEOD, BenchmarkDefinition, BenchmarkLevel
@@ -164,21 +164,10 @@ class MarketDataProvider:
         end_date: date,
         force_refresh: bool = False
     ) -> int:
-        """Fetch and store prices for a security"""
-        # Try Tiingo first (primary source)
-        df = self.fetch_tiingo_prices(symbol, start_date, end_date)
+        """Fetch and store prices for a security - optimized to only fetch missing dates"""
         source = 'tiingo'
 
-        # Fallback to yfinance if Tiingo fails
-        if df is None or df.empty:
-            df = self.fetch_yfinance_prices(symbol, start_date, end_date)
-            source = 'yfinance'
-
-        if df is None or df.empty:
-            logger.warning(f"No prices fetched for {symbol}")
-            return 0
-
-        # If force refresh, delete existing prices in this date range first
+        # If force refresh, delete existing and fetch all
         if force_refresh:
             deleted = self.db.query(PricesEOD).filter(
                 and_(
@@ -187,38 +176,72 @@ class MarketDataProvider:
                     PricesEOD.date <= end_date
                 )
             ).delete(synchronize_session=False)
+            self.db.commit()
             logger.info(f"Force refresh: deleted {deleted} existing prices for {symbol}")
+            fetch_start = start_date
+            fetch_end = end_date
+        else:
+            # Find the latest price date we have for this security
+            latest_price = self.db.query(func.max(PricesEOD.date)).filter(
+                PricesEOD.security_id == security_id
+            ).scalar()
 
-        # Store prices (update existing if different, insert if not exists)
-        count = 0
-        for _, row in df.iterrows():
-            price_value = float(row['close'])
-            existing = self.db.query(PricesEOD).filter(
+            if latest_price and latest_price >= end_date:
+                # Already have all data up to end_date
+                logger.debug(f"Prices for {symbol} already up to date (latest: {latest_price})")
+                return 0
+
+            # Only fetch from after our latest price
+            if latest_price:
+                fetch_start = latest_price + timedelta(days=1)
+            else:
+                fetch_start = start_date
+            fetch_end = end_date
+
+            if fetch_start > fetch_end:
+                return 0
+
+        # Fetch only missing dates from Tiingo
+        df = self.fetch_tiingo_prices(symbol, fetch_start, fetch_end)
+
+        # Fallback to yfinance if Tiingo fails
+        if df is None or df.empty:
+            df = self.fetch_yfinance_prices(symbol, fetch_start, fetch_end)
+            source = 'yfinance'
+
+        if df is None or df.empty:
+            if fetch_start == start_date:
+                logger.warning(f"No prices fetched for {symbol}")
+            return 0
+
+        # Get existing dates to avoid duplicates (in case of overlaps)
+        existing_dates = set(
+            row[0] for row in self.db.query(PricesEOD.date).filter(
                 and_(
                     PricesEOD.security_id == security_id,
-                    PricesEOD.date == row['date']
+                    PricesEOD.date >= fetch_start,
+                    PricesEOD.date <= fetch_end
                 )
-            ).first()
+            ).all()
+        )
 
-            if existing:
-                # Update if price changed
-                if existing.close != price_value:
-                    existing.close = price_value
-                    existing.source = source
-                    count += 1
-            else:
-                price = PricesEOD(
+        # Bulk insert only new prices
+        new_prices = []
+        for _, row in df.iterrows():
+            if row['date'] not in existing_dates:
+                new_prices.append(PricesEOD(
                     security_id=security_id,
                     date=row['date'],
-                    close=price_value,
+                    close=float(row['close']),
                     source=source
-                )
-                self.db.add(price)
-                count += 1
+                ))
 
-        self.db.commit()
-        logger.info(f"Stored {count} prices for {symbol} from {source}")
-        return count
+        if new_prices:
+            self.db.bulk_save_objects(new_prices)
+            self.db.commit()
+
+        logger.info(f"Stored {len(new_prices)} new prices for {symbol} from {source}")
+        return len(new_prices)
 
     def fetch_tiingo_benchmark_prices(
         self,

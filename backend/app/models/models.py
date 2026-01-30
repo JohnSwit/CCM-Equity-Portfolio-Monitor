@@ -392,6 +392,7 @@ class FactorDataSource(str, enum.Enum):
     FRED = "fred"
     YFINANCE = "yfinance"
     ALPHAVANTAGE = "alphavantage"
+    TIINGO = "tiingo"
 
 
 class FactorProxySeries(Base):

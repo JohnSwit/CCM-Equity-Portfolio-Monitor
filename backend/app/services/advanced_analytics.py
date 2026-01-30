@@ -307,14 +307,36 @@ class SectorAnalyzer:
                 'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
             }
 
+        # Build a fallback sector lookup from SectorClassification for symbols without sectors
+        sector_lookup = {}
+        classifications = self.db.query(
+            Security.symbol,
+            SectorClassification.sector,
+            SectorClassification.gics_sector
+        ).join(
+            SectorClassification, Security.id == SectorClassification.security_id
+        ).all()
+        for c in classifications:
+            sector_lookup[c.symbol] = c.sector or c.gics_sector
+
         # Aggregate weights by sector
         benchmark_weights = {}
         total_weight = 0.0
+        unclassified_count = 0
         for constituent in benchmark_constituents:
-            sector = constituent.sector or 'Unclassified'
+            # Use stored sector, or look up from SectorClassification
+            sector = constituent.sector
+            if not sector:
+                sector = sector_lookup.get(constituent.symbol)
+            if not sector:
+                unclassified_count += 1
+                continue  # Skip unclassified instead of grouping them
             weight = float(constituent.weight)
             benchmark_weights[sector] = benchmark_weights.get(sector, 0) + weight
             total_weight += weight
+
+        if unclassified_count > 0:
+            logger.warning(f"Benchmark {benchmark_code}: {unclassified_count} constituents without sector classification (skipped)")
 
         # Log for debugging - total should be ~1.0
         logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, total weight={total_weight:.4f}")
@@ -423,21 +445,44 @@ class BrinsonAttributionAnalyzer:
         if not benchmark_holdings:
             return {'error': f'No holdings found for benchmark {benchmark_code}'}
 
+        # Build a fallback sector lookup from SectorClassification
+        sector_lookup = {}
+        classifications = self.db.query(
+            Security.symbol,
+            SectorClassification.sector,
+            SectorClassification.gics_sector
+        ).join(
+            SectorClassification, Security.id == SectorClassification.security_id
+        ).all()
+        for c in classifications:
+            sector_lookup[c.symbol] = c.sector or c.gics_sector
+
+        # Enrich benchmark holdings with sector data for further calculations
+        enriched_holdings = []
+        for holding in benchmark_holdings:
+            sector = holding.sector or sector_lookup.get(holding.symbol)
+            if sector:  # Skip unclassified
+                enriched_holdings.append({
+                    'symbol': holding.symbol,
+                    'weight': holding.weight,
+                    'sector': sector
+                })
+
         # Calculate sector returns for portfolio holdings
         portfolio_sector_returns = self._calculate_sector_returns(port_start['holdings'], start_date, end_date)
 
-        # Calculate sector returns for benchmark holdings
-        benchmark_sector_returns = self._calculate_benchmark_sector_returns(benchmark_holdings, start_date, end_date)
+        # Calculate sector returns for benchmark holdings (use enriched data)
+        benchmark_sector_returns = self._calculate_benchmark_sector_returns_from_dict(enriched_holdings, start_date, end_date)
 
         # Build portfolio sector weights dict (use start weights)
         port_weights = {s['sector']: s['weight'] for s in port_start['sectors']}
 
-        # Build benchmark sector weights dict
+        # Build benchmark sector weights dict from enriched holdings
         bench_weights = {}
         total_bench_weight = 0.0
-        for holding in benchmark_holdings:
-            sector = holding.sector or 'Unclassified'
-            weight = float(holding.weight)
+        for holding in enriched_holdings:
+            sector = holding['sector']
+            weight = float(holding['weight'])
             bench_weights[sector] = bench_weights.get(sector, 0) + weight
             total_bench_weight += weight
 
@@ -531,6 +576,53 @@ class BrinsonAttributionAnalyzer:
         for sector in sector_start_values:
             if sector_start_values[sector] > 0:
                 sector_returns[sector] = (sector_end_values[sector] / sector_start_values[sector]) - 1
+
+        return sector_returns
+
+    def _calculate_benchmark_sector_returns_from_dict(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
+        """Calculate sector returns for benchmark holdings from dict format"""
+        sector_returns = {}
+        sector_weighted_returns = {}
+        sector_weights = {}
+
+        for holding in holdings:
+            sector = holding['sector']
+            ticker = holding['symbol']
+            weight = float(holding['weight'])
+
+            # Find security by ticker
+            security = self.db.query(Security).filter(
+                Security.symbol == TickerNormalizer.normalize(ticker)
+            ).first()
+
+            if not security:
+                continue
+
+            # Get prices
+            start_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security.id,
+                    PricesEOD.date <= start_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            end_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security.id,
+                    PricesEOD.date <= end_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            if start_price and end_price:
+                security_return = (float(end_price[0]) / float(start_price[0])) - 1
+
+                sector_weighted_returns[sector] = sector_weighted_returns.get(sector, 0) + (security_return * weight)
+                sector_weights[sector] = sector_weights.get(sector, 0) + weight
+
+        # Calculate sector returns (weighted average)
+        for sector in sector_weights:
+            if sector_weights[sector] > 0:
+                sector_returns[sector] = sector_weighted_returns[sector] / sector_weights[sector]
 
         return sector_returns
 
