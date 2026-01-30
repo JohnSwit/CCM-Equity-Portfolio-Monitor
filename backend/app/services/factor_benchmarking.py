@@ -200,28 +200,32 @@ class FactorBenchmarkingService:
         return ranges
 
     def _cache_series_data(self, symbol: str, source: str, df: pd.DataFrame):
-        """Cache fetched data to database"""
-        for _, row in df.iterrows():
-            existing = self.db.query(FactorProxySeries).filter(
-                and_(
-                    FactorProxySeries.symbol == symbol,
-                    FactorProxySeries.source == source,
-                    FactorProxySeries.date == row['date']
-                )
-            ).first()
+        """Cache fetched data to database with proper error handling"""
+        try:
+            for _, row in df.iterrows():
+                existing = self.db.query(FactorProxySeries).filter(
+                    and_(
+                        FactorProxySeries.symbol == symbol,
+                        FactorProxySeries.source == source,
+                        FactorProxySeries.date == row['date']
+                    )
+                ).first()
 
-            if not existing:
-                entry = FactorProxySeries(
-                    symbol=symbol,
-                    source=FactorDataSource(source),
-                    date=row['date'],
-                    close=row.get('close'),
-                    value=row.get('value'),
-                    daily_return=row.get('daily_return')
-                )
-                self.db.add(entry)
+                if not existing:
+                    entry = FactorProxySeries(
+                        symbol=symbol,
+                        source=FactorDataSource(source),
+                        date=row['date'],
+                        close=row.get('close'),
+                        value=row.get('value'),
+                        daily_return=row.get('daily_return')
+                    )
+                    self.db.add(entry)
 
-        self.db.commit()
+            self.db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to cache data for {symbol}: {e}")
+            self.db.rollback()
 
     def refresh_factor_data(
         self,
@@ -248,16 +252,24 @@ class FactorBenchmarkingService:
 
         for symbol in all_symbols:
             source = 'stooq'
-            missing_ranges = self._get_missing_date_ranges(symbol, source, start_date, end_date)
+            try:
+                missing_ranges = self._get_missing_date_ranges(symbol, source, start_date, end_date)
 
-            rows_fetched = 0
-            for range_start, range_end in missing_ranges:
-                df, used_source = self.data_manager.fetch_etf_data(symbol, range_start, range_end)
-                if df is not None and len(df) > 0:
-                    self._cache_series_data(symbol, used_source, df)
-                    rows_fetched += len(df)
+                rows_fetched = 0
+                for range_start, range_end in missing_ranges:
+                    try:
+                        df, used_source = self.data_manager.fetch_etf_data(symbol, range_start, range_end)
+                        if df is not None and len(df) > 0:
+                            self._cache_series_data(symbol, used_source, df)
+                            rows_fetched += len(df)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch data for {symbol} ({range_start} to {range_end}): {e}")
+                        continue
 
-            results[symbol] = rows_fetched
+                results[symbol] = rows_fetched
+            except Exception as e:
+                logger.warning(f"Error processing {symbol}: {e}")
+                results[symbol] = 0
 
         return results
 
@@ -513,17 +525,33 @@ class FactorBenchmarkingService:
 
             # Confidence intervals (95%)
             conf_int = results.conf_int(alpha=0.05)
-            beta_ci = {
-                factor: {
-                    'lower': float(conf_int.iloc[i+1, 0]),
-                    'upper': float(conf_int.iloc[i+1, 1])
+            # Handle both DataFrame and numpy array returns
+            if hasattr(conf_int, 'iloc'):
+                # DataFrame case
+                beta_ci = {
+                    factor: {
+                        'lower': float(conf_int.iloc[i+1, 0]),
+                        'upper': float(conf_int.iloc[i+1, 1])
+                    }
+                    for i, factor in enumerate(factor_names)
                 }
-                for i, factor in enumerate(factor_names)
-            }
-            alpha_ci = {
-                'lower': float(conf_int.iloc[0, 0]) * 252,
-                'upper': float(conf_int.iloc[0, 1]) * 252
-            }
+                alpha_ci = {
+                    'lower': float(conf_int.iloc[0, 0]) * 252,
+                    'upper': float(conf_int.iloc[0, 1]) * 252
+                }
+            else:
+                # Numpy array case
+                beta_ci = {
+                    factor: {
+                        'lower': float(conf_int[i+1, 0]),
+                        'upper': float(conf_int[i+1, 1])
+                    }
+                    for i, factor in enumerate(factor_names)
+                }
+                alpha_ci = {
+                    'lower': float(conf_int[0, 0]) * 252,
+                    'upper': float(conf_int[0, 1]) * 252
+                }
 
             # Standard errors
             std_errors = {

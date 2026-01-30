@@ -529,6 +529,8 @@ def get_factor_benchmarking(
         # Log but continue - we might have cached data
         import logging
         logging.warning(f"Failed to refresh factor data: {e}")
+        # Rollback the session to clear any pending errors
+        db.rollback()
 
     # Compute attribution with new parameters
     result = service.compute_attribution(
