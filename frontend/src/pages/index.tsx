@@ -7,8 +7,6 @@ import { format, subMonths, startOfYear } from 'date-fns';
 
 // Time period options for the performance chart
 type ChartPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
-// Factor analysis period options
-type FactorPeriod = '1M' | '3M' | '6M' | 'YTD' | '1Y' | 'ALL';
 
 // Color palette for pie charts
 const CHART_COLORS = [
@@ -32,9 +30,6 @@ export default function Dashboard() {
   const [chartData, setChartData] = useState<any[]>([]);
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
-  const [factorBenchmarking, setFactorBenchmarking] = useState<any>(null);
-  const [factorPeriod, setFactorPeriod] = useState<FactorPeriod>('1Y');
-  const [factorLoading, setFactorLoading] = useState(false);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
@@ -100,35 +95,12 @@ export default function Dashboard() {
       setRisk(riskData);
       setUnpriced(unpricedData);
       setSectorData(sectorWeights);
-
-      // Load factor benchmarking data separately
-      loadFactorBenchmarking(selectedView.view_type, selectedView.view_id, factorPeriod);
     } catch (error) {
       console.error('Failed to load view data:', error);
     } finally {
       setLoading(false);
     }
   };
-
-  const loadFactorBenchmarking = async (viewType: string, viewId: number, period: string) => {
-    setFactorLoading(true);
-    try {
-      const data = await api.getFactorBenchmarking(viewType, viewId, 'US_CORE', period);
-      setFactorBenchmarking(data);
-    } catch (error) {
-      console.error('Failed to load factor benchmarking:', error);
-      setFactorBenchmarking(null);
-    } finally {
-      setFactorLoading(false);
-    }
-  };
-
-  // Reload factor data when period changes
-  useEffect(() => {
-    if (selectedView) {
-      loadFactorBenchmarking(selectedView.view_type, selectedView.view_id, factorPeriod);
-    }
-  }, [factorPeriod]);
 
   const mergeAndNormalizeTWR = () => {
     // Create a map of date to data point
@@ -734,147 +706,6 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-
-            {/* Factor Benchmarking + Attribution */}
-            <div className="card">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-semibold">Factor Benchmarking + Attribution</h3>
-                <div className="flex gap-1">
-                  {(['1M', '3M', '6M', 'YTD', '1Y', 'ALL'] as FactorPeriod[]).map((period) => (
-                    <button
-                      key={period}
-                      onClick={() => setFactorPeriod(period)}
-                      className={`px-3 py-1 text-sm rounded ${
-                        factorPeriod === period
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      {period === 'ALL' ? 'All Time' : period}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {factorLoading ? (
-                <div className="py-8 text-center text-gray-500">Loading factor analysis...</div>
-              ) : factorBenchmarking ? (
-                <>
-                  {/* Summary Stats */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Total Return</div>
-                      <div className={`text-xl font-bold ${factorBenchmarking.total_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {factorBenchmarking.total_return_pct?.toFixed(2)}%
-                      </div>
-                    </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Alpha (Ann.)</div>
-                      <div className={`text-xl font-bold ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
-                      </div>
-                    </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">R-Squared</div>
-                      <div className="text-xl font-bold text-gray-800">
-                        {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%
-                      </div>
-                    </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Residual Vol</div>
-                      <div className="text-xl font-bold text-gray-800">
-                        {factorBenchmarking.regression?.residual_std?.toFixed(2)}%
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Factor Exposures and Attribution Table */}
-                  <div className="overflow-x-auto">
-                    <table className="table w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-200">
-                          <th className="text-left py-2 px-3">Factor</th>
-                          <th className="text-right py-2 px-3">Beta</th>
-                          <th className="text-right py-2 px-3">Factor Return</th>
-                          <th className="text-right py-2 px-3">Contribution</th>
-                          <th className="text-right py-2 px-3">% of Total</th>
-                          <th className="text-right py-2 px-3">t-Stat</th>
-                          <th className="text-right py-2 px-3">Significance</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Object.entries(factorBenchmarking.factor_contributions || {}).map(([key, factor]: [string, any]) => (
-                          <tr key={key} className="border-b border-gray-100 hover:bg-gray-50">
-                            <td className="py-2 px-3 font-medium">{factor.name}</td>
-                            <td className="text-right py-2 px-3">{factor.beta?.toFixed(3)}</td>
-                            <td className={`text-right py-2 px-3 ${(factor.factor_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {factor.factor_return?.toFixed(2)}%
-                            </td>
-                            <td className={`text-right py-2 px-3 ${(factor.contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {factor.contribution?.toFixed(2)}%
-                            </td>
-                            <td className="text-right py-2 px-3">
-                              {factor.contribution_pct?.toFixed(1)}%
-                            </td>
-                            <td className="text-right py-2 px-3">{factor.t_stat?.toFixed(2)}</td>
-                            <td className="text-right py-2 px-3">
-                              {factor.p_value < 0.01 ? (
-                                <span className="text-green-600 font-semibold">***</span>
-                              ) : factor.p_value < 0.05 ? (
-                                <span className="text-green-600">**</span>
-                              ) : factor.p_value < 0.10 ? (
-                                <span className="text-yellow-600">*</span>
-                              ) : (
-                                <span className="text-gray-400">-</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                        {/* Alpha row */}
-                        <tr className="border-b border-gray-100 bg-indigo-50">
-                          <td className="py-2 px-3 font-medium">Alpha</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className={`text-right py-2 px-3 ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {factorBenchmarking.alpha_contribution?.toFixed(2)}%
-                          </td>
-                          <td className="text-right py-2 px-3">
-                            {factorBenchmarking.alpha_contribution_pct?.toFixed(1)}%
-                          </td>
-                          <td className="text-right py-2 px-3" colSpan={2}>-</td>
-                        </tr>
-                        {/* Residual row */}
-                        <tr className="border-b border-gray-100 bg-gray-50">
-                          <td className="py-2 px-3 font-medium">Residual (Unexplained)</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className={`text-right py-2 px-3 ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {factorBenchmarking.residual_contribution?.toFixed(2)}%
-                          </td>
-                          <td className="text-right py-2 px-3">
-                            {factorBenchmarking.residual_contribution_pct?.toFixed(1)}%
-                          </td>
-                          <td className="text-right py-2 px-3" colSpan={2}>-</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Period info */}
-                  <div className="mt-4 pt-4 border-t text-sm text-gray-500">
-                    <span>Analysis period: {factorBenchmarking.period?.start_date} to {factorBenchmarking.period?.end_date}</span>
-                    <span className="mx-2">|</span>
-                    <span>{factorBenchmarking.period?.trading_days || factorBenchmarking.regression?.n_observations} trading days</span>
-                    <span className="mx-2">|</span>
-                    <span>Durbin-Watson: {factorBenchmarking.regression?.durbin_watson?.toFixed(2)}</span>
-                  </div>
-                </>
-              ) : (
-                <div className="py-8 text-center text-gray-500">
-                  Factor analysis not available. Ensure sufficient return data exists.
-                </div>
-              )}
-            </div>
 
             {/* Unpriced Instruments */}
             {unpriced.length > 0 && (
