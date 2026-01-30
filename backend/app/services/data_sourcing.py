@@ -482,17 +482,23 @@ class BenchmarkService:
                 logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
                 logger.info(f"SPY DataFrame rows: {len(df)}")
 
-                # Expecting columns: Ticker, Name, Weight, etc.
+                # Expecting columns: Ticker, Name, Weight, Sector, etc.
                 holdings = []
                 for _, row in df.iterrows():
                     ticker = row.get("Ticker") or row.get("Symbol")
                     weight = row.get("Weight") or row.get("% Weight")
+                    # Get sector directly from SPY Excel file
+                    sector = row.get("Sector")
 
                     if pd.notna(ticker) and pd.notna(weight):
-                        holdings.append({
+                        holding_data = {
                             "ticker": TickerNormalizer.normalize(str(ticker)),
                             "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
-                        })
+                        }
+                        # Include sector if available from the SPY file
+                        if pd.notna(sector) and str(sector).strip():
+                            holding_data["sector"] = str(sector).strip()
+                        holdings.append(holding_data)
 
                 logger.info(f"Parsed {len(holdings)} S&P 500 holdings from SPY")
 
@@ -508,7 +514,13 @@ class BenchmarkService:
     def _save_benchmark_holdings(
         self, benchmark_code: str, holdings: List[Dict[str, Any]], source_url: str
     ) -> Dict[str, Any]:
-        """Save benchmark holdings to database with sector enrichment"""
+        """Save benchmark holdings to database with sector enrichment.
+
+        Sector sources (in order of priority):
+        1. Sector from the source file (e.g., SPY Excel 'Sector' column)
+        2. Sector from SectorClassification table in database
+        3. Sector from static mapping (STATIC_MAPPING)
+        """
         try:
             as_of = date.today()
 
@@ -524,7 +536,7 @@ class BenchmarkService:
                 BenchmarkConstituent.as_of_date == as_of
             ).delete()
 
-            # Build lookup of symbol -> sector from SectorClassification
+            # Build lookup of symbol -> sector from SectorClassification (fallback)
             sector_lookup = {}
             classifications = self.db.query(
                 Security.symbol,
@@ -538,16 +550,33 @@ class BenchmarkService:
                 # Use sector if available, otherwise use gics_sector
                 sector_lookup[c.symbol] = c.sector or c.gics_sector
 
-            logger.info(f"Loaded {len(sector_lookup)} sector classifications for benchmark enrichment")
+            logger.info(f"Loaded {len(sector_lookup)} sector classifications for fallback enrichment")
 
             # Insert new holdings with sector data
             classified_count = 0
+            source_file_count = 0
+            db_count = 0
+            static_count = 0
+
             for holding in holdings:
                 ticker = holding["ticker"]
-                # Look up sector: first from DB, then from STATIC_MAPPING
-                sector = sector_lookup.get(ticker)
+
+                # Priority 1: Use sector from source file (e.g., SPY Excel)
+                sector = holding.get("sector")
+                if sector:
+                    source_file_count += 1
+
+                # Priority 2: Look up from DB
+                if not sector:
+                    sector = sector_lookup.get(ticker)
+                    if sector:
+                        db_count += 1
+
+                # Priority 3: Fall back to STATIC_MAPPING
                 if not sector and ticker in ClassificationService.STATIC_MAPPING:
                     sector = ClassificationService.STATIC_MAPPING[ticker].get("sector")
+                    if sector:
+                        static_count += 1
 
                 if sector:
                     classified_count += 1
@@ -556,7 +585,7 @@ class BenchmarkService:
                     benchmark_code=benchmark_code,
                     symbol=ticker,
                     weight=holding["weight"],
-                    sector=sector,  # Now populated with sector data
+                    sector=sector,
                     as_of_date=as_of,
                     source_url=source_url,
                 )
@@ -565,11 +594,18 @@ class BenchmarkService:
             self.db.commit()
 
             logger.info(f"Saved {len(holdings)} holdings for {benchmark_code} ({classified_count} with sectors)")
+            logger.info(f"  Sector sources: {source_file_count} from file, {db_count} from DB, {static_count} from static mapping")
+
             return {
                 "success": True,
                 "benchmark": benchmark_code,
                 "count": len(holdings),
                 "classified_count": classified_count,
+                "sector_sources": {
+                    "source_file": source_file_count,
+                    "database": db_count,
+                    "static_mapping": static_count
+                },
                 "as_of_date": as_of.isoformat(),
             }
 

@@ -199,7 +199,10 @@ class MarketDataProvider:
             fetch_end = end_date
 
             if fetch_start > fetch_end:
+                logger.debug(f"No new dates to fetch for {symbol} (latest: {latest_price})")
                 return 0
+
+        logger.info(f"Fetching prices for {symbol}: {fetch_start} to {fetch_end}")
 
         # Fetch only missing dates from Tiingo
         df = self.fetch_tiingo_prices(symbol, fetch_start, fetch_end)
@@ -210,8 +213,12 @@ class MarketDataProvider:
             source = 'yfinance'
 
         if df is None or df.empty:
-            if fetch_start == start_date:
-                logger.warning(f"No prices fetched for {symbol}")
+            # Only warn if we're missing historical data, not just today's data
+            today = date.today()
+            if fetch_start < today:
+                logger.warning(f"No prices fetched for {symbol} ({fetch_start} to {fetch_end})")
+            else:
+                logger.debug(f"No new market data yet for {symbol} (requested: {fetch_start})")
             return 0
 
         # Get existing dates to avoid duplicates (in case of overlaps)
