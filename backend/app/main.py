@@ -1,8 +1,9 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from app.core.config import settings
-from app.core.database import init_db, get_db
+from app.core.database import init_db, get_db, engine
 from app.core.security import get_password_hash
 from app.models import User
 from app.api import auth, imports, views, analytics, baskets, jobs, transactions, portfolio_stats, data_management
@@ -48,6 +49,30 @@ app.include_router(portfolio_stats.router)
 app.include_router(data_management.router)
 
 
+def ensure_tiingo_enum():
+    """Ensure TIINGO is added to factordatasource enum in PostgreSQL."""
+    try:
+        with engine.connect() as conn:
+            # Check if enum type exists and get current values
+            result = conn.execute(text("""
+                SELECT enumlabel FROM pg_enum
+                JOIN pg_type ON pg_enum.enumtypid = pg_type.oid
+                WHERE pg_type.typname = 'factordatasource'
+            """))
+            existing_values = [row[0] for row in result.fetchall()]
+            logger.info(f"Existing factordatasource enum values: {existing_values}")
+
+            if 'tiingo' not in existing_values:
+                # Add tiingo to the enum
+                conn.execute(text("ALTER TYPE factordatasource ADD VALUE IF NOT EXISTS 'tiingo'"))
+                conn.commit()
+                logger.info("Added 'tiingo' to factordatasource enum")
+            else:
+                logger.info("'tiingo' already exists in factordatasource enum")
+    except Exception as e:
+        logger.warning(f"Could not update factordatasource enum: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and create default admin user"""
@@ -57,6 +82,9 @@ async def startup_event():
 
     # Create tables
     init_db()
+
+    # Ensure TIINGO enum value exists (explicit call with logging)
+    ensure_tiingo_enum()
 
     # Create default admin user if not exists
     db = next(get_db())
