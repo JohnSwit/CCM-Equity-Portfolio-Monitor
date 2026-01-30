@@ -147,7 +147,7 @@ export default function Dashboard() {
     // Find the first date where portfolio has data (minimum requirement)
     const firstPortfolioDate = merged.find((point: any) =>
       point.Portfolio !== undefined && point.Portfolio !== null
-    );
+    ) as { date: string; [key: string]: any } | undefined;
 
     if (!firstPortfolioDate) {
       setChartData([]);
@@ -162,7 +162,7 @@ export default function Dashboard() {
         point.date >= firstPortfolioDate.date &&
         point[s] !== undefined &&
         point[s] !== null
-      );
+      ) as { [key: string]: any } | undefined;
       baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
     });
 
@@ -248,6 +248,50 @@ export default function Dashboard() {
     // Convert index value to percentage return
     // e.g., 1.05 becomes +5.00%
     return ((value - 1) * 100).toFixed(2) + '%';
+  };
+
+  const formatCurrencyWithDecimals = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const formatGainPercent = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-';
+    const pct = (value * 100).toFixed(2);
+    return (value >= 0 ? '+' : '') + pct + '%';
+  };
+
+  const formatGainCurrency = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-';
+    const formatted = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(Math.abs(value));
+    return (value >= 0 ? '+' : '-') + formatted;
+  };
+
+  const formatSharesDisplay = (value: number) => {
+    if (value >= 1000) {
+      return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(value);
+    }
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const getGainColorClass = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'text-gray-500';
+    return value >= 0 ? 'text-green-600' : 'text-red-600';
   };
 
   const viewOptions = views.map((v) => ({
@@ -362,7 +406,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="border-l-4 border-blue-500 pl-4">
                   <div className="text-sm text-gray-600">1 Month</div>
                   <div className="text-lg font-semibold">
@@ -385,6 +429,12 @@ export default function Dashboard() {
                   <div className="text-sm text-gray-600">1 Year</div>
                   <div className="text-lg font-semibold">
                     {summary.return_1y ? formatPercent(summary.return_1y) : 'N/A'}
+                  </div>
+                </div>
+                <div className="border-l-4 border-teal-500 pl-4">
+                  <div className="text-sm text-gray-600">All Time</div>
+                  <div className="text-lg font-semibold">
+                    {summary.return_inception != null ? formatPercent(summary.return_inception) : 'N/A'}
                   </div>
                 </div>
               </div>
@@ -568,34 +618,59 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
 
-            {/* Holdings */}
+            {/* Portfolio Overview */}
             {holdings && (
               <div className="card">
-                <h3 className="text-lg font-semibold mb-4">Top Holdings</h3>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th>Name</th>
-                      <th className="text-right">Shares</th>
-                      <th className="text-right">Price</th>
-                      <th className="text-right">Market Value</th>
-                      <th className="text-right">Weight</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holdings.holdings.slice(0, 10).map((h: any) => (
-                      <tr key={h.symbol}>
-                        <td className="font-semibold">{h.symbol}</td>
-                        <td>{h.asset_name}</td>
-                        <td className="text-right">{h.shares.toFixed(2)}</td>
-                        <td className="text-right">{formatCurrency(h.price)}</td>
-                        <td className="text-right">{formatCurrency(h.market_value)}</td>
-                        <td className="text-right">{formatPercent(h.weight)}</td>
+                <h3 className="text-lg font-semibold mb-4">Portfolio Overview</h3>
+                <div className="overflow-x-auto">
+                  <table className="table w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-2 px-3">Ticker</th>
+                        <th className="text-right py-2 px-3">Allocation</th>
+                        <th className="text-right py-2 px-3">Last</th>
+                        <th className="text-right py-2 px-3">Avg Cost</th>
+                        <th className="text-right py-2 px-3">1D Gain %</th>
+                        <th className="text-right py-2 px-3">Unr. Gain %</th>
+                        <th className="text-right py-2 px-3">1D Gain</th>
+                        <th className="text-right py-2 px-3">Unr. Gain</th>
+                        <th className="text-right py-2 px-3">Market Value</th>
+                        <th className="text-right py-2 px-3">Shares</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {holdings.holdings.map((h: any) => (
+                        <tr key={h.symbol} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-3">
+                            <div className="font-semibold">{h.symbol}</div>
+                            <div className="text-xs text-gray-500 truncate max-w-[150px]" title={h.asset_name}>
+                              {h.asset_name}
+                            </div>
+                          </td>
+                          <td className="text-right py-2 px-3">{formatPercent(h.weight)}</td>
+                          <td className="text-right py-2 px-3">{formatCurrencyWithDecimals(h.price)}</td>
+                          <td className="text-right py-2 px-3">
+                            {h.avg_cost != null ? formatCurrencyWithDecimals(h.avg_cost) : '-'}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.gain_1d_pct)}`}>
+                            {formatGainPercent(h.gain_1d_pct)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.unr_gain_pct)}`}>
+                            {formatGainPercent(h.unr_gain_pct)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.gain_1d)}`}>
+                            {formatGainCurrency(h.gain_1d)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.unr_gain)}`}>
+                            {formatGainCurrency(h.unr_gain)}
+                          </td>
+                          <td className="text-right py-2 px-3">{formatCurrency(h.market_value)}</td>
+                          <td className="text-right py-2 px-3">{formatSharesDisplay(h.shares)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 

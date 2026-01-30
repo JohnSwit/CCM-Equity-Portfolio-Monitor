@@ -163,6 +163,11 @@ class HoldingRow(BaseModel):
     price: float
     market_value: float
     weight: float
+    avg_cost: Optional[float] = None
+    gain_1d_pct: Optional[float] = None
+    gain_1d: Optional[float] = None
+    unr_gain_pct: Optional[float] = None
+    unr_gain: Optional[float] = None
 
 
 class HoldingsResponse(BaseModel):
