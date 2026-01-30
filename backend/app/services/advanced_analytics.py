@@ -928,6 +928,9 @@ class AdvancedFactorAnalyzer:
             'RMW': 'Profitability', 'CMA': 'Investment', 'Mom': 'Momentum'
         }
 
+        if len(factor_cols) == 0:
+            return {'error': 'No factor columns available in data'}
+
         y = merged['return'].values
         if 'RF' in merged.columns:
             y = y - merged['RF'].values
@@ -948,8 +951,14 @@ class AdvancedFactorAnalyzer:
 
         # Factor variance contribution
         # Var(factor component) = beta^2 * Var(factor) + covariance terms
+        # Handle case of single factor (returns scalar) vs multiple factors (returns matrix)
         factor_cov = np.cov(X.T)
-        factor_variance = betas @ factor_cov @ betas
+        if factor_cov.ndim == 0:
+            # Single factor case: cov is a scalar
+            factor_variance = float(betas[0] ** 2 * factor_cov)
+        else:
+            # Multiple factors case: cov is a matrix
+            factor_variance = float(betas @ factor_cov @ betas)
 
         # Specific (residual) variance
         specific_variance = np.var(residuals)
