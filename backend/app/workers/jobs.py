@@ -16,9 +16,80 @@ from app.models import (
     PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
     BenchmarkMetric, FactorRegression
 )
+from app.models.sector_models import BenchmarkConstituent, SectorClassification
+from sqlalchemy import func
+from datetime import date, datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Cache freshness threshold in hours - skip refresh if data is newer than this
+DATA_FRESHNESS_HOURS = 12
+
+
+def is_benchmark_data_fresh(db: Session, benchmark_code: str = "SP500") -> bool:
+    """
+    Check if benchmark constituent data is fresh AND has adequate data.
+    Returns True if data is recent AND has enough constituents.
+    """
+    latest_update = db.query(func.max(BenchmarkConstituent.updated_at)).filter(
+        BenchmarkConstituent.benchmark_code == benchmark_code
+    ).scalar()
+
+    if not latest_update:
+        logger.info(f"No benchmark data found for {benchmark_code} - needs refresh")
+        return False
+
+    age_hours = (datetime.utcnow() - latest_update).total_seconds() / 3600
+
+    if age_hours >= DATA_FRESHNESS_HOURS:
+        logger.info(f"Benchmark {benchmark_code} data is stale ({age_hours:.1f}h old) - will refresh")
+        return False
+
+    # Check we have adequate constituent count (S&P 500 should have ~500)
+    constituent_count = db.query(func.count(BenchmarkConstituent.id)).filter(
+        BenchmarkConstituent.benchmark_code == benchmark_code
+    ).scalar() or 0
+
+    if constituent_count < 400:  # S&P 500 should have ~500
+        logger.info(f"Benchmark {benchmark_code} has too few constituents ({constituent_count}) - will refresh")
+        return False
+
+    logger.info(f"Benchmark {benchmark_code} data is fresh ({age_hours:.1f}h old, {constituent_count} constituents) - skipping refresh")
+    return True
+
+
+def is_classification_data_fresh(db: Session) -> bool:
+    """
+    Check if classification data is fresh AND complete.
+    Returns True only if data is recent AND covers most securities.
+    """
+    from app.models import Security
+
+    latest_update = db.query(func.max(SectorClassification.updated_at)).scalar()
+
+    if not latest_update:
+        logger.info("No classification data found - needs refresh")
+        return False
+
+    age_hours = (datetime.utcnow() - latest_update).total_seconds() / 3600
+
+    if age_hours >= DATA_FRESHNESS_HOURS:
+        logger.info(f"Classification data is stale ({age_hours:.1f}h old) - will refresh")
+        return False
+
+    # Also check coverage - ensure we have classifications for most securities
+    total_securities = db.query(func.count(Security.id)).scalar() or 0
+    classified_securities = db.query(func.count(SectorClassification.id)).scalar() or 0
+
+    if total_securities > 0:
+        coverage = classified_securities / total_securities
+        if coverage < 0.5:  # Less than 50% coverage
+            logger.info(f"Classification coverage too low ({coverage:.1%}) - will refresh")
+            return False
+
+    logger.info(f"Classification data is fresh ({age_hours:.1f}h old, {classified_securities}/{total_securities} securities) - skipping refresh")
+    return True
 
 
 def clear_analytics_for_accounts_without_transactions(db: Session):
@@ -277,22 +348,26 @@ async def recompute_analytics_job(db: Session = None):
         clear_group_and_firm_analytics(db)
 
         # 0.5. Refresh benchmark constituents (SP500 holdings for sector comparison)
-        logger.info("Refreshing benchmark constituents (SP500)...")
-        try:
-            benchmark_service = BenchmarkService(db)
-            benchmark_refresh_result = await benchmark_service.refresh_benchmark("SP500")
-            logger.info(f"Benchmark constituents refresh: {benchmark_refresh_result}")
-        except Exception as e:
-            logger.error(f"Failed to refresh benchmark constituents: {e}")
+        # Only refresh if data is stale (older than DATA_FRESHNESS_HOURS)
+        if not is_benchmark_data_fresh(db, "SP500"):
+            logger.info("Refreshing benchmark constituents (SP500)...")
+            try:
+                benchmark_service = BenchmarkService(db)
+                benchmark_refresh_result = await benchmark_service.refresh_benchmark("SP500")
+                logger.info(f"Benchmark constituents refresh: {benchmark_refresh_result}")
+            except Exception as e:
+                logger.error(f"Failed to refresh benchmark constituents: {e}")
 
         # 0.6. Refresh security classifications
-        logger.info("Refreshing security classifications...")
-        try:
-            classification_service = ClassificationService(db)
-            classification_result = await classification_service.refresh_all_classifications()
-            logger.info(f"Classifications refresh: {classification_result}")
-        except Exception as e:
-            logger.error(f"Failed to refresh classifications: {e}")
+        # Only refresh if data is stale (older than DATA_FRESHNESS_HOURS)
+        if not is_classification_data_fresh(db):
+            logger.info("Refreshing security classifications...")
+            try:
+                classification_service = ClassificationService(db)
+                classification_result = await classification_service.refresh_all_classifications()
+                logger.info(f"Classifications refresh: {classification_result}")
+            except Exception as e:
+                logger.error(f"Failed to refresh classifications: {e}")
 
         # 1. Build positions
         logger.info("Building positions...")
