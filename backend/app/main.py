@@ -50,7 +50,11 @@ app.include_router(data_management.router)
 
 
 def ensure_tiingo_enum():
-    """Ensure TIINGO is added to factordatasource enum in PostgreSQL."""
+    """Ensure TIINGO is added to factordatasource enum in PostgreSQL.
+
+    Note: The PostgreSQL enum uses UPPERCASE values (STOOQ, FRED, YFINANCE, ALPHAVANTAGE)
+    so we must add TIINGO in uppercase to match.
+    """
     try:
         with engine.connect() as conn:
             # Check if enum type exists and get current values
@@ -62,13 +66,14 @@ def ensure_tiingo_enum():
             existing_values = [row[0] for row in result.fetchall()]
             logger.info(f"Existing factordatasource enum values: {existing_values}")
 
-            if 'tiingo' not in existing_values:
-                # Add tiingo to the enum
-                conn.execute(text("ALTER TYPE factordatasource ADD VALUE IF NOT EXISTS 'tiingo'"))
+            # Check for both cases - the enum needs UPPERCASE TIINGO
+            if 'TIINGO' not in existing_values:
+                # Add TIINGO to the enum (uppercase to match existing pattern)
+                conn.execute(text("ALTER TYPE factordatasource ADD VALUE IF NOT EXISTS 'TIINGO'"))
                 conn.commit()
-                logger.info("Added 'tiingo' to factordatasource enum")
+                logger.info("Added 'TIINGO' to factordatasource enum")
             else:
-                logger.info("'tiingo' already exists in factordatasource enum")
+                logger.info("'TIINGO' already exists in factordatasource enum")
     except Exception as e:
         logger.warning(f"Could not update factordatasource enum: {e}")
 

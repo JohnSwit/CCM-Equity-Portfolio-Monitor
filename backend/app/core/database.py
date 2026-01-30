@@ -34,7 +34,8 @@ def update_enum_values():
     """
     enum_updates = [
         # (enum_type_name, new_value)
-        ("factordatasource", "tiingo"),
+        # Note: PostgreSQL enum uses UPPERCASE values (STOOQ, FRED, etc.)
+        ("factordatasource", "TIINGO"),
     ]
 
     with engine.connect() as conn:
