@@ -444,6 +444,13 @@ class APIClient {
     });
     return response.data;
   }
+
+  async getFactorDataStatus(modelCode: string = 'US_CORE', period: string = '1Y') {
+    const response = await this.client.get('/analytics/factor-data-status', {
+      params: { model_code: modelCode, period },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();
