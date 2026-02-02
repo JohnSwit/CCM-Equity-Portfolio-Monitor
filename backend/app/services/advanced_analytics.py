@@ -307,6 +307,17 @@ class SectorAnalyzer:
                 'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
             }
 
+        # Debug: log what sectors are in the database
+        sectors_from_db = set(c.sector for c in benchmark_constituents if c.sector)
+        no_sector_count = sum(1 for c in benchmark_constituents if not c.sector)
+        logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, "
+                    f"{len(sectors_from_db)} unique sectors, {no_sector_count} without sector")
+        if sectors_from_db:
+            logger.info(f"  Sectors from DB: {sorted(sectors_from_db)}")
+        # Sample constituents
+        for c in benchmark_constituents[:5]:
+            logger.info(f"  Sample: {c.symbol} weight={c.weight} sector='{c.sector}'")
+
         # Build a fallback sector lookup from SectorClassification for symbols without sectors
         sector_lookup = {}
         classifications = self.db.query(
