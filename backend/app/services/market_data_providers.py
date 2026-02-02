@@ -290,16 +290,18 @@ class TiingoFactorProvider(MarketDataProvider):
     """
     Provider using Tiingo API for factor ETF data.
     Primary provider for US ETFs with reliable, enterprise-grade data.
-    Uses get_dataframe() for consistent behavior with MarketDataProvider.
+    Uses direct HTTP requests for better error handling on empty responses.
     """
+
+    BASE_URL = "https://api.tiingo.com/tiingo/daily"
 
     def __init__(self, api_key: Optional[str] = None):
         self._api_key = api_key
-        self._client = None
+        self._session = None
         self._initialized = False
 
-    def _get_client(self):
-        if self._client is None:
+    def _get_session(self):
+        if self._session is None:
             if not self._api_key:
                 # Try to get from settings
                 try:
@@ -311,16 +313,16 @@ class TiingoFactorProvider(MarketDataProvider):
                     logger.warning(f"TiingoFactorProvider: Failed to get API key from settings: {e}")
 
             if self._api_key:
-                try:
-                    from tiingo import TiingoClient
-                    self._client = TiingoClient({'api_key': self._api_key, 'session': True})
-                    self._initialized = True
-                    logger.info("TiingoFactorProvider: Client initialized successfully")
-                except Exception as e:
-                    logger.error(f"TiingoFactorProvider: Failed to initialize client: {e}")
+                self._session = requests.Session()
+                self._session.headers.update({
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Token {self._api_key}'
+                })
+                self._initialized = True
+                logger.info("TiingoFactorProvider: Session initialized successfully")
             else:
                 logger.warning("TiingoFactorProvider: No API key available")
-        return self._client
+        return self._session
 
     def get_source_name(self) -> str:
         return "tiingo"
@@ -331,35 +333,37 @@ class TiingoFactorProvider(MarketDataProvider):
         start_date: date,
         end_date: date
     ) -> Optional[pd.DataFrame]:
-        """Fetch historical prices from Tiingo using get_dataframe()"""
-        client = self._get_client()
-        if client is None:
-            logger.warning(f"TiingoFactorProvider: Client not configured, cannot fetch {symbol}")
+        """Fetch historical prices from Tiingo using direct HTTP requests"""
+        session = self._get_session()
+        if session is None:
+            logger.warning(f"TiingoFactorProvider: Session not configured, cannot fetch {symbol}")
             return None
 
         try:
+            url = f"{self.BASE_URL}/{symbol}/prices"
+            params = {
+                'startDate': start_date.strftime('%Y-%m-%d'),
+                'endDate': end_date.strftime('%Y-%m-%d'),
+            }
+
             logger.info(f"TiingoFactorProvider: Fetching {symbol} from {start_date} to {end_date}")
 
-            # Use get_dataframe() which is more reliable than get_ticker_price()
-            df = client.get_dataframe(
-                symbol,
-                startDate=start_date.strftime('%Y-%m-%d'),
-                endDate=end_date.strftime('%Y-%m-%d'),
-                frequency='daily'
-            )
+            response = session.get(url, params=params, timeout=30)
+            response.raise_for_status()
 
-            if df is None or df.empty:
-                logger.warning(f"TiingoFactorProvider: No data returned for {symbol}")
+            data = response.json()
+
+            if not data:
+                logger.warning(f"TiingoFactorProvider: No data returned for {symbol} ({start_date} to {end_date})")
+                return None
+
+            df = pd.DataFrame(data)
+
+            if df.empty:
+                logger.warning(f"TiingoFactorProvider: Empty dataframe for {symbol}")
                 return None
 
             logger.info(f"TiingoFactorProvider: Raw response for {symbol}: {len(df)} rows, columns: {list(df.columns)}")
-
-            # Reset index (date is typically the index with get_dataframe)
-            df = df.reset_index()
-
-            # Handle column naming - get_dataframe returns 'date' as index
-            if 'date' not in df.columns and 'index' in df.columns:
-                df = df.rename(columns={'index': 'date'})
 
             # Use adjClose if available, otherwise close
             close_col = 'adjClose' if 'adjClose' in df.columns else 'close'
@@ -382,6 +386,12 @@ class TiingoFactorProvider(MarketDataProvider):
             logger.info(f"TiingoFactorProvider: Fetched {len(df)} rows for {symbol}")
             return df
 
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"TiingoFactorProvider: Symbol {symbol} not found (404)")
+            else:
+                logger.error(f"TiingoFactorProvider: HTTP error for {symbol}: {e}")
+            return None
         except Exception as e:
             logger.error(f"TiingoFactorProvider: Error fetching {symbol}: {e}", exc_info=True)
             return None
