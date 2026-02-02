@@ -222,6 +222,21 @@ export default function NewFundsPage() {
         };
       });
       setIndustries(normalized);
+
+      // Recalculate ALL ticker allocations based on new industry dollar allocations
+      if (tickerAllocations.length > 0) {
+        setTickerAllocations(tickerAllocations.map(alloc => {
+          const ind = normalized.find(i => i.industry === alloc.industry);
+          if (ind && !ind.excluded && alloc.pct_of_industry > 0) {
+            const dollarAmount = ind.dollar_allocation * (alloc.pct_of_industry / 100);
+            const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
+            return { ...alloc, dollar_amount: dollarAmount, shares };
+          } else if (ind?.excluded) {
+            return { ...alloc, dollar_amount: 0, shares: 0 };
+          }
+          return alloc;
+        }));
+      }
     } else {
       setIndustries(updated);
     }
@@ -281,28 +296,19 @@ export default function NewFundsPage() {
 
     setIndustries(updated);
 
-    // Also update ticker allocations for excluded industries
-    if (newExcluded) {
-      setTickerAllocations(tickerAllocations.map(alloc => {
-        if (alloc.industry === industryName) {
-          return { ...alloc, dollar_amount: 0, shares: 0 };
-        }
-        return alloc;
-      }));
-    } else {
-      // Recalculate ticker allocations for re-included industry
-      const industry = updated.find(i => i.industry === industryName);
-      if (industry) {
-        setTickerAllocations(tickerAllocations.map(alloc => {
-          if (alloc.industry === industryName && alloc.pct_of_industry > 0) {
-            const dollarAmount = industry.dollar_allocation * (alloc.pct_of_industry / 100);
-            const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
-            return { ...alloc, dollar_amount: dollarAmount, shares };
-          }
-          return alloc;
-        }));
+    // Recalculate ALL ticker allocations based on updated industry dollar allocations
+    // (not just the excluded one - other industries' allocations have changed due to renormalization)
+    setTickerAllocations(tickerAllocations.map(alloc => {
+      const industry = updated.find(i => i.industry === alloc.industry);
+      if (industry && !industry.excluded && alloc.pct_of_industry > 0) {
+        const dollarAmount = industry.dollar_allocation * (alloc.pct_of_industry / 100);
+        const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
+        return { ...alloc, dollar_amount: dollarAmount, shares };
+      } else if (industry?.excluded) {
+        return { ...alloc, dollar_amount: 0, shares: 0 };
       }
-    }
+      return alloc;
+    }));
   };
 
   // Add ticker to industry
