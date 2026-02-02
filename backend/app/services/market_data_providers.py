@@ -51,11 +51,21 @@ class TiingoProvider(MarketDataProviderBase):
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or settings.TIINGO_API_KEY
         if not self.api_key:
-            logger.warning("Tiingo API key not configured")
+            logger.warning("Tiingo API key not configured - set TIINGO_API_KEY environment variable")
+        else:
+            # Log that we have a key (first 4 chars only for security)
+            logger.info(f"Tiingo API key configured: {self.api_key[:4]}...")
 
     @property
     def name(self) -> str:
         return "tiingo"
+
+    def _get_headers(self) -> Dict[str, str]:
+        """Get headers for Tiingo API requests"""
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Token {self.api_key}"
+        }
 
     def _normalize_symbol(self, symbol: str) -> str:
         """Normalize symbol for Tiingo API"""
@@ -85,33 +95,38 @@ class TiingoProvider(MarketDataProviderBase):
             params = {
                 "startDate": start_date.strftime("%Y-%m-%d"),
                 "endDate": end_date.strftime("%Y-%m-%d"),
-                "token": self.api_key,
-                "format": "json"
             }
+            headers = self._get_headers()
+
+            logger.debug(f"Tiingo request: {url} params={params}")
 
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, params=params)
+                response = await client.get(url, params=params, headers=headers)
 
                 if response.status_code == 404:
-                    logger.warning(f"Tiingo: Symbol {normalized_symbol} not found")
+                    logger.warning(f"Tiingo: Symbol {normalized_symbol} not found (404)")
                     return None
 
                 if response.status_code == 401:
-                    logger.error("Tiingo API key is invalid")
+                    logger.error(f"Tiingo API key is invalid or expired (401)")
+                    return None
+
+                if response.status_code == 400:
+                    logger.warning(f"Tiingo bad request for {normalized_symbol}: {response.text}")
                     return None
 
                 response.raise_for_status()
                 data = response.json()
 
                 if not data:
-                    logger.info(f"Fetched 0 rows from Tiingo for {symbol}")
+                    logger.info(f"Tiingo returned empty data for {symbol}")
                     return None
 
                 # Convert to DataFrame
                 df = pd.DataFrame(data)
 
                 if df.empty or 'date' not in df.columns:
-                    logger.warning(f"No Tiingo data returned for {symbol}")
+                    logger.warning(f"No valid Tiingo data for {symbol}, columns: {df.columns.tolist() if not df.empty else 'empty'}")
                     return None
 
                 # Use adjClose if available (accounts for splits/dividends), else close
@@ -121,14 +136,14 @@ class TiingoProvider(MarketDataProviderBase):
                 df = df[['date', close_col]].rename(columns={close_col: 'close'})
                 df = df.dropna()
 
-                logger.info(f"Fetched {len(df)} rows from Tiingo for {symbol}")
+                logger.info(f"Tiingo: Fetched {len(df)} rows for {symbol}")
                 return df
 
         except httpx.HTTPStatusError as e:
-            logger.warning(f"Tiingo HTTP error for {symbol}: {e.response.status_code}")
+            logger.warning(f"Tiingo HTTP error for {symbol}: {e.response.status_code} - {e.response.text[:200]}")
             return None
         except Exception as e:
-            logger.warning(f"Tiingo fetch failed for {symbol}: {e}")
+            logger.warning(f"Tiingo fetch failed for {symbol}: {type(e).__name__}: {e}")
             return None
 
     async def fetch_multiple(
