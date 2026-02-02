@@ -6,7 +6,7 @@ import Select from 'react-select';
 
 // Time period options
 type TimePeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
-type BrinsonPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'custom';
+type BrinsonPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
 type FactorBenchPeriod = '1M' | '3M' | '6M' | 'YTD' | '1Y' | 'ALL';
 
 const getDateRange = (period: TimePeriod): { start: Date | null; end: Date } => {
@@ -36,9 +36,9 @@ const getDateRange = (period: TimePeriod): { start: Date | null; end: Date } => 
   return { start, end };
 };
 
-const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date; end: Date } => {
-  const range = getDateRange(period === 'custom' ? '3M' : period as TimePeriod);
-  return { start: range.start || subMonths(new Date(), 3), end: range.end };
+const getBrinsonDateRange = (period: BrinsonPeriod): { start: Date | null; end: Date } => {
+  const range = getDateRange(period as TimePeriod);
+  return { start: range.start, end: range.end };
 };
 
 export default function PortfolioStatisticsPage() {
@@ -243,7 +243,7 @@ export default function PortfolioStatisticsPage() {
         selectedView.view_type,
         selectedView.view_id,
         'SP500',
-        format(start, 'yyyy-MM-dd'),
+        start ? format(start, 'yyyy-MM-dd') : undefined,
         format(end, 'yyyy-MM-dd')
       );
       setBrinsonData(brinson);
@@ -799,7 +799,7 @@ export default function PortfolioStatisticsPage() {
                 <div className="flex justify-between items-start mb-4">
                   <h2 className="text-xl font-bold">Brinson Attribution Analysis</h2>
                   <div className="flex gap-1">
-                    {(['1M', '3M', 'YTD', '1Y'] as BrinsonPeriod[]).map((period) => (
+                    {(['1M', '3M', 'YTD', '1Y', 'ALL'] as BrinsonPeriod[]).map((period) => (
                       <button
                         key={period}
                         onClick={() => setBrinsonPeriod(period)}
@@ -809,7 +809,7 @@ export default function PortfolioStatisticsPage() {
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                         }`}
                       >
-                        {period}
+                        {period === 'ALL' ? 'All Time' : period}
                       </button>
                     ))}
                   </div>
