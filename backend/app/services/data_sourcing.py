@@ -482,25 +482,68 @@ class BenchmarkService:
                 logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
                 logger.info(f"SPY DataFrame rows: {len(df)}")
 
-                # Expecting columns: Ticker, Name, Weight, Sector, etc.
+                # Find the right columns - State Street uses various naming conventions
+                # Ticker/Symbol column
+                ticker_col = None
+                for col in ['Ticker', 'Symbol', 'ticker', 'symbol', 'TICKER', 'SYMBOL']:
+                    if col in df.columns:
+                        ticker_col = col
+                        break
+
+                # Weight column
+                weight_col = None
+                for col in ['Weight', 'Weight (%)', '% Weight', 'Percent', 'weight', 'WEIGHT']:
+                    if col in df.columns:
+                        weight_col = col
+                        break
+
+                # Sector column - State Street often uses "Sector" or "GICS Sector"
+                sector_col = None
+                for col in ['Sector', 'GICS Sector', 'GICS Sub-Industry', 'sector', 'SECTOR',
+                           'Industry', 'industry', 'INDUSTRY']:
+                    if col in df.columns:
+                        sector_col = col
+                        break
+
+                logger.info(f"Found columns: ticker={ticker_col}, weight={weight_col}, sector={sector_col}")
+
+                if not ticker_col or not weight_col:
+                    # Try to infer columns from position
+                    logger.warning("Could not find standard columns, using first columns")
+                    cols = df.columns.tolist()
+                    ticker_col = cols[0] if len(cols) > 0 else None
+                    weight_col = cols[2] if len(cols) > 2 else None  # Usually Name is col 1
+
                 holdings = []
                 for _, row in df.iterrows():
-                    ticker = row.get("Ticker") or row.get("Symbol")
-                    weight = row.get("Weight") or row.get("% Weight")
-                    # Get sector directly from SPY Excel file
-                    sector = row.get("Sector")
+                    ticker = row.get(ticker_col) if ticker_col else None
+                    weight = row.get(weight_col) if weight_col else None
+                    sector = row.get(sector_col) if sector_col else None
 
                     if pd.notna(ticker) and pd.notna(weight):
+                        # Normalize weight - might be decimal or percentage
+                        weight_val = float(weight) if isinstance(weight, (int, float)) else 0.0
+                        if isinstance(weight, str):
+                            weight_val = float(weight.strip('%').strip()) / 100.0 if '%' in weight else float(weight)
+
+                        # Normalize sector name
+                        sector_val = None
+                        if pd.notna(sector) and str(sector).strip():
+                            sector_val = self._normalize_gics_sector(str(sector).strip())
+
                         holding_data = {
                             "ticker": TickerNormalizer.normalize(str(ticker)),
-                            "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
+                            "weight": weight_val,
                         }
-                        # Include sector if available from the SPY file
-                        if pd.notna(sector) and str(sector).strip():
-                            holding_data["sector"] = str(sector).strip()
+                        if sector_val:
+                            holding_data["sector"] = sector_val
                         holdings.append(holding_data)
 
                 logger.info(f"Parsed {len(holdings)} S&P 500 holdings from SPY")
+
+                # Count how many have sectors from file
+                with_sector = sum(1 for h in holdings if h.get("sector"))
+                logger.info(f"  {with_sector}/{len(holdings)} have sector from Excel file")
 
                 if len(holdings) == 0:
                     return {"success": False, "error": "No holdings parsed from Excel file"}
@@ -510,6 +553,45 @@ class BenchmarkService:
         except Exception as e:
             logger.error(f"Failed to refresh S&P 500: {str(e)}", exc_info=True)
             return {"success": False, "error": str(e)}
+
+    def _normalize_gics_sector(self, sector: str) -> str:
+        """Normalize GICS sector names to consistent format"""
+        # Map common variations to standard names
+        sector_mapping = {
+            # Standard GICS sectors
+            "Information Technology": "Technology",
+            "Info Tech": "Technology",
+            "Tech": "Technology",
+            "Health Care": "Healthcare",
+            "HealthCare": "Healthcare",
+            "Consumer Discretionary": "Consumer Discretionary",
+            "Consumer Staples": "Consumer Staples",
+            "Communication Services": "Communication",
+            "Communications": "Communication",
+            "Telecom": "Communication",
+            "Telecommunication Services": "Communication",
+            "Real Estate": "Real Estate",
+            "Financials": "Financials",
+            "Financial": "Financials",
+            "Industrials": "Industrials",
+            "Industrial": "Industrials",
+            "Materials": "Materials",
+            "Energy": "Energy",
+            "Utilities": "Utilities",
+        }
+
+        # Check for exact match first
+        if sector in sector_mapping:
+            return sector_mapping[sector]
+
+        # Check for partial match
+        sector_lower = sector.lower()
+        for key, value in sector_mapping.items():
+            if key.lower() in sector_lower or sector_lower in key.lower():
+                return value
+
+        # Return as-is if no mapping found
+        return sector
 
     def _save_benchmark_holdings(
         self, benchmark_code: str, holdings: List[Dict[str, Any]], source_url: str
