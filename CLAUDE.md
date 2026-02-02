@@ -299,8 +299,60 @@ Key variables (see `infra/.env.template`):
 | `/analytics/benchmark` | GET | Benchmark metrics |
 | `/analytics/factors` | GET | Factor exposures |
 | `/jobs/run` | POST | Trigger background job (admin) |
+| `/jobs/incremental-update` | POST | Incremental update (recommended) |
+| `/jobs/smart-update` | POST | Auto-selects best update strategy |
+| `/jobs/update-status` | GET | Update health and metrics |
+| `/jobs/job-history` | GET | Recent job execution history |
 
 All analytics endpoints require `view_type` and `view_id` query parameters.
+
+## Incremental Update System
+
+The portfolio monitor includes an optimized incremental update system designed for scalability:
+
+### Key Features
+
+1. **Single Source of Truth**: Tiingo is primary provider; fallbacks only on failure
+2. **Incremental Fetching**: Only fetches missing date ranges, not full history
+3. **Dependency-Aware**: Only recomputes analytics when inputs change
+4. **Provider Tracking**: Remembers which providers work for each ticker
+5. **Observable**: Detailed metrics per run for monitoring
+
+### Update Commands
+
+```bash
+# Recommended: Run incremental update (smart caching + dependency tracking)
+curl -X POST "http://localhost:8000/jobs/incremental-update" \
+  -H "Authorization: Bearer TOKEN"
+
+# Auto-select best strategy based on time since last update
+curl -X POST "http://localhost:8000/jobs/smart-update" \
+  -H "Authorization: Bearer TOKEN"
+
+# Check update status and health
+curl "http://localhost:8000/jobs/update-status" \
+  -H "Authorization: Bearer TOKEN"
+
+# View recent job history
+curl "http://localhost:8000/jobs/job-history" \
+  -H "Authorization: Bearer TOKEN"
+```
+
+### Database Tables for Update Tracking
+
+| Table | Purpose |
+|-------|---------|
+| `ticker_provider_coverage` | Tracks which providers work for each ticker |
+| `data_update_state` | Tracks last update date for incremental fetching |
+| `computation_dependencies` | Tracks input hashes for dependency-aware computation |
+| `update_job_runs` | Stores execution metrics for observability |
+
+### How It Works
+
+1. **Price Updates**: Checks `data_update_state` for last fetch date, only requests missing dates
+2. **Provider Selection**: Checks `ticker_provider_coverage` for working provider, falls back if needed
+3. **Analytics**: Computes input hash, compares with `computation_dependencies`, skips if unchanged
+4. **Metrics**: Records all statistics in `update_job_runs` for monitoring
 
 ## Debugging Tips
 
