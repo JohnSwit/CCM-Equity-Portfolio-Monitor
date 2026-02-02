@@ -545,6 +545,17 @@ class BenchmarkService:
                 with_sector = sum(1 for h in holdings if h.get("sector"))
                 logger.info(f"  {with_sector}/{len(holdings)} have sector from Excel file")
 
+                # Log unique sector values for debugging
+                unique_sectors = set(h.get("sector") for h in holdings if h.get("sector"))
+                logger.info(f"  Unique sectors found: {sorted(unique_sectors)}")
+
+                # Also log sample of raw sector values from Excel
+                raw_sectors = set()
+                for _, row in df.head(20).iterrows():
+                    if sector_col and pd.notna(row.get(sector_col)):
+                        raw_sectors.add(str(row.get(sector_col)))
+                logger.info(f"  Sample raw sectors from Excel: {sorted(raw_sectors)}")
+
                 if len(holdings) == 0:
                     return {"success": False, "error": "No holdings parsed from Excel file"}
 
