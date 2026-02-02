@@ -156,7 +156,7 @@ export default function Upload() {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {Object.entries(preview.detected_mappings).map(([raw, normalized]) => (
                   <div key={raw} className="text-sm">
-                    <span className="font-medium">{raw}</span> → {normalized}
+                    <span className="font-medium">{raw}</span> → {String(normalized)}
                   </div>
                 ))}
               </div>

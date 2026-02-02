@@ -3,10 +3,11 @@ Market data service for fetching and storing security and benchmark prices.
 Uses market_data_providers for the actual data fetching with Tiingo as primary source.
 """
 import pandas as pd
+from tiingo import TiingoClient
 from typing import Optional, Dict, List
 from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 import asyncio
 import logging
 
@@ -21,51 +22,281 @@ logger = logging.getLogger(__name__)
 
 
 class MarketDataProvider:
-    """Service for fetching and storing market data"""
+    """Fetches market data from Tiingo (primary) and yfinance (fallback)"""
 
     def __init__(self, db: Session):
         self.db = db
-        self.aggregator = MarketDataAggregator()
-        self.rate_limit_delay = 0.3  # seconds between requests
+        self.rate_limit_delay = 0.2  # seconds between requests (Tiingo is more generous)
+        self._tiingo_client = None
+
+    @property
+    def tiingo_client(self) -> Optional[TiingoClient]:
+        """Lazy initialization of Tiingo client"""
+        if self._tiingo_client is None and settings.TIINGO_API_KEY:
+            try:
+                logger.info(f"Initializing TiingoClient with API key: {settings.TIINGO_API_KEY[:8]}...")
+                config = {
+                    'api_key': settings.TIINGO_API_KEY,
+                    'session': True  # Reuse HTTP session for performance
+                }
+                self._tiingo_client = TiingoClient(config)
+                logger.info("TiingoClient initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize TiingoClient: {e}", exc_info=True)
+                return None
+        return self._tiingo_client
+
+    def normalize_symbol(self, symbol: str) -> str:
+        """Normalize symbol for Tiingo API"""
+        # Tiingo uses standard ticker symbols
+        # Handle special cases like BRK.B -> BRK-B
+        if '.' in symbol and not symbol.startswith('^'):
+            symbol = symbol.replace('.', '-')
+        return symbol.upper()
+
+    def get_benchmark_tiingo_symbol(self, benchmark_code: str, provider_symbol: str) -> str:
+        """Map benchmark codes to Tiingo-compatible symbols"""
+        # Tiingo uses ETF symbols for major indexes
+        benchmark_map = {
+            'INDU': 'DIA',   # Dow Jones -> SPDR Dow Jones ETF
+            '^DJI': 'DIA',
+            'SPX': 'SPY',    # S&P 500 -> SPDR S&P 500 ETF
+            '^SPX': 'SPY',
+            'SPY.US': 'SPY',
+            'QQQ.US': 'QQQ',
+            'DIA.US': 'DIA',
+        }
+
+        # First check if provider_symbol has a mapping
+        if provider_symbol in benchmark_map:
+            return benchmark_map[provider_symbol]
+
+        # Check benchmark code
+        if benchmark_code in benchmark_map:
+            return benchmark_map[benchmark_code]
+
+        # Strip .US suffix if present
+        clean_symbol = provider_symbol.replace('.US', '')
+        return clean_symbol
+
+    def fetch_tiingo_prices(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """Fetch prices from Tiingo EOD API"""
+        logger.info(f"fetch_tiingo_prices called for {symbol}")
+
+        if not self.tiingo_client:
+            logger.warning(f"Tiingo client not configured for {symbol} - API key present: {bool(settings.TIINGO_API_KEY)}")
+            return None
+
+        try:
+            normalized_symbol = self.normalize_symbol(symbol)
+            logger.info(f"Fetching Tiingo prices for {normalized_symbol} from {start_date} to {end_date}")
+
+            # Tiingo returns data as list of dicts or DataFrame
+            price_data = self.tiingo_client.get_ticker_price(
+                normalized_symbol,
+                startDate=start_date.strftime('%Y-%m-%d'),
+                endDate=end_date.strftime('%Y-%m-%d'),
+                frequency='daily'
+            )
+
+            if not price_data:
+                logger.warning(f"No Tiingo data returned for {symbol}")
+                return None
+
+            # Convert to DataFrame
+            df = pd.DataFrame(price_data)
+            logger.info(f"Tiingo raw response for {symbol}: {len(df)} rows, columns: {list(df.columns)}")
+
+            if df.empty or 'adjClose' not in df.columns:
+                logger.warning(f"Tiingo returned empty or invalid data for {symbol}")
+                return None
+
+            # Use adjusted close for accuracy (accounts for splits/dividends)
+            # Select only the columns we need to avoid duplicate 'close' columns
+            df = df[['date', 'adjClose']].copy()
+            df = df.rename(columns={'adjClose': 'close'})
+
+            # Parse date - Tiingo returns ISO format strings
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df.dropna()
+
+            logger.info(f"Tiingo returned {len(df)} price records for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.error(f"Tiingo fetch failed for {symbol}: {e}", exc_info=True)
+            return None
+
+    def fetch_yfinance_prices(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """Fetch prices from yfinance as fallback"""
+        if not settings.ENABLE_YFINANCE_FALLBACK:
+            return None
+
+        try:
+            logger.info(f"Falling back to yfinance for {symbol}")
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(start=start_date, end=end_date)
+
+            if df.empty:
+                return None
+
+            df = df.reset_index()
+            df = df.rename(columns={'Date': 'date', 'Close': 'close'})
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df[['date', 'close']].dropna()
+
+            logger.info(f"yfinance returned {len(df)} price records for {symbol}")
+            return df
+
+        except Exception as e:
+            logger.warning(f"yfinance fetch failed for {symbol}: {e}")
+            return None
 
     async def fetch_and_store_prices(
         self,
         security_id: int,
         symbol: str,
         start_date: date,
-        end_date: date
+        end_date: date,
+        force_refresh: bool = False
     ) -> int:
-        """Fetch and store prices for a security"""
-        df, source = await self.aggregator.fetch_prices(symbol, start_date, end_date)
+        """Fetch and store prices for a security - optimized to only fetch missing dates"""
+        source = 'tiingo'
 
-        if df is None or df.empty:
-            logger.warning(f"No prices fetched for {symbol}")
-            return 0
-
-        # Store prices
-        count = 0
-        for _, row in df.iterrows():
-            existing = self.db.query(PricesEOD).filter(
+        # If force refresh, delete existing and fetch all
+        if force_refresh:
+            deleted = self.db.query(PricesEOD).filter(
                 and_(
                     PricesEOD.security_id == security_id,
-                    PricesEOD.date == row['date']
+                    PricesEOD.date >= start_date,
+                    PricesEOD.date <= end_date
                 )
-            ).first()
+            ).delete(synchronize_session=False)
+            self.db.commit()
+            logger.info(f"Force refresh: deleted {deleted} existing prices for {symbol}")
+            fetch_start = start_date
+            fetch_end = end_date
+        else:
+            # Find the latest price date we have for this security
+            latest_price = self.db.query(func.max(PricesEOD.date)).filter(
+                PricesEOD.security_id == security_id
+            ).scalar()
 
-            if not existing:
-                price = PricesEOD(
+            if latest_price and latest_price >= end_date:
+                # Already have all data up to end_date
+                logger.debug(f"Prices for {symbol} already up to date (latest: {latest_price})")
+                return 0
+
+            # Only fetch from after our latest price
+            if latest_price:
+                fetch_start = latest_price + timedelta(days=1)
+            else:
+                fetch_start = start_date
+            fetch_end = end_date
+
+            if fetch_start > fetch_end:
+                logger.debug(f"No new dates to fetch for {symbol} (latest: {latest_price})")
+                return 0
+
+        logger.info(f"Fetching prices for {symbol}: {fetch_start} to {fetch_end}")
+
+        # Fetch only missing dates from Tiingo
+        df = self.fetch_tiingo_prices(symbol, fetch_start, fetch_end)
+
+        # Fallback to yfinance if Tiingo fails
+        if df is None or df.empty:
+            df = self.fetch_yfinance_prices(symbol, fetch_start, fetch_end)
+            source = 'yfinance'
+
+        if df is None or df.empty:
+            # Only warn if we're missing historical data, not just today's data
+            today = date.today()
+            if fetch_start < today:
+                logger.warning(f"No prices fetched for {symbol} ({fetch_start} to {fetch_end})")
+            else:
+                logger.debug(f"No new market data yet for {symbol} (requested: {fetch_start})")
+            return 0
+
+        # Get existing dates to avoid duplicates (in case of overlaps)
+        existing_dates = set(
+            row[0] for row in self.db.query(PricesEOD.date).filter(
+                and_(
+                    PricesEOD.security_id == security_id,
+                    PricesEOD.date >= fetch_start,
+                    PricesEOD.date <= fetch_end
+                )
+            ).all()
+        )
+
+        # Bulk insert only new prices
+        new_prices = []
+        for _, row in df.iterrows():
+            if row['date'] not in existing_dates:
+                new_prices.append(PricesEOD(
                     security_id=security_id,
                     date=row['date'],
                     close=float(row['close']),
                     source=source
-                )
-                self.db.add(price)
-                count += 1
+                ))
 
-        self.db.commit()
-        if count > 0:
-            logger.info(f"Stored {count} prices for {symbol} from {source}")
-        return count
+        if new_prices:
+            self.db.bulk_save_objects(new_prices)
+            self.db.commit()
+
+        logger.info(f"Stored {len(new_prices)} new prices for {symbol} from {source}")
+        return len(new_prices)
+
+    def fetch_tiingo_benchmark_prices(
+        self,
+        tiingo_symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """Fetch benchmark prices from Tiingo using appropriate ETF symbol"""
+        if not self.tiingo_client:
+            logger.warning("Tiingo client not configured (missing API key)")
+            return None
+
+        try:
+            logger.info(f"Fetching Tiingo benchmark prices for {tiingo_symbol}")
+
+            price_data = self.tiingo_client.get_ticker_price(
+                tiingo_symbol,
+                startDate=start_date.strftime('%Y-%m-%d'),
+                endDate=end_date.strftime('%Y-%m-%d'),
+                frequency='daily'
+            )
+
+            if not price_data:
+                return None
+
+            df = pd.DataFrame(price_data)
+
+            if df.empty or 'adjClose' not in df.columns:
+                return None
+
+            # Select only the columns we need to avoid duplicate 'close' columns
+            df = df[['date', 'adjClose']].copy()
+            df = df.rename(columns={'adjClose': 'close'})
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df.dropna()
+
+            logger.info(f"Tiingo returned {len(df)} benchmark records for {tiingo_symbol}")
+            return df
+
+        except Exception as e:
+            logger.warning(f"Tiingo benchmark fetch failed for {tiingo_symbol}: {e}")
+            return None
 
     async def fetch_and_store_benchmark_prices(
         self,
@@ -75,12 +306,15 @@ class MarketDataProvider:
         end_date: date
     ) -> int:
         """Fetch and store benchmark prices"""
-        # For benchmarks, try the provider symbol first, then the code itself
-        df, source = await self.aggregator.fetch_prices(provider_symbol, start_date, end_date)
+        # Map to Tiingo-compatible symbol
+        tiingo_symbol = self.get_benchmark_tiingo_symbol(benchmark_code, provider_symbol)
+
+        # Try Tiingo first
+        df = self.fetch_tiingo_benchmark_prices(tiingo_symbol, start_date, end_date)
 
         if df is None or df.empty:
-            # Try with the benchmark code directly
-            df, source = await self.aggregator.fetch_prices(benchmark_code, start_date, end_date)
+            # Fallback to yfinance with benchmark code
+            df = self.fetch_yfinance_prices(benchmark_code, start_date, end_date)
 
         if df is None or df.empty:
             logger.warning(f"No prices fetched for benchmark {benchmark_code}")
@@ -134,23 +368,32 @@ class MarketDataProvider:
         missing = sorted(all_dates_set - existing_dates_set)
         return missing
 
-    async def update_security_prices(self, security_id: int, symbol: str) -> int:
+    async def update_security_prices(
+        self,
+        security_id: int,
+        symbol: str,
+        force_refresh: bool = False
+    ) -> int:
         """Update prices for a security (fill missing dates)"""
         from app.models import Transaction
+
+        logger.info(f"update_security_prices called for {symbol} (id={security_id})")
 
         first_txn = self.db.query(Transaction).filter(
             Transaction.security_id == security_id
         ).order_by(Transaction.trade_date).first()
 
         if not first_txn:
+            logger.warning(f"No transactions found for {symbol} (id={security_id})")
             return 0
 
         start_date = first_txn.trade_date
         end_date = date.today()
+        logger.info(f"Date range for {symbol}: {start_date} to {end_date}")
 
         # Fetch and store
         count = await self.fetch_and_store_prices(
-            security_id, symbol, start_date, end_date
+            security_id, symbol, start_date, end_date, force_refresh=force_refresh
         )
 
         # Rate limiting
@@ -158,12 +401,20 @@ class MarketDataProvider:
 
         return count
 
-    async def update_all_security_prices(self) -> Dict[str, int]:
+    async def update_all_security_prices(self, force_refresh: bool = False) -> Dict[str, int]:
         """Update prices for all securities with transactions"""
         from app.models import Transaction
 
+        # Log Tiingo client status
+        logger.info(f"Tiingo API key configured: {bool(settings.TIINGO_API_KEY)}")
+        logger.info(f"Tiingo client initialized: {self.tiingo_client is not None}")
+        if force_refresh:
+            logger.info("Force refresh enabled - will delete and re-fetch all prices")
+
         # Get all securities with transactions
         securities = self.db.query(Security).join(Transaction).distinct().all()
+
+        logger.info(f"Found {len(securities)} securities with transactions to update")
 
         results = {
             'total_securities': len(securities),
@@ -173,11 +424,92 @@ class MarketDataProvider:
 
         for security in securities:
             try:
-                count = await self.update_security_prices(security.id, security.symbol)
+                logger.info(f"Processing security: {security.symbol} (id={security.id})")
+                count = await self.update_security_prices(
+                    security.id, security.symbol, force_refresh=force_refresh
+                )
+                logger.info(f"Updated {count} prices for {security.symbol}")
                 if count > 0:
                     results['updated'] += 1
             except Exception as e:
                 logger.error(f"Failed to update {security.symbol}: {e}")
+                results['failed'] += 1
+
+        return results
+
+    async def update_factor_etf_prices(self) -> Dict[str, int]:
+        """Update prices for factor ETFs used in STYLE7 analysis"""
+        # Factor ETFs from FactorsEngine
+        FACTOR_ETFS = ['SPY', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM']
+
+        logger.info(f"Updating factor ETF prices for: {FACTOR_ETFS}")
+
+        results = {
+            'total_etfs': len(FACTOR_ETFS),
+            'updated': 0,
+            'failed': 0
+        }
+
+        # Use 5-year lookback for factor analysis
+        end_date = date.today()
+        start_date = end_date - timedelta(days=5*365)
+
+        for symbol in FACTOR_ETFS:
+            try:
+                # Find or create the security
+                security = self.db.query(Security).filter(
+                    Security.symbol == symbol
+                ).first()
+
+                if not security:
+                    from app.models import AssetClass
+                    security = Security(
+                        symbol=symbol,
+                        asset_name=f"{symbol} ETF",
+                        asset_class=AssetClass.ETF
+                    )
+                    self.db.add(security)
+                    self.db.flush()
+                    logger.info(f"Created security for factor ETF: {symbol}")
+
+                # Fetch prices from Tiingo
+                df = self.fetch_tiingo_prices(symbol, start_date, end_date)
+
+                if df is None or df.empty:
+                    logger.warning(f"No Tiingo data for factor ETF {symbol}")
+                    results['failed'] += 1
+                    continue
+
+                # Store prices
+                count = 0
+                for _, row in df.iterrows():
+                    existing = self.db.query(PricesEOD).filter(
+                        and_(
+                            PricesEOD.security_id == security.id,
+                            PricesEOD.date == row['date']
+                        )
+                    ).first()
+
+                    if not existing:
+                        price = PricesEOD(
+                            security_id=security.id,
+                            date=row['date'],
+                            close=float(row['close']),
+                            source='tiingo'
+                        )
+                        self.db.add(price)
+                        count += 1
+
+                self.db.commit()
+                logger.info(f"Stored {count} prices for factor ETF {symbol}")
+
+                if count > 0:
+                    results['updated'] += 1
+
+                await asyncio.sleep(self.rate_limit_delay)
+
+            except Exception as e:
+                logger.error(f"Failed to update factor ETF {symbol}: {e}")
                 results['failed'] += 1
 
         return results

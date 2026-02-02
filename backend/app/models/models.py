@@ -385,3 +385,78 @@ class ManualPrice(Base):
     __table_args__ = (
         UniqueConstraint('security_id', 'date', name='uq_manual_price_security_date'),
     )
+
+
+class FactorDataSource(str, enum.Enum):
+    STOOQ = "stooq"
+    FRED = "fred"
+    YFINANCE = "yfinance"
+    ALPHAVANTAGE = "alphavantage"
+    TIINGO = "tiingo"
+
+
+class FactorProxySeries(Base):
+    """Cached market data series for factor proxies (ETFs, rates, etc.)"""
+    __tablename__ = "factor_proxy_series"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    source = Column(SQLEnum(FactorDataSource), nullable=False)
+    date = Column(Date, nullable=False, index=True)
+    close = Column(Float)  # Price level for ETFs
+    value = Column(Float)  # Value for rates/macro series
+    daily_return = Column(Float)  # Pre-computed daily return
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('symbol', 'source', 'date', name='uq_factor_proxy_symbol_source_date'),
+        Index('idx_factor_proxy_symbol_date', 'symbol', 'date'),
+    )
+
+
+class FactorModelDefinition(Base):
+    """Defines factor models with their proxy ETFs/series"""
+    __tablename__ = "factor_model_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    factors_config = Column(JSON, nullable=False)  # Dict of factor_name -> {symbol, source, spread_vs}
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class FactorAttributionResult(Base):
+    """Stores factor attribution analysis results"""
+    __tablename__ = "factor_attribution_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    view_type = Column(SQLEnum(ViewType), nullable=False, index=True)
+    view_id = Column(Integer, nullable=False, index=True)
+    factor_model_code = Column(String, nullable=False, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    # Regression results
+    betas_json = Column(JSON)  # factor_name -> beta
+    alpha_daily = Column(Float)
+    alpha_annualized = Column(Float)
+    r_squared = Column(Float)
+    adj_r_squared = Column(Float)
+    # Diagnostics
+    residual_std = Column(Float)
+    durbin_watson = Column(Float)
+    t_stats_json = Column(JSON)  # factor_name -> t-stat
+    p_values_json = Column(JSON)  # factor_name -> p-value
+    # Attribution
+    total_return = Column(Float)
+    factor_contribution_json = Column(JSON)  # factor_name -> contribution %
+    alpha_contribution = Column(Float)
+    residual_contribution = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('view_type', 'view_id', 'factor_model_code', 'start_date', 'end_date',
+                        name='uq_factor_attribution_view_model_period'),
+    )

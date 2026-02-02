@@ -1,6 +1,6 @@
 """
 Data sourcing services for classifications, benchmark constituents, and factor returns.
-Updated: 2026-01-23
+Updated: 2026-01-29 - Migrated to Tiingo API
 """
 import os
 import httpx
@@ -11,10 +11,12 @@ from datetime import datetime, date, timedelta
 from typing import Optional, Dict, List, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from tiingo import TiingoClient
 
 from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
 from app.models import Security
 from app.utils.ticker_utils import TickerNormalizer, SectorMapper
+from app.core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,13 +24,195 @@ logger = logging.getLogger(__name__)
 
 class ClassificationService:
     """
-    Service for fetching and storing security classifications from multiple sources.
+    Service for fetching and storing security classifications from Tiingo (primary)
+    with fallback to Polygon.io and IEX Cloud.
     """
+
+    # Class-level static mapping for common tickers (fallback when APIs fail)
+    STATIC_MAPPING = {
+        "AAPL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
+        "MSFT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "GOOGL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Interactive Media"},
+        "GOOG": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Interactive Media"},
+        "AMZN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
+        "TSLA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
+        "META": {"sector": "Technology", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
+        "NVDA": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banks"},
+        "JNJ": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "V": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Services"},
+        "MA": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Financial Services"},
+        "UNH": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Providers"},
+        "HD": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Home Improvement Retail"},
+        "PG": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
+        "DIS": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "NFLX": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "ADBE": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CRM": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "COST": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Consumer Staples Distribution"},
+        "PEP": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Beverages"},
+        "AVGO": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        "CSCO": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Communications Equipment"},
+        "ABT": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "TMO": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Life Sciences Tools"},
+        "NKE": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Footwear"},
+        "LLY": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "WFC": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banks"},
+        "INTU": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "CVS": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Providers"},
+        "AMGN": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "NOW": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "SBUX": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "DHR": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "HON": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Conglomerates"},
+        "LMT": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "NEE": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "UPS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Air Freight & Logistics"},
+        "BLK": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Asset Management"},
+        "MDT": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "AEP": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Electric Utilities"},
+        "DE": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Machinery"},
+        "LIN": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Chemicals"},
+        "FDX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Air Freight & Logistics"},
+        "SLB": {"sector": "Energy", "gics_sector": "Energy", "gics_industry": "Oil & Gas Equipment"},
+        # Additional US Stocks (from failed classifications)
+        "ABNB": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Hotels & Resorts"},
+        "AMAT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductor Equipment"},
+        "ANET": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Communications Equipment"},
+        "APD": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Chemicals"},
+        "APP": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "ADSK": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "BERY": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Containers & Packaging"},
+        "BILL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "BRK-B": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Financials"},
+        "BRK.B": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Financials"},
+        "BRKB": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Diversified Financials"},
+        "BX": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Asset Management"},
+        "BURL": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Apparel Retail"},
+        "CLX": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Household Products"},
+        "CME": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Capital Markets"},
+        "CPNG": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
+        "CPRT": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Specialty Retail"},
+        "CRSP": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "CSX": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Railroads"},
+        "DDOG": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "DELL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
+        "DLR": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Data Center REITs"},
+        "DRI": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "FAST": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Industrial Distribution"},
+        "FCX": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Metals & Mining"},
+        "FTRE": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Real Estate Services"},
+        "GRAB": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Internet Services"},
+        "GRAL": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "HII": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "ILMN": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Life Sciences Tools"},
+        "KLAC": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductor Equipment"},
+        "KVUE": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Personal Products"},
+        "LH": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Services"},
+        "MAR": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Hotels & Resorts"},
+        "MLM": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Construction Materials"},
+        "MRNA": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Biotechnology"},
+        "MTCH": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
+        "NUE": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Steel"},
+        "NXT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "OTIS": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Building Products"},
+        "PANW": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "PCAR": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Machinery"},
+        "PLD": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Industrial REITs"},
+        "POST": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
+        "PWR": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Construction & Engineering"},
+        "PZZA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Restaurants"},
+        "SHOP": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "SKIN": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Services"},
+        "SMPL": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Packaged Foods"},
+        "SNOW": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "SNPS": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "SOLS": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "STZ": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Beverages"},
+        "SYK": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Health Care Equipment"},
+        "TDY": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "UNP": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Railroads"},
+        "USB": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banks"},
+        "VTR": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Health Care REITs"},
+        "WDAY": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
+        "WM": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Waste Management"},
+        "WPC": {"sector": "Real Estate", "gics_sector": "Real Estate", "gics_industry": "Diversified REITs"},
+        "ZTS": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        # International ADRs
+        "ASML": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductor Equipment"},
+        "NVO": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
+        "EADSY": {"sector": "Industrials", "gics_sector": "Industrials", "gics_industry": "Aerospace & Defense"},
+        "LVMUY": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Textiles & Apparel"},
+        "LRLCY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Personal Products"},
+        "AMVOY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Beverages"},
+        "CTTAY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Tobacco"},
+        "SBGSY": {"sector": "Consumer Staples", "gics_sector": "Consumer Staples", "gics_industry": "Beverages"},
+        "VEOEY": {"sector": "Utilities", "gics_sector": "Utilities", "gics_industry": "Water Utilities"},
+        "VWAGY": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
+        # Additional ETFs
+        "ACWI": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "All Country World Index"},
+        "EFA": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "International Developed"},
+        "EEM": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Emerging Markets"},
+        "AGG": {"sector": "ETF", "gics_sector": "Fixed Income ETF", "gics_industry": "Aggregate Bond"},
+        "BND": {"sector": "ETF", "gics_sector": "Fixed Income ETF", "gics_industry": "Total Bond"},
+        "LQD": {"sector": "ETF", "gics_sector": "Fixed Income ETF", "gics_industry": "Corporate Bond"},
+        "HYG": {"sector": "ETF", "gics_sector": "Fixed Income ETF", "gics_industry": "High Yield Bond"},
+        "TLT": {"sector": "ETF", "gics_sector": "Fixed Income ETF", "gics_industry": "Long-Term Treasury"},
+        "GLD": {"sector": "ETF", "gics_sector": "Commodity ETF", "gics_industry": "Gold"},
+        "SLV": {"sector": "ETF", "gics_sector": "Commodity ETF", "gics_industry": "Silver"},
+        # ETFs - Broad Market
+        "SPY": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "S&P 500 Index"},
+        "QQQ": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Nasdaq 100 Index"},
+        "IWM": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Russell 2000 Index"},
+        "DIA": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Dow Jones Index"},
+        "VTI": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "Total Stock Market"},
+        "VOO": {"sector": "ETF", "gics_sector": "Broad Market ETF", "gics_industry": "S&P 500 Index"},
+        # ETFs - Style
+        "IVE": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "S&P 500 Value"},
+        "IVW": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "S&P 500 Growth"},
+        "IWD": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 1000 Value"},
+        "IWF": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 1000 Growth"},
+        "IWN": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 2000 Value"},
+        "IWO": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Russell 2000 Growth"},
+        "VTV": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Value"},
+        "VUG": {"sector": "ETF", "gics_sector": "Style ETF", "gics_industry": "Growth"},
+        # ETFs - Factor
+        "QUAL": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Quality Factor"},
+        "SPLV": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Low Volatility"},
+        "MTUM": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Momentum Factor"},
+        "VLUE": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Value Factor"},
+        "SIZE": {"sector": "ETF", "gics_sector": "Factor ETF", "gics_industry": "Size Factor"},
+        # ETFs - Sector
+        "XLF": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Financials"},
+        "XLK": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Technology"},
+        "XLV": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Health Care"},
+        "XLE": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Energy"},
+        "XLI": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Industrials"},
+        "XLP": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Consumer Staples"},
+        "XLY": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Consumer Discretionary"},
+        "XLU": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Utilities"},
+        "XLB": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Materials"},
+        "XLRE": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Real Estate"},
+        "XLC": {"sector": "ETF", "gics_sector": "Sector ETF", "gics_industry": "Communication Services"},
+    }
 
     def __init__(self, db: Session):
         self.db = db
+        self._tiingo_client = None
+        # Legacy fallback API keys (optional)
         self.polygon_api_key = os.getenv("POLYGON_API_KEY")
         self.iex_api_key = os.getenv("IEX_API_KEY")
+
+    @property
+    def tiingo_client(self) -> Optional[TiingoClient]:
+        """Lazy initialization of Tiingo client"""
+        if self._tiingo_client is None and settings.TIINGO_API_KEY:
+            config = {
+                'api_key': settings.TIINGO_API_KEY,
+                'session': True
+            }
+            self._tiingo_client = TiingoClient(config)
+        return self._tiingo_client
 
     async def refresh_classification(self, security_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -48,7 +232,13 @@ class ClassificationService:
         ticker = security.symbol
         logger.info(f"Refreshing classification for {ticker}")
 
-        # Try Polygon.io first
+        # Try Tiingo first (primary source)
+        if self.tiingo_client:
+            classification = self._fetch_from_tiingo(ticker)
+            if classification:
+                return self._save_classification(security_id, classification, "tiingo")
+
+        # Fallback to Polygon.io
         if self.polygon_api_key:
             classification = await self._fetch_from_polygon(ticker)
             if classification:
@@ -100,8 +290,56 @@ class ClassificationService:
         logger.info(f"Classification refresh complete: {results['success']}/{results['total']} successful")
         return results
 
+    def _fetch_from_tiingo(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch classification from Tiingo fundamentals API"""
+        if not self.tiingo_client:
+            return None
+
+        try:
+            # Normalize ticker for Tiingo
+            normalized_ticker = ticker.replace('.', '-').upper()
+            logger.info(f"Fetching Tiingo fundamentals for {normalized_ticker}")
+
+            # Try fundamentals definitions first (has sector/industry)
+            try:
+                fundamentals = self.tiingo_client.get_fundamentals_definitions(normalized_ticker)
+                if fundamentals and len(fundamentals) > 0:
+                    fund_data = fundamentals[0] if isinstance(fundamentals, list) else fundamentals
+                    sector = fund_data.get('sector', '')
+                    industry = fund_data.get('industry', '')
+
+                    if sector or industry:
+                        result = {
+                            "gics_sector": sector,
+                            "sector": SectorMapper.normalize_sector(sector) if sector else None,
+                            "gics_industry": industry,
+                            "market_cap_category": None,
+                        }
+                        logger.info(f"Tiingo fundamentals for {ticker}: sector={sector}, industry={industry}")
+                        return result
+            except Exception as fund_err:
+                logger.debug(f"Tiingo fundamentals not available for {ticker}: {fund_err}")
+
+            # Fallback to basic metadata
+            metadata = self.tiingo_client.get_ticker_metadata(normalized_ticker)
+            if not metadata:
+                logger.warning(f"No Tiingo metadata returned for {ticker}")
+                return None
+
+            # Check if static mapping has this ticker
+            static_data = self.STATIC_MAPPING.get(normalized_ticker)
+            if static_data:
+                logger.info(f"Using static mapping for {ticker}")
+                return static_data
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"Tiingo fetch failed for {ticker}: {str(e)}")
+            return None
+
     async def _fetch_from_polygon(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch classification from Polygon.io"""
+        """Fetch classification from Polygon.io (fallback)"""
         try:
             url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
             params = {"apiKey": self.polygon_api_key}
@@ -151,19 +389,8 @@ class ClassificationService:
 
     def _fetch_from_static(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Fallback to static sector mapping for common tickers"""
-        # Basic static mapping for major tech/fin stocks
-        STATIC_MAPPING = {
-            "AAPL": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
-            "MSFT": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
-            "GOOGL": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Interactive Media"},
-            "AMZN": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
-            "TSLA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Automobiles"},
-            "JPM": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Banking"},
-            "JNJ": {"sector": "Healthcare", "gics_sector": "Health Care", "gics_industry": "Pharmaceuticals"},
-        }
-
         normalized = TickerNormalizer.normalize(ticker)
-        return STATIC_MAPPING.get(normalized)
+        return self.STATIC_MAPPING.get(normalized)
 
     def _categorize_market_cap(self, market_cap: Optional[float]) -> Optional[str]:
         """Categorize market cap into Large/Mid/Small"""
@@ -255,17 +482,23 @@ class BenchmarkService:
                 logger.info(f"SPY DataFrame columns: {df.columns.tolist()}")
                 logger.info(f"SPY DataFrame rows: {len(df)}")
 
-                # Expecting columns: Ticker, Name, Weight, etc.
+                # Expecting columns: Ticker, Name, Weight, Sector, etc.
                 holdings = []
                 for _, row in df.iterrows():
                     ticker = row.get("Ticker") or row.get("Symbol")
                     weight = row.get("Weight") or row.get("% Weight")
+                    # Get sector directly from SPY Excel file
+                    sector = row.get("Sector")
 
                     if pd.notna(ticker) and pd.notna(weight):
-                        holdings.append({
+                        holding_data = {
                             "ticker": TickerNormalizer.normalize(str(ticker)),
                             "weight": float(weight) if isinstance(weight, (int, float)) else float(weight.strip('%')) / 100.0,
-                        })
+                        }
+                        # Include sector if available from the SPY file
+                        if pd.notna(sector) and str(sector).strip():
+                            holding_data["sector"] = str(sector).strip()
+                        holdings.append(holding_data)
 
                 logger.info(f"Parsed {len(holdings)} S&P 500 holdings from SPY")
 
@@ -281,7 +514,13 @@ class BenchmarkService:
     def _save_benchmark_holdings(
         self, benchmark_code: str, holdings: List[Dict[str, Any]], source_url: str
     ) -> Dict[str, Any]:
-        """Save benchmark holdings to database"""
+        """Save benchmark holdings to database with sector enrichment.
+
+        Sector sources (in order of priority):
+        1. Sector from the source file (e.g., SPY Excel 'Sector' column)
+        2. Sector from SectorClassification table in database
+        3. Sector from static mapping (STATIC_MAPPING)
+        """
         try:
             as_of = date.today()
 
@@ -297,12 +536,56 @@ class BenchmarkService:
                 BenchmarkConstituent.as_of_date == as_of
             ).delete()
 
-            # Insert new holdings
+            # Build lookup of symbol -> sector from SectorClassification (fallback)
+            sector_lookup = {}
+            classifications = self.db.query(
+                Security.symbol,
+                SectorClassification.sector,
+                SectorClassification.gics_sector
+            ).join(
+                SectorClassification, Security.id == SectorClassification.security_id
+            ).all()
+
+            for c in classifications:
+                # Use sector if available, otherwise use gics_sector
+                sector_lookup[c.symbol] = c.sector or c.gics_sector
+
+            logger.info(f"Loaded {len(sector_lookup)} sector classifications for fallback enrichment")
+
+            # Insert new holdings with sector data
+            classified_count = 0
+            source_file_count = 0
+            db_count = 0
+            static_count = 0
+
             for holding in holdings:
+                ticker = holding["ticker"]
+
+                # Priority 1: Use sector from source file (e.g., SPY Excel)
+                sector = holding.get("sector")
+                if sector:
+                    source_file_count += 1
+
+                # Priority 2: Look up from DB
+                if not sector:
+                    sector = sector_lookup.get(ticker)
+                    if sector:
+                        db_count += 1
+
+                # Priority 3: Fall back to STATIC_MAPPING
+                if not sector and ticker in ClassificationService.STATIC_MAPPING:
+                    sector = ClassificationService.STATIC_MAPPING[ticker].get("sector")
+                    if sector:
+                        static_count += 1
+
+                if sector:
+                    classified_count += 1
+
                 constituent = BenchmarkConstituent(
                     benchmark_code=benchmark_code,
-                    symbol=holding["ticker"],
+                    symbol=ticker,
                     weight=holding["weight"],
+                    sector=sector,
                     as_of_date=as_of,
                     source_url=source_url,
                 )
@@ -310,11 +593,19 @@ class BenchmarkService:
 
             self.db.commit()
 
-            logger.info(f"Saved {len(holdings)} holdings for {benchmark_code}")
+            logger.info(f"Saved {len(holdings)} holdings for {benchmark_code} ({classified_count} with sectors)")
+            logger.info(f"  Sector sources: {source_file_count} from file, {db_count} from DB, {static_count} from static mapping")
+
             return {
                 "success": True,
                 "benchmark": benchmark_code,
                 "count": len(holdings),
+                "classified_count": classified_count,
+                "sector_sources": {
+                    "source_file": source_file_count,
+                    "database": db_count,
+                    "static_mapping": static_count
+                },
                 "as_of_date": as_of.isoformat(),
             }
 

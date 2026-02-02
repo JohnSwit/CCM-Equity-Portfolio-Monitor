@@ -5,7 +5,12 @@ from app.models.models import (
     BenchmarkReturn, BenchmarkMetric, Basket, BasketConstituent,
     FactorSet, FactorReturn, FactorRegression, RiskEOD,
     ImportLog, ManualPrice,
-    TransactionType, AssetClass, ViewType, GroupType
+    FactorProxySeries, FactorModelDefinition, FactorAttributionResult,
+    TransactionType, AssetClass, ViewType, GroupType, FactorDataSource
+)
+
+from app.models.sector_models import (
+    SectorClassification, BenchmarkConstituent, FactorReturns
 )
 
 __all__ = [
@@ -15,5 +20,7 @@ __all__ = [
     "BenchmarkReturn", "BenchmarkMetric", "Basket", "BasketConstituent",
     "FactorSet", "FactorReturn", "FactorRegression", "RiskEOD",
     "ImportLog", "ManualPrice",
-    "TransactionType", "AssetClass", "ViewType", "GroupType"
+    "FactorProxySeries", "FactorModelDefinition", "FactorAttributionResult",
+    "TransactionType", "AssetClass", "ViewType", "GroupType", "FactorDataSource",
+    "SectorClassification", "BenchmarkConstituent", "FactorReturns"
 ]

@@ -165,7 +165,18 @@ class SectorAnalyzer:
         if view_type != ViewType.ACCOUNT:
             return {'error': 'Sector analysis only supported for account views'}
 
-        # Get positions
+        # Find the latest position date on or before as_of_date
+        latest_pos_date = self.db.query(func.max(PositionsEOD.date)).filter(
+            and_(
+                PositionsEOD.account_id == view_id,
+                PositionsEOD.date <= as_of_date
+            )
+        ).scalar()
+
+        if not latest_pos_date:
+            return {'error': 'No positions found', 'sectors': []}
+
+        # Get positions using the latest available date
         positions = self.db.query(
             PositionsEOD.security_id,
             PositionsEOD.shares,
@@ -180,7 +191,7 @@ class SectorAnalyzer:
         ).filter(
             and_(
                 PositionsEOD.account_id == view_id,
-                PositionsEOD.date == as_of_date,
+                PositionsEOD.date == latest_pos_date,
                 PositionsEOD.shares > 0
             )
         ).all()
@@ -247,7 +258,7 @@ class SectorAnalyzer:
         return {
             'sectors': sorted(sector_weights.values(), key=lambda x: x['weight'], reverse=True),
             'total_value': float(total_value),
-            'as_of_date': as_of_date,
+            'as_of_date': latest_pos_date,
             'holdings': holdings
         }
 
@@ -264,15 +275,77 @@ class SectorAnalyzer:
         if 'error' in portfolio_data:
             return portfolio_data
 
-        # Get benchmark sector weights
-        benchmark_constituents = self.db.query(
-            BenchmarkConstituent.sector,
-            func.sum(BenchmarkConstituent.weight).label('total_weight')
-        ).filter(
+        # Get the latest benchmark data date
+        latest_bench_date = self.db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
             BenchmarkConstituent.benchmark_code == benchmark_code
-        ).group_by(BenchmarkConstituent.sector).all()
+        ).scalar()
 
-        benchmark_weights = {b.sector: float(b.total_weight) for b in benchmark_constituents}
+        if not latest_bench_date:
+            return {
+                'error': f'No benchmark data available for {benchmark_code}',
+                'missing_data': 'benchmark_constituents',
+                'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
+            }
+
+        # Get benchmark sector weights using the sector stored in BenchmarkConstituent
+        # Filter by latest date to ensure we only use current data
+        benchmark_constituents = self.db.query(
+            BenchmarkConstituent.symbol,
+            BenchmarkConstituent.weight,
+            BenchmarkConstituent.sector
+        ).filter(
+            and_(
+                BenchmarkConstituent.benchmark_code == benchmark_code,
+                BenchmarkConstituent.as_of_date == latest_bench_date
+            )
+        ).all()
+
+        if not benchmark_constituents:
+            return {
+                'error': f'No benchmark data available for {benchmark_code}',
+                'missing_data': 'benchmark_constituents',
+                'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
+            }
+
+        # Build a fallback sector lookup from SectorClassification for symbols without sectors
+        sector_lookup = {}
+        classifications = self.db.query(
+            Security.symbol,
+            SectorClassification.sector,
+            SectorClassification.gics_sector
+        ).join(
+            SectorClassification, Security.id == SectorClassification.security_id
+        ).all()
+        for c in classifications:
+            sector_lookup[c.symbol] = c.sector or c.gics_sector
+
+        # Aggregate weights by sector
+        benchmark_weights = {}
+        total_weight = 0.0
+        unclassified_count = 0
+        for constituent in benchmark_constituents:
+            # Use stored sector, or look up from SectorClassification
+            sector = constituent.sector
+            if not sector:
+                sector = sector_lookup.get(constituent.symbol)
+            if not sector:
+                unclassified_count += 1
+                continue  # Skip unclassified instead of grouping them
+            weight = float(constituent.weight)
+            benchmark_weights[sector] = benchmark_weights.get(sector, 0) + weight
+            total_weight += weight
+
+        if unclassified_count > 0:
+            logger.warning(f"Benchmark {benchmark_code}: {unclassified_count} constituents without sector classification (skipped)")
+
+        # Log for debugging - total should be ~1.0
+        logger.info(f"Benchmark {benchmark_code}: {len(benchmark_constituents)} constituents, total weight={total_weight:.4f}")
+
+        # Normalize benchmark weights if they're stored as percentages (total near 100)
+        # Portfolio weights are decimals (0.05 for 5%), benchmark might be percentages (5.0 for 5%)
+        if total_weight > 10:  # Weights stored as percentages
+            for sector in benchmark_weights:
+                benchmark_weights[sector] = benchmark_weights[sector] / total_weight
 
         # Build portfolio sector dict
         portfolio_weights = {s['sector']: s['weight'] for s in portfolio_data['sectors']}
@@ -344,12 +417,10 @@ class BrinsonAttributionAnalyzer:
         if 'error' in port_end:
             return {'error': 'Could not get end-period portfolio data'}
 
-        # Get benchmark weights at start (use latest available before start_date)
+        # Get benchmark weights (use latest available data)
+        # Note: We use the latest snapshot since we don't have historical benchmark constituents
         latest_bench_date = self.db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
-            and_(
-                BenchmarkConstituent.benchmark_code == benchmark_code,
-                BenchmarkConstituent.as_of_date <= start_date
-            )
+            BenchmarkConstituent.benchmark_code == benchmark_code
         ).scalar()
 
         if not latest_bench_date:
@@ -359,15 +430,11 @@ class BrinsonAttributionAnalyzer:
                 'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
             }
 
-        # Get benchmark constituents with sectors
+        # Get benchmark constituents with sectors (sector is stored during refresh)
         benchmark_holdings = self.db.query(
             BenchmarkConstituent.symbol,
             BenchmarkConstituent.weight,
-            SectorClassification.sector
-        ).outerjoin(
-            Security, Security.symbol == BenchmarkConstituent.symbol
-        ).outerjoin(
-            SectorClassification, SectorClassification.security_id == Security.id
+            BenchmarkConstituent.sector
         ).filter(
             and_(
                 BenchmarkConstituent.benchmark_code == benchmark_code,
@@ -378,20 +445,51 @@ class BrinsonAttributionAnalyzer:
         if not benchmark_holdings:
             return {'error': f'No holdings found for benchmark {benchmark_code}'}
 
+        # Build a fallback sector lookup from SectorClassification
+        sector_lookup = {}
+        classifications = self.db.query(
+            Security.symbol,
+            SectorClassification.sector,
+            SectorClassification.gics_sector
+        ).join(
+            SectorClassification, Security.id == SectorClassification.security_id
+        ).all()
+        for c in classifications:
+            sector_lookup[c.symbol] = c.sector or c.gics_sector
+
+        # Enrich benchmark holdings with sector data for further calculations
+        enriched_holdings = []
+        for holding in benchmark_holdings:
+            sector = holding.sector or sector_lookup.get(holding.symbol)
+            if sector:  # Skip unclassified
+                enriched_holdings.append({
+                    'symbol': holding.symbol,
+                    'weight': holding.weight,
+                    'sector': sector
+                })
+
         # Calculate sector returns for portfolio holdings
         portfolio_sector_returns = self._calculate_sector_returns(port_start['holdings'], start_date, end_date)
 
-        # Calculate sector returns for benchmark holdings
-        benchmark_sector_returns = self._calculate_benchmark_sector_returns(benchmark_holdings, start_date, end_date)
+        # Calculate sector returns for benchmark holdings (use enriched data)
+        benchmark_sector_returns = self._calculate_benchmark_sector_returns_from_dict(enriched_holdings, start_date, end_date)
 
         # Build portfolio sector weights dict (use start weights)
         port_weights = {s['sector']: s['weight'] for s in port_start['sectors']}
 
-        # Build benchmark sector weights dict
+        # Build benchmark sector weights dict from enriched holdings
         bench_weights = {}
-        for holding in benchmark_holdings:
-            sector = holding.sector or 'Unclassified'
-            bench_weights[sector] = bench_weights.get(sector, 0) + float(holding.weight)
+        total_bench_weight = 0.0
+        for holding in enriched_holdings:
+            sector = holding['sector']
+            weight = float(holding['weight'])
+            bench_weights[sector] = bench_weights.get(sector, 0) + weight
+            total_bench_weight += weight
+
+        # Normalize benchmark weights if stored as percentages (total near 100)
+        if total_bench_weight > 10:
+            for sector in bench_weights:
+                bench_weights[sector] = bench_weights[sector] / total_bench_weight
 
         # Get all sectors
         all_sectors = set(port_weights.keys()) | set(bench_weights.keys())
@@ -478,6 +576,53 @@ class BrinsonAttributionAnalyzer:
         for sector in sector_start_values:
             if sector_start_values[sector] > 0:
                 sector_returns[sector] = (sector_end_values[sector] / sector_start_values[sector]) - 1
+
+        return sector_returns
+
+    def _calculate_benchmark_sector_returns_from_dict(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
+        """Calculate sector returns for benchmark holdings from dict format"""
+        sector_returns = {}
+        sector_weighted_returns = {}
+        sector_weights = {}
+
+        for holding in holdings:
+            sector = holding['sector']
+            ticker = holding['symbol']
+            weight = float(holding['weight'])
+
+            # Find security by ticker
+            security = self.db.query(Security).filter(
+                Security.symbol == TickerNormalizer.normalize(ticker)
+            ).first()
+
+            if not security:
+                continue
+
+            # Get prices
+            start_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security.id,
+                    PricesEOD.date <= start_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            end_price = self.db.query(PricesEOD.close).filter(
+                and_(
+                    PricesEOD.security_id == security.id,
+                    PricesEOD.date <= end_date
+                )
+            ).order_by(desc(PricesEOD.date)).first()
+
+            if start_price and end_price:
+                security_return = (float(end_price[0]) / float(start_price[0])) - 1
+
+                sector_weighted_returns[sector] = sector_weighted_returns.get(sector, 0) + (security_return * weight)
+                sector_weights[sector] = sector_weights.get(sector, 0) + weight
+
+        # Calculate sector returns (weighted average)
+        for sector in sector_weights:
+            if sector_weights[sector] > 0:
+                sector_returns[sector] = sector_weighted_returns[sector] / sector_weights[sector]
 
         return sector_returns
 
@@ -711,4 +856,228 @@ class AdvancedFactorAnalyzer:
             'crowding_score': 0.0,
             'diversification_ratio': 0.0,
             'note': 'Factor crowding analysis requires factor loading data. This is a placeholder.'
+        }
+
+    def calculate_historical_factor_exposures(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        end_date: date,
+        lookback_days: int = 504,  # 2 years
+        rolling_window: int = 63   # ~3 months
+    ) -> Dict:
+        """
+        Calculate rolling factor exposures over time.
+        Shows how factor tilts have evolved.
+        """
+        from app.models import ReturnsEOD, FactorReturns
+
+        start_date = end_date - timedelta(days=lookback_days)
+
+        # Get portfolio returns
+        returns = self.db.query(ReturnsEOD).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date >= start_date,
+                ReturnsEOD.date <= end_date
+            )
+        ).order_by(ReturnsEOD.date).all()
+
+        if len(returns) < rolling_window + 10:
+            return {'error': 'Insufficient returns data for rolling analysis'}
+
+        # Get factor returns
+        factor_returns_data = self.db.query(FactorReturns).filter(
+            and_(
+                FactorReturns.date >= start_date,
+                FactorReturns.date <= end_date
+            )
+        ).order_by(FactorReturns.date).all()
+
+        if not factor_returns_data:
+            return {'error': 'No factor returns data available'}
+
+        # Build DataFrames
+        portfolio_df = pd.DataFrame([{
+            'date': r.date,
+            'return': float(r.twr_return) if r.twr_return else 0
+        } for r in returns]).set_index('date')
+
+        factor_df = pd.DataFrame([{
+            'date': f.date,
+            'factor': f.factor_name,
+            'return': float(f.value)
+        } for f in factor_returns_data])
+
+        factor_pivot = factor_df.pivot(index='date', columns='factor', values='return')
+
+        # Merge
+        merged = portfolio_df.join(factor_pivot, how='inner')
+
+        if len(merged) < rolling_window + 10:
+            return {'error': 'Insufficient overlapping data'}
+
+        # Factor columns to use
+        factor_cols = [c for c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'Mom'] if c in merged.columns]
+        factor_labels = {
+            'Mkt-RF': 'Market', 'SMB': 'Size', 'HML': 'Value',
+            'RMW': 'Profitability', 'CMA': 'Investment', 'Mom': 'Momentum'
+        }
+
+        # Calculate rolling regressions
+        historical_exposures = []
+
+        for i in range(rolling_window, len(merged)):
+            window_data = merged.iloc[i-rolling_window:i]
+            window_date = merged.index[i]
+
+            y = window_data['return'].values
+            if 'RF' in window_data.columns:
+                y = y - window_data['RF'].values
+
+            X = window_data[factor_cols].values
+            X_with_intercept = np.column_stack([np.ones(len(X)), X])
+
+            try:
+                coefficients = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
+                alpha = coefficients[0]
+                betas = coefficients[1:]
+
+                exposures = {'date': window_date.isoformat(), 'alpha': float(alpha) * 252}
+                for j, col in enumerate(factor_cols):
+                    exposures[factor_labels.get(col, col)] = float(betas[j])
+
+                historical_exposures.append(exposures)
+            except Exception:
+                continue
+
+        return {
+            'historical_exposures': historical_exposures,
+            'rolling_window_days': rolling_window,
+            'factors': [factor_labels.get(c, c) for c in factor_cols]
+        }
+
+    def calculate_factor_risk_decomposition(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        start_date: date,
+        end_date: date
+    ) -> Dict:
+        """
+        Decompose portfolio risk (variance) into factor risk and specific risk.
+        Shows what % of portfolio volatility comes from each factor.
+        """
+        from app.models import ReturnsEOD, FactorReturns
+
+        # Get portfolio returns
+        returns = self.db.query(ReturnsEOD).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date >= start_date,
+                ReturnsEOD.date <= end_date
+            )
+        ).order_by(ReturnsEOD.date).all()
+
+        if len(returns) < 30:
+            return {'error': 'Insufficient returns data (need at least 30 days)'}
+
+        # Get factor returns
+        factor_returns_data = self.db.query(FactorReturns).filter(
+            and_(
+                FactorReturns.date >= start_date,
+                FactorReturns.date <= end_date
+            )
+        ).order_by(FactorReturns.date).all()
+
+        if not factor_returns_data:
+            return {'error': 'No factor returns data available'}
+
+        # Build DataFrames
+        portfolio_df = pd.DataFrame([{
+            'date': r.date,
+            'return': float(r.twr_return) if r.twr_return else 0
+        } for r in returns]).set_index('date')
+
+        factor_df = pd.DataFrame([{
+            'date': f.date,
+            'factor': f.factor_name,
+            'return': float(f.value)
+        } for f in factor_returns_data])
+
+        factor_pivot = factor_df.pivot(index='date', columns='factor', values='return')
+        merged = portfolio_df.join(factor_pivot, how='inner')
+
+        if len(merged) < 30:
+            return {'error': 'Insufficient overlapping data'}
+
+        # Factor columns
+        factor_cols = [c for c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA', 'Mom'] if c in merged.columns]
+        factor_labels = {
+            'Mkt-RF': 'Market', 'SMB': 'Size', 'HML': 'Value',
+            'RMW': 'Profitability', 'CMA': 'Investment', 'Mom': 'Momentum'
+        }
+
+        if len(factor_cols) == 0:
+            return {'error': 'No factor columns available in data'}
+
+        y = merged['return'].values
+        if 'RF' in merged.columns:
+            y = y - merged['RF'].values
+
+        X = merged[factor_cols].values
+        X_with_intercept = np.column_stack([np.ones(len(X)), X])
+
+        # Run regression
+        coefficients = np.linalg.lstsq(X_with_intercept, y, rcond=None)[0]
+        betas = coefficients[1:]
+
+        # Calculate predicted returns and residuals
+        y_pred = X_with_intercept @ coefficients
+        residuals = y - y_pred
+
+        # Total variance
+        total_variance = np.var(y)
+
+        # Factor variance contribution
+        # Var(factor component) = beta^2 * Var(factor) + covariance terms
+        # Handle case of single factor (returns scalar) vs multiple factors (returns matrix)
+        factor_cov = np.cov(X.T)
+        if factor_cov.ndim == 0:
+            # Single factor case: cov is a scalar
+            factor_variance = float(betas[0] ** 2 * factor_cov)
+        else:
+            # Multiple factors case: cov is a matrix
+            factor_variance = float(betas @ factor_cov @ betas)
+
+        # Specific (residual) variance
+        specific_variance = np.var(residuals)
+
+        # Calculate individual factor contributions
+        factor_risk_contributions = {}
+        for i, col in enumerate(factor_cols):
+            factor_var = np.var(X[:, i])
+            contribution = (betas[i] ** 2) * factor_var
+            factor_risk_contributions[factor_labels.get(col, col)] = {
+                'variance_contribution': float(contribution),
+                'pct_of_total': float(contribution / total_variance * 100) if total_variance > 0 else 0,
+                'beta': float(betas[i])
+            }
+
+        # Annualized volatilities
+        ann_factor = np.sqrt(252)
+        total_vol = np.std(y) * ann_factor
+        factor_vol = np.sqrt(factor_variance) * ann_factor
+        specific_vol = np.sqrt(specific_variance) * ann_factor
+
+        return {
+            'total_volatility': float(total_vol),
+            'factor_volatility': float(factor_vol),
+            'specific_volatility': float(specific_vol),
+            'factor_risk_pct': float(factor_variance / total_variance * 100) if total_variance > 0 else 0,
+            'specific_risk_pct': float(specific_variance / total_variance * 100) if total_variance > 0 else 0,
+            'factor_contributions': factor_risk_contributions,
+            'observation_count': len(merged)
         }

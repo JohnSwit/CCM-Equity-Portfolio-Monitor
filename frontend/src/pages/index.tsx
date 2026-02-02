@@ -1,9 +1,25 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Select from 'react-select';
-import { format } from 'date-fns';
+import { format, subMonths, startOfYear } from 'date-fns';
+
+// Time period options for the performance chart
+type ChartPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
+
+// Color palette for pie charts
+const CHART_COLORS = [
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1',
+  '#14b8a6', '#a855f7', '#eab308', '#22c55e', '#0ea5e9',
+  '#d946ef', '#64748b', '#78716c', '#0891b2', '#7c3aed'
+];
+
+// Holdings chart view modes
+type HoldingsViewMode = 'marketValue' | 'cost' | 'gain' | 'loss';
+// Sector chart view modes
+type SectorViewMode = 'sector' | 'industry' | 'country' | 'region' | 'market' | 'assetType';
 
 export default function Dashboard() {
   const [views, setViews] = useState<any[]>([]);
@@ -14,10 +30,14 @@ export default function Dashboard() {
   const [chartData, setChartData] = useState<any[]>([]);
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
-  const [factors, setFactors] = useState<any>(null);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
+
+  // Donut chart states
+  const [holdingsViewMode, setHoldingsViewMode] = useState<HoldingsViewMode>('marketValue');
+  const [sectorViewMode, setSectorViewMode] = useState<SectorViewMode>('sector');
+  const [sectorData, setSectorData] = useState<any>(null);
 
   useEffect(() => {
     loadViews();
@@ -58,14 +78,14 @@ export default function Dashboard() {
 
     setLoading(true);
     try {
-      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, factorsData, unpricedData] = await Promise.all([
+      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
         api.getSummary(selectedView.view_type, selectedView.view_id),
         api.getReturns(selectedView.view_type, selectedView.view_id),
         api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
         api.getHoldings(selectedView.view_type, selectedView.view_id),
         api.getRisk(selectedView.view_type, selectedView.view_id).catch(() => null),
-        api.getFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getUnpricedInstruments().catch(() => []),
+        api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
       ]);
 
       setSummary(summaryData);
@@ -73,8 +93,8 @@ export default function Dashboard() {
       setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
-      setFactors(factorsData);
       setUnpriced(unpricedData);
+      setSectorData(sectorWeights);
     } catch (error) {
       console.error('Failed to load view data:', error);
     } finally {
@@ -113,31 +133,45 @@ export default function Dashboard() {
       a.date.localeCompare(b.date)
     );
 
-    // Find first date where ALL series have data
-    const series = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
-    const firstCompleteDate = merged.find((point: any) =>
-      series.every(s => point[s] !== undefined && point[s] !== null)
-    );
-
-    if (!firstCompleteDate) {
-      // If no common date found, just use portfolio data
-      setChartData(merged);
+    if (merged.length === 0) {
+      setChartData([]);
       return;
     }
 
-    // Get baseline values for normalization
+    // Determine which series are available
+    const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+    const availableSeries = allSeries.filter(s =>
+      merged.some((point: any) => point[s] !== undefined && point[s] !== null)
+    );
+
+    // Find the first date where portfolio has data (minimum requirement)
+    const firstPortfolioDate = merged.find((point: any) =>
+      point.Portfolio !== undefined && point.Portfolio !== null
+    ) as { date: string; [key: string]: any } | undefined;
+
+    if (!firstPortfolioDate) {
+      setChartData([]);
+      return;
+    }
+
+    // Get baseline values for each series from their first available value
+    // within or after the portfolio's first date
     const baselineValues: any = {};
-    series.forEach(s => {
-      baselineValues[s] = firstCompleteDate[s] || 1.0;
+    availableSeries.forEach(s => {
+      const firstWithSeries = merged.find((point: any) =>
+        point.date >= firstPortfolioDate.date &&
+        point[s] !== undefined &&
+        point[s] !== null
+      ) as { [key: string]: any } | undefined;
+      baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
     });
 
-    // Normalize all series to start at 1.0
-    // Filter to only include dates from first common date onwards
+    // Normalize all series to start at 1.0 from portfolio's first date
     const normalized = merged
-      .filter((point: any) => point.date >= firstCompleteDate.date)
+      .filter((point: any) => point.date >= firstPortfolioDate.date)
       .map((point: any) => {
         const normalizedPoint: any = { date: point.date };
-        series.forEach(s => {
+        availableSeries.forEach(s => {
           if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
             normalizedPoint[s] = point[s] / baselineValues[s];
           }
@@ -216,11 +250,125 @@ export default function Dashboard() {
     return ((value - 1) * 100).toFixed(2) + '%';
   };
 
+  const formatCurrencyWithDecimals = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const formatGainPercent = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-';
+    const pct = (value * 100).toFixed(2);
+    return (value >= 0 ? '+' : '') + pct + '%';
+  };
+
+  const formatGainCurrency = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-';
+    const formatted = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(Math.abs(value));
+    return (value >= 0 ? '+' : '-') + formatted;
+  };
+
+  const formatSharesDisplay = (value: number) => {
+    if (value >= 1000) {
+      return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(value);
+    }
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const getGainColorClass = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'text-gray-500';
+    return value >= 0 ? 'text-green-600' : 'text-red-600';
+  };
+
   const viewOptions = views.map((v) => ({
     value: v,
     label: v.view_name,
     group: v.view_type,
   }));
+
+  // Process holdings data for pie chart
+  const holdingsPieData = useMemo(() => {
+    if (!holdings?.holdings) return [];
+
+    const data = holdings.holdings.map((h: any, idx: number) => {
+      // Calculate gain/loss (market_value - cost)
+      const cost = h.cost_basis || h.market_value; // fallback to market value if no cost
+      const gain = Math.max(0, h.market_value - cost);
+      const loss = Math.max(0, cost - h.market_value);
+
+      return {
+        name: h.symbol,
+        marketValue: h.market_value,
+        cost: cost,
+        gain: gain,
+        loss: loss,
+        weight: h.weight,
+        color: CHART_COLORS[idx % CHART_COLORS.length],
+      };
+    });
+
+    // Get data based on view mode
+    switch (holdingsViewMode) {
+      case 'cost':
+        return data.filter((d: any) => d.cost > 0).map((d: any) => ({ ...d, value: d.cost }));
+      case 'gain':
+        return data.filter((d: any) => d.gain > 0).map((d: any) => ({ ...d, value: d.gain }));
+      case 'loss':
+        return data.filter((d: any) => d.loss > 0).map((d: any) => ({ ...d, value: d.loss }));
+      default: // marketValue
+        return data.filter((d: any) => d.marketValue > 0).map((d: any) => ({ ...d, value: d.marketValue }));
+    }
+  }, [holdings, holdingsViewMode]);
+
+  // Process sector data for pie chart
+  const sectorPieData = useMemo(() => {
+    if (!sectorData?.sectors) return [];
+
+    return sectorData.sectors.map((s: any, idx: number) => ({
+      name: s.sector,
+      value: s.weight,
+      marketValue: s.market_value,
+      count: s.holdings_count,
+      color: CHART_COLORS[idx % CHART_COLORS.length],
+    }));
+  }, [sectorData]);
+
+  // Custom label for pie chart
+  const renderCustomLabel = ({ name, value, cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
+    if (percent < 0.025) return null; // Don't show labels for slices < 2.5%
+    const RADIAN = Math.PI / 180;
+    const radius = outerRadius * 1.25;
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+    const pct = (percent * 100).toFixed(1);
+
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="#374151"
+        textAnchor={x > cx ? 'start' : 'end'}
+        dominantBaseline="central"
+        fontSize={11}
+      >
+        {`${name}: ${pct}%`}
+      </text>
+    );
+  };
 
   return (
     <Layout>
@@ -258,7 +406,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="border-l-4 border-blue-500 pl-4">
                   <div className="text-sm text-gray-600">1 Month</div>
                   <div className="text-lg font-semibold">
@@ -283,6 +431,140 @@ export default function Dashboard() {
                     {summary.return_1y ? formatPercent(summary.return_1y) : 'N/A'}
                   </div>
                 </div>
+                <div className="border-l-4 border-teal-500 pl-4">
+                  <div className="text-sm text-gray-600">All Time</div>
+                  <div className="text-lg font-semibold">
+                    {summary.return_inception != null ? formatPercent(summary.return_inception) : 'N/A'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Portfolio Allocation Donut Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Holdings Breakdown Chart */}
+              <div className="card">
+                <div className="flex flex-wrap items-center gap-2 mb-4 border-b pb-3">
+                  {[
+                    { key: 'marketValue', label: 'Market Value' },
+                    { key: 'cost', label: 'Cost' },
+                    { key: 'gain', label: 'Gain' },
+                    { key: 'loss', label: 'Loss' },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setHoldingsViewMode(item.key as HoldingsViewMode)}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                        holdingsViewMode === item.key
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={loadViewData}
+                    className="ml-auto p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
+                    title="Refresh"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                </div>
+
+                {holdingsPieData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart>
+                      <Pie
+                        data={holdingsPieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={1}
+                        dataKey="value"
+                        label={renderCustomLabel}
+                        labelLine={{ stroke: '#9ca3af', strokeWidth: 1 }}
+                      >
+                        {holdingsPieData.map((entry: any, index: number) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any, name: any, props: any) => [
+                          holdingsViewMode === 'marketValue' || holdingsViewMode === 'cost' || holdingsViewMode === 'gain' || holdingsViewMode === 'loss'
+                            ? formatCurrency(value)
+                            : formatPercent(value),
+                          props.payload.name
+                        ]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-80 flex items-center justify-center text-gray-500">
+                    No holdings data available
+                  </div>
+                )}
+              </div>
+
+              {/* Sector Breakdown Chart */}
+              <div className="card">
+                <div className="flex flex-wrap items-center gap-2 mb-4 border-b pb-3">
+                  {[
+                    { key: 'sector', label: 'Sector' },
+                    { key: 'industry', label: 'Industry' },
+                    { key: 'country', label: 'Country' },
+                    { key: 'region', label: 'Region' },
+                    { key: 'market', label: 'Market' },
+                    { key: 'assetType', label: 'Assets Type' },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setSectorViewMode(item.key as SectorViewMode)}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                        sectorViewMode === item.key
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {sectorPieData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart>
+                      <Pie
+                        data={sectorPieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={1}
+                        dataKey="value"
+                        label={renderCustomLabel}
+                        labelLine={{ stroke: '#9ca3af', strokeWidth: 1 }}
+                      >
+                        {sectorPieData.map((entry: any, index: number) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any, name: any, props: any) => [
+                          formatPercent(value),
+                          props.payload.name
+                        ]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-80 flex items-center justify-center text-gray-500">
+                    No sector data available
+                  </div>
+                )}
               </div>
             </div>
 
@@ -336,34 +618,59 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
 
-            {/* Holdings */}
+            {/* Portfolio Overview */}
             {holdings && (
               <div className="card">
-                <h3 className="text-lg font-semibold mb-4">Top Holdings</h3>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th>Name</th>
-                      <th className="text-right">Shares</th>
-                      <th className="text-right">Price</th>
-                      <th className="text-right">Market Value</th>
-                      <th className="text-right">Weight</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holdings.holdings.slice(0, 10).map((h: any) => (
-                      <tr key={h.symbol}>
-                        <td className="font-semibold">{h.symbol}</td>
-                        <td>{h.asset_name}</td>
-                        <td className="text-right">{h.shares.toFixed(2)}</td>
-                        <td className="text-right">{formatCurrency(h.price)}</td>
-                        <td className="text-right">{formatCurrency(h.market_value)}</td>
-                        <td className="text-right">{formatPercent(h.weight)}</td>
+                <h3 className="text-lg font-semibold mb-4">Portfolio Overview</h3>
+                <div className="overflow-x-auto">
+                  <table className="table w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-2 px-3">Ticker</th>
+                        <th className="text-right py-2 px-3">Allocation</th>
+                        <th className="text-right py-2 px-3">Last</th>
+                        <th className="text-right py-2 px-3">Avg Cost</th>
+                        <th className="text-right py-2 px-3">1D Gain %</th>
+                        <th className="text-right py-2 px-3">Unr. Gain %</th>
+                        <th className="text-right py-2 px-3">1D Gain</th>
+                        <th className="text-right py-2 px-3">Unr. Gain</th>
+                        <th className="text-right py-2 px-3">Market Value</th>
+                        <th className="text-right py-2 px-3">Shares</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {holdings.holdings.map((h: any) => (
+                        <tr key={h.symbol} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-3">
+                            <div className="font-semibold">{h.symbol}</div>
+                            <div className="text-xs text-gray-500 truncate max-w-[150px]" title={h.asset_name}>
+                              {h.asset_name}
+                            </div>
+                          </td>
+                          <td className="text-right py-2 px-3">{formatPercent(h.weight)}</td>
+                          <td className="text-right py-2 px-3">{formatCurrencyWithDecimals(h.price)}</td>
+                          <td className="text-right py-2 px-3">
+                            {h.avg_cost != null ? formatCurrencyWithDecimals(h.avg_cost) : '-'}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.gain_1d_pct)}`}>
+                            {formatGainPercent(h.gain_1d_pct)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.unr_gain_pct)}`}>
+                            {formatGainPercent(h.unr_gain_pct)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.gain_1d)}`}>
+                            {formatGainCurrency(h.gain_1d)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.unr_gain)}`}>
+                            {formatGainCurrency(h.unr_gain)}
+                          </td>
+                          <td className="text-right py-2 px-3">{formatCurrency(h.market_value)}</td>
+                          <td className="text-right py-2 px-3">{formatSharesDisplay(h.shares)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -394,37 +701,6 @@ export default function Dashboard() {
                     <div className="text-sm text-gray-600">VaR 95% (1D)</div>
                     <div className="text-lg font-semibold">
                       {risk.var_95_1d_hist ? formatPercent(risk.var_95_1d_hist) : 'N/A'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Factor Exposures */}
-            {factors && (
-              <div className="card">
-                <h3 className="text-lg font-semibold mb-4">Factor Exposures (STYLE7)</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {factors.exposures.map((exp: any) => (
-                    <div key={exp.factor_name} className="border-l-4 border-indigo-500 pl-4">
-                      <div className="text-sm text-gray-600">{exp.factor_name}</div>
-                      <div className="text-lg font-semibold">{exp.beta.toFixed(3)}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 pt-4 border-t">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="text-sm text-gray-600">Alpha (Annualized)</div>
-                      <div className="text-lg font-semibold">
-                        {factors.alpha ? formatPercent(factors.alpha) : 'N/A'}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-600">R-Squared</div>
-                      <div className="text-lg font-semibold">
-                        {factors.r_squared ? factors.r_squared.toFixed(3) : 'N/A'}
-                      </div>
                     </div>
                   </div>
                 </div>
