@@ -150,12 +150,12 @@ async def get_accounts(
     current_user: User = Depends(get_current_user)
 ) -> List[Dict[str, Any]]:
     """Get list of accounts for dropdown"""
-    accounts = db.query(Account).filter(Account.is_active == True).all()
+    accounts = db.query(Account).all()
     return [
         {
             "id": a.id,
             "account_number": a.account_number,
-            "name": a.name or a.account_number
+            "name": a.display_name or a.account_number
         }
         for a in accounts
     ]
