@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.core.database import init_db, get_db, engine
 from app.core.security import get_password_hash
 from app.models import User
-from app.api import auth, imports, views, analytics, baskets, jobs, transactions, portfolio_stats, data_management
+from app.api import auth, imports, views, analytics, baskets, jobs, transactions, portfolio_stats, data_management, new_funds
 
 # Configure logging for all modules
 logging.basicConfig(
@@ -47,6 +47,7 @@ app.include_router(jobs.router)
 app.include_router(transactions.router)
 app.include_router(portfolio_stats.router)
 app.include_router(data_management.router)
+app.include_router(new_funds.router)
 
 
 def ensure_tiingo_enum():

@@ -451,6 +451,65 @@ class APIClient {
     });
     return response.data;
   }
+
+  // New Funds Allocation
+  async parseIndustryCSV(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post('/new-funds/parse-industry-csv', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getNewFundsAccounts() {
+    const response = await this.client.get('/new-funds/accounts');
+    return response.data;
+  }
+
+  async calculateAllocation(data: {
+    total_amount: number;
+    account_id: number;
+    industries: any[];
+    ticker_allocations?: any[];
+  }) {
+    const response = await this.client.post('/new-funds/calculate-allocation', data);
+    return response.data;
+  }
+
+  async getTickerPrice(ticker: string) {
+    const response = await this.client.post('/new-funds/get-ticker-price', null, {
+      params: { ticker },
+    });
+    return response.data;
+  }
+
+  async calculateShares(ticker: string, dollarAmount: number) {
+    const response = await this.client.post('/new-funds/calculate-shares', null, {
+      params: { ticker, dollar_amount: dollarAmount },
+    });
+    return response.data;
+  }
+
+  async generateSchwabCSV(accountNumber: string, allocations: any[]) {
+    const response = await this.client.post('/new-funds/generate-schwab-csv', {
+      account_number: accountNumber,
+      allocations,
+    }, {
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  async validateAllocation(data: {
+    total_amount: number;
+    account_id: number;
+    industries: any[];
+    ticker_allocations: any[];
+  }) {
+    const response = await this.client.post('/new-funds/validate-allocation', data);
+    return response.data;
+  }
 }
 
 export const api = new APIClient();
