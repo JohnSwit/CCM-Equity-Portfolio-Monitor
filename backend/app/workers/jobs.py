@@ -23,6 +23,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Flag to enable new incremental update system
+USE_INCREMENTAL_UPDATES = True
+
 # Cache freshness threshold in hours - skip refresh if data is newer than this
 DATA_FRESHNESS_HOURS = 12
 
@@ -508,6 +511,252 @@ async def force_refresh_prices_job(db: Session = None):
     except Exception as e:
         logger.error(f"Force refresh prices job failed: {e}", exc_info=True)
         raise
+    finally:
+        if close_db:
+            db.close()
+
+
+# =============================================================================
+# NEW INCREMENTAL UPDATE SYSTEM
+# =============================================================================
+
+async def incremental_update_job(db: Session = None, force_refresh: bool = False):
+    """
+    New incremental update job using UpdateOrchestrator.
+
+    Features:
+    - Only fetches missing dates
+    - Smart provider selection with coverage tracking
+    - Dependency-aware analytics computation
+    - Comprehensive metrics and observability
+
+    Args:
+        db: Database session (optional)
+        force_refresh: If True, re-fetch all data ignoring cache
+
+    Returns:
+        UpdateMetrics with detailed statistics
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("=" * 60)
+        logger.info("Starting INCREMENTAL update job")
+        logger.info(f"Force refresh: {force_refresh}")
+        logger.info("=" * 60)
+
+        orchestrator = UpdateOrchestrator(db)
+        metrics = await orchestrator.run_full_update(force_refresh=force_refresh)
+
+        return metrics.to_dict()
+
+    except Exception as e:
+        logger.error(f"Incremental update job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def incremental_market_data_job(db: Session = None, force_refresh: bool = False):
+    """
+    Incremental market data update only (no analytics recomputation).
+    Use this for quick price updates without full analytics refresh.
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Starting incremental market data update")
+
+        orchestrator = UpdateOrchestrator(db)
+        metrics = await orchestrator.run_market_data_update(force_refresh=force_refresh)
+
+        return metrics.to_dict()
+
+    except Exception as e:
+        logger.error(f"Incremental market data job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def incremental_analytics_job(db: Session = None):
+    """
+    Incremental analytics update only (no data fetching).
+    Use this after manual data imports or price corrections.
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Starting incremental analytics update")
+
+        orchestrator = UpdateOrchestrator(db)
+        metrics = await orchestrator.run_analytics_update()
+
+        return metrics.to_dict()
+
+    except Exception as e:
+        logger.error(f"Incremental analytics job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def smart_update_job(db: Session = None):
+    """
+    Smart update that chooses the most efficient update strategy based on state.
+
+    - If no recent updates: full incremental update
+    - If prices are stale but analytics fresh: market data only
+    - If prices fresh but analytics stale: analytics only
+    - If everything fresh: skip
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+    from app.models.update_tracking import UpdateJobRun
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Running smart update job")
+
+        # Check last successful run
+        last_run = db.query(UpdateJobRun).filter(
+            UpdateJobRun.status == 'completed'
+        ).order_by(UpdateJobRun.completed_at.desc()).first()
+
+        if last_run and last_run.completed_at:
+            hours_since_last = (datetime.utcnow() - last_run.completed_at).total_seconds() / 3600
+
+            if hours_since_last < 4:  # Less than 4 hours ago
+                logger.info(f"Last update was {hours_since_last:.1f}h ago - running quick update")
+                return await incremental_market_data_job(db)
+            elif hours_since_last < 12:
+                logger.info(f"Last update was {hours_since_last:.1f}h ago - running standard update")
+                return await incremental_update_job(db)
+
+        # Default: full update
+        logger.info("Running full incremental update")
+        return await incremental_update_job(db)
+
+    except Exception as e:
+        logger.error(f"Smart update job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+def get_update_status(db: Session = None) -> dict:
+    """
+    Get current update status and statistics.
+
+    Returns dict with:
+    - last_successful_run: timestamp and metrics
+    - pending_updates: count of entities needing update
+    - provider_health: status of each data provider
+    - computation_status: status of analytics computations
+    """
+    from app.models.update_tracking import (
+        UpdateJobRun, DataUpdateState, TickerProviderCoverage,
+        ComputationDependency, DataProviderStatus, ComputationStatus
+    )
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        status = {}
+
+        # Last successful run
+        last_run = db.query(UpdateJobRun).filter(
+            UpdateJobRun.status == 'completed'
+        ).order_by(UpdateJobRun.completed_at.desc()).first()
+
+        if last_run:
+            status['last_successful_run'] = {
+                'completed_at': last_run.completed_at.isoformat() if last_run.completed_at else None,
+                'tickers_updated': last_run.tickers_updated,
+                'rows_inserted': last_run.rows_inserted,
+                'duration_seconds': (
+                    (last_run.completed_at - last_run.started_at).total_seconds()
+                    if last_run.completed_at else None
+                )
+            }
+        else:
+            status['last_successful_run'] = None
+
+        # Provider health
+        provider_stats = {}
+        for provider in ['tiingo', 'stooq', 'yfinance']:
+            active = db.query(func.count(TickerProviderCoverage.id)).filter(
+                TickerProviderCoverage.provider == provider,
+                TickerProviderCoverage.status == DataProviderStatus.ACTIVE
+            ).scalar() or 0
+
+            failed = db.query(func.count(TickerProviderCoverage.id)).filter(
+                TickerProviderCoverage.provider == provider,
+                TickerProviderCoverage.status == DataProviderStatus.FAILED
+            ).scalar() or 0
+
+            provider_stats[provider] = {'active': active, 'failed': failed}
+
+        status['provider_health'] = provider_stats
+
+        # Computation status
+        comp_stats = {}
+        for comp_type in ['positions', 'returns', 'risk', 'factors']:
+            completed = db.query(func.count(ComputationDependency.id)).filter(
+                ComputationDependency.computation_type == comp_type,
+                ComputationDependency.status == ComputationStatus.COMPLETED
+            ).scalar() or 0
+
+            pending = db.query(func.count(ComputationDependency.id)).filter(
+                ComputationDependency.computation_type == comp_type,
+                ComputationDependency.status.in_([
+                    ComputationStatus.PENDING, ComputationStatus.FAILED
+                ])
+            ).scalar() or 0
+
+            comp_stats[comp_type] = {'completed': completed, 'pending': pending}
+
+        status['computation_status'] = comp_stats
+
+        # Securities needing update
+        today = date.today()
+        stale_count = db.query(func.count(DataUpdateState.id)).filter(
+            DataUpdateState.entity_type == 'security_price',
+            or_(
+                DataUpdateState.last_update_date < today - timedelta(days=1),
+                DataUpdateState.last_update_date.is_(None)
+            )
+        ).scalar() or 0
+
+        status['pending_price_updates'] = stale_count
+
+        return status
+
     finally:
         if close_db:
             db.close()

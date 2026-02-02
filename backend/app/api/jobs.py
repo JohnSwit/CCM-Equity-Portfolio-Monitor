@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from datetime import datetime
+from typing import Optional
 import asyncio
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -74,3 +75,269 @@ async def run_job(
             message=f"Job failed: {str(e)}",
             started_at=started_at
         )
+
+
+# =============================================================================
+# NEW INCREMENTAL UPDATE ENDPOINTS
+# =============================================================================
+
+@router.post("/incremental-update")
+async def run_incremental_update(
+    force_refresh: bool = Query(False, description="Force re-fetch all data ignoring cache"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Run incremental update with smart caching and dependency tracking.
+
+    This is the recommended update method for production use.
+
+    Features:
+    - Only fetches missing dates
+    - Smart provider selection (tracks which providers work for each ticker)
+    - Dependency-aware analytics (only recomputes when inputs change)
+    - Comprehensive metrics and error tracking
+
+    Args:
+        force_refresh: If True, ignores cache and re-fetches all data
+
+    Returns:
+        Detailed metrics including:
+        - tickers_updated/skipped/failed counts
+        - rows_inserted
+        - api_calls_made vs cache_hits
+        - timing breakdowns
+        - error list
+    """
+    from app.workers.jobs import incremental_update_job
+
+    try:
+        metrics = await incremental_update_job(db, force_refresh=force_refresh)
+        return {
+            "status": "success",
+            "message": "Incremental update completed",
+            "metrics": metrics
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Incremental update failed: {str(e)}"
+        )
+
+
+@router.post("/incremental-market-data")
+async def run_incremental_market_data(
+    force_refresh: bool = Query(False, description="Force re-fetch all data"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Run market data update only (no analytics recomputation).
+
+    Use this for:
+    - Quick price updates during market hours
+    - Testing data provider connectivity
+    - Backfilling missing prices
+
+    Faster than full incremental update since it skips analytics.
+    """
+    from app.workers.jobs import incremental_market_data_job
+
+    try:
+        metrics = await incremental_market_data_job(db, force_refresh=force_refresh)
+        return {
+            "status": "success",
+            "message": "Market data update completed",
+            "metrics": metrics
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Market data update failed: {str(e)}"
+        )
+
+
+@router.post("/incremental-analytics")
+async def run_incremental_analytics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Run analytics update only (no data fetching).
+
+    Use this after:
+    - Manual price imports
+    - Price corrections
+    - Transaction imports
+
+    Only recomputes analytics where inputs have changed.
+    """
+    from app.workers.jobs import incremental_analytics_job
+
+    try:
+        metrics = await incremental_analytics_job(db)
+        return {
+            "status": "success",
+            "message": "Analytics update completed",
+            "metrics": metrics
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analytics update failed: {str(e)}"
+        )
+
+
+@router.post("/smart-update")
+async def run_smart_update(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Automatically chooses the most efficient update strategy.
+
+    Logic:
+    - If last update < 4h ago: quick market data update only
+    - If last update < 12h ago: standard incremental update
+    - Otherwise: full incremental update
+
+    Use this for scheduled jobs or when you're not sure what's needed.
+    """
+    from app.workers.jobs import smart_update_job
+
+    try:
+        metrics = await smart_update_job(db)
+        return {
+            "status": "success",
+            "message": "Smart update completed",
+            "metrics": metrics
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Smart update failed: {str(e)}"
+        )
+
+
+@router.get("/update-status")
+async def get_update_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get current update status and health metrics.
+
+    Returns:
+    - last_successful_run: when and what happened
+    - provider_health: status of each data provider
+    - computation_status: which analytics are up to date
+    - pending_price_updates: count of stale tickers
+    """
+    from app.workers.jobs import get_update_status as _get_status
+
+    try:
+        status = _get_status(db)
+        return {
+            "status": "success",
+            "data": status
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get status: {str(e)}"
+        )
+
+
+@router.get("/provider-coverage")
+async def get_provider_coverage(
+    symbol: Optional[str] = Query(None, description="Filter by symbol"),
+    provider: Optional[str] = Query(None, description="Filter by provider"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get data provider coverage information.
+
+    Shows which providers work for each ticker, failure counts, etc.
+    Useful for debugging data fetch issues.
+    """
+    from app.models.update_tracking import TickerProviderCoverage
+    from sqlalchemy import and_
+
+    query = db.query(TickerProviderCoverage)
+
+    if symbol:
+        query = query.filter(TickerProviderCoverage.symbol == symbol.upper())
+    if provider:
+        query = query.filter(TickerProviderCoverage.provider == provider.lower())
+
+    coverages = query.order_by(
+        TickerProviderCoverage.symbol,
+        TickerProviderCoverage.provider
+    ).limit(500).all()
+
+    return {
+        "status": "success",
+        "count": len(coverages),
+        "data": [
+            {
+                "symbol": c.symbol,
+                "provider": c.provider,
+                "status": c.status.value if c.status else None,
+                "last_success": c.last_success.isoformat() if c.last_success else None,
+                "last_failure": c.last_failure.isoformat() if c.last_failure else None,
+                "failure_count": c.failure_count,
+                "records_fetched": c.records_fetched,
+                "last_error": c.last_error[:100] if c.last_error else None
+            }
+            for c in coverages
+        ]
+    }
+
+
+@router.get("/job-history")
+async def get_job_history(
+    limit: int = Query(20, ge=1, le=100),
+    job_type: Optional[str] = Query(None, description="Filter by job type"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get recent job execution history.
+
+    Shows timing, success/failure, metrics for each run.
+    """
+    from app.models.update_tracking import UpdateJobRun
+
+    query = db.query(UpdateJobRun)
+
+    if job_type:
+        query = query.filter(UpdateJobRun.job_type == job_type)
+
+    runs = query.order_by(UpdateJobRun.started_at.desc()).limit(limit).all()
+
+    return {
+        "status": "success",
+        "count": len(runs),
+        "data": [
+            {
+                "id": r.id,
+                "job_type": r.job_type,
+                "status": r.status,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "duration_seconds": (
+                    (r.completed_at - r.started_at).total_seconds()
+                    if r.completed_at and r.started_at else None
+                ),
+                "tickers_processed": r.tickers_processed,
+                "tickers_updated": r.tickers_updated,
+                "tickers_failed": r.tickers_failed,
+                "rows_inserted": r.rows_inserted,
+                "api_calls_made": r.api_calls_made,
+                "cache_hits": r.cache_hits,
+                "error_count": len(r.errors_json) if r.errors_json else 0
+            }
+            for r in runs
+        ]
+    }

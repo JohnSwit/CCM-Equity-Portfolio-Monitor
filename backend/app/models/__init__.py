@@ -13,6 +13,11 @@ from app.models.sector_models import (
     SectorClassification, BenchmarkConstituent, FactorReturns
 )
 
+from app.models.update_tracking import (
+    TickerProviderCoverage, DataUpdateState, ComputationDependency,
+    UpdateJobRun, DataProviderStatus, ComputationStatus
+)
+
 __all__ = [
     "User", "Account", "Security", "Transaction", "TransactionTypeMap",
     "PricesEOD", "PositionsEOD", "PortfolioValueEOD", "ReturnsEOD",
@@ -22,5 +27,8 @@ __all__ = [
     "ImportLog", "ManualPrice",
     "FactorProxySeries", "FactorModelDefinition", "FactorAttributionResult",
     "TransactionType", "AssetClass", "ViewType", "GroupType", "FactorDataSource",
-    "SectorClassification", "BenchmarkConstituent", "FactorReturns"
+    "SectorClassification", "BenchmarkConstituent", "FactorReturns",
+    # Update tracking models
+    "TickerProviderCoverage", "DataUpdateState", "ComputationDependency",
+    "UpdateJobRun", "DataProviderStatus", "ComputationStatus"
 ]
