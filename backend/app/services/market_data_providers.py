@@ -400,7 +400,15 @@ class TiingoFactorProvider(MarketDataProvider):
 class DataProviderManager:
     """
     Manages multiple data providers with fallback logic.
+
+    Tiingo is the primary and preferred source for all ETF data.
+    Fallbacks (Stooq, yfinance) are only tried for broader date ranges
+    when Tiingo fails with an error (not just empty data).
     """
+
+    # Minimum date range to trigger fallback providers
+    # Short ranges with no data are likely holidays - don't retry
+    MIN_DAYS_FOR_FALLBACK = 5
 
     def __init__(self, fred_api_key: Optional[str] = None, tiingo_api_key: Optional[str] = None):
         self.providers = {
@@ -410,8 +418,9 @@ class DataProviderManager:
             'yfinance': YFinanceProvider(),
         }
 
-        # Default provider order for ETFs - Tiingo first
-        self.etf_provider_order = ['tiingo', 'stooq', 'yfinance']
+        # Tiingo is primary; only fall back for broader ranges if it errors
+        self.primary_provider = 'tiingo'
+        self.fallback_providers = ['stooq', 'yfinance']
         # Default provider for macro/rates
         self.macro_provider = 'fred'
 
@@ -422,15 +431,48 @@ class DataProviderManager:
         end_date: date
     ) -> Tuple[Optional[pd.DataFrame], str]:
         """
-        Fetch ETF data with fallback.
-        Returns (DataFrame, source_used) or (None, '')
+        Fetch ETF data with smart fallback logic.
+
+        Strategy:
+        1. Always try Tiingo first
+        2. If Tiingo returns empty data for a small date range (< 5 days),
+           assume it's holidays and return empty (don't waste time on fallbacks)
+        3. Only try fallbacks for larger date ranges or actual errors
         """
-        for provider_name in self.etf_provider_order:
-            provider = self.providers.get(provider_name)
-            if provider:
-                df = provider.fetch_series(symbol, start_date, end_date)
+        date_range_days = (end_date - start_date).days
+
+        # Try primary provider (Tiingo)
+        primary = self.providers.get(self.primary_provider)
+        if primary:
+            try:
+                df = primary.fetch_series(symbol, start_date, end_date)
                 if df is not None and len(df) > 0:
-                    return df, provider_name
+                    return df, self.primary_provider
+
+                # Tiingo returned empty - check if we should try fallbacks
+                if date_range_days < self.MIN_DAYS_FOR_FALLBACK:
+                    # Small date range with no data = likely holiday, don't retry
+                    logger.debug(f"No data for {symbol} ({start_date} to {end_date}), "
+                                f"small range - assuming holiday, skipping fallbacks")
+                    return None, ''
+
+            except Exception as e:
+                logger.warning(f"Primary provider error for {symbol}: {e}")
+                # Fall through to try fallbacks
+
+        # Only try fallbacks for larger date ranges
+        if date_range_days >= self.MIN_DAYS_FOR_FALLBACK:
+            for provider_name in self.fallback_providers:
+                provider = self.providers.get(provider_name)
+                if provider:
+                    try:
+                        df = provider.fetch_series(symbol, start_date, end_date)
+                        if df is not None and len(df) > 0:
+                            logger.info(f"Fallback provider {provider_name} succeeded for {symbol}")
+                            return df, provider_name
+                    except Exception as e:
+                        logger.warning(f"Fallback provider {provider_name} failed for {symbol}: {e}")
+                        continue
 
         return None, ''
 

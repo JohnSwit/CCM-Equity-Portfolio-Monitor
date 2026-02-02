@@ -166,7 +166,14 @@ class FactorBenchmarkingService:
         start_date: date,
         end_date: date
     ) -> List[tuple]:
-        """Determine which date ranges need to be fetched."""
+        """
+        Determine which date ranges need to be fetched.
+
+        Optimizations:
+        - Merges small ranges to reduce API calls
+        - Returns broader ranges (minimum 7 days) to handle holiday gaps
+        - Avoids single-date queries that might hit holidays
+        """
         existing_dates = self.db.query(FactorProxySeries.date).filter(
             and_(
                 FactorProxySeries.symbol == symbol,
@@ -181,6 +188,7 @@ class FactorBenchmarkingService:
         if not existing_set:
             return [(start_date, end_date)]
 
+        # Generate business days (excludes weekends)
         all_dates = pd.date_range(start=start_date, end=end_date, freq='B')
         all_dates_set = {d.date() for d in all_dates}
         missing_dates = sorted(all_dates_set - existing_set)
@@ -188,18 +196,53 @@ class FactorBenchmarkingService:
         if not missing_dates:
             return []
 
+        # Build ranges, but merge small gaps and ensure minimum range size
         ranges = []
         range_start = missing_dates[0]
         prev_date = missing_dates[0]
 
         for d in missing_dates[1:]:
-            if (d - prev_date).days > 5:
+            gap_days = (d - prev_date).days
+            # Only split if gap is more than 10 days (to avoid splitting around holidays)
+            if gap_days > 10:
                 ranges.append((range_start, prev_date))
                 range_start = d
             prev_date = d
 
         ranges.append((range_start, prev_date))
-        return ranges
+
+        # Ensure minimum range size to avoid single-date holiday queries
+        # Extend single-day or small ranges to at least 7 calendar days
+        MIN_RANGE_DAYS = 7
+        expanded_ranges = []
+        for range_start, range_end in ranges:
+            range_days = (range_end - range_start).days
+            if range_days < MIN_RANGE_DAYS:
+                # Expand range symmetrically
+                expand_by = (MIN_RANGE_DAYS - range_days) // 2 + 1
+                new_start = range_start - timedelta(days=expand_by)
+                new_end = range_end + timedelta(days=expand_by)
+                # Clamp to original bounds
+                new_start = max(new_start, start_date)
+                new_end = min(new_end, end_date)
+                expanded_ranges.append((new_start, new_end))
+            else:
+                expanded_ranges.append((range_start, range_end))
+
+        # Merge overlapping ranges
+        if not expanded_ranges:
+            return []
+
+        expanded_ranges.sort()
+        merged = [expanded_ranges[0]]
+        for current_start, current_end in expanded_ranges[1:]:
+            last_start, last_end = merged[-1]
+            if current_start <= last_end + timedelta(days=5):  # Merge if within 5 days
+                merged[-1] = (last_start, max(last_end, current_end))
+            else:
+                merged.append((current_start, current_end))
+
+        return merged
 
     def _cache_series_data(self, symbol: str, source: str, df: pd.DataFrame):
         """Cache fetched data to database with proper error handling"""
