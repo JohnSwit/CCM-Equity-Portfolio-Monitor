@@ -10,6 +10,7 @@ interface Industry {
   proforma_weight: number;
   active_weight: number;
   dollar_allocation: number;
+  excluded: boolean;
 }
 
 interface TickerAllocation {
@@ -81,7 +82,12 @@ export default function NewFundsPage() {
     try {
       const data = await api.parseIndustryCSV(file);
       if (data.success) {
-        setIndustries(data.industries);
+        // Add excluded field to each industry
+        const industriesWithExcluded = data.industries.map((ind: any) => ({
+          ...ind,
+          excluded: false
+        }));
+        setIndustries(industriesWithExcluded);
         setTickerAllocations([]);
         setSuccessMessage(`Loaded ${data.industries.length} industries`);
         setTimeout(() => setSuccessMessage(null), 3000);
@@ -150,22 +156,29 @@ export default function NewFundsPage() {
     const amount = parseFloat(value.replace(/,/g, '')) || 0;
     setTotalAmount(amount);
 
-    // Recalculate dollar allocations for industries
+    // Recalculate dollar allocations for industries (respecting exclusions)
     if (industries.length > 0) {
-      const updated = industries.map(ind => ({
-        ...ind,
-        dollar_allocation: amount * ind.proforma_weight
-      }));
+      const updated = industries.map(ind => {
+        if (ind.excluded) {
+          return { ...ind, dollar_allocation: 0 }; // Excluded industries get $0
+        }
+        return {
+          ...ind,
+          dollar_allocation: amount * ind.proforma_weight
+        };
+      });
       setIndustries(updated);
 
       // Also recalculate ticker allocations
       if (tickerAllocations.length > 0) {
         const updatedTickers = tickerAllocations.map(alloc => {
           const industry = updated.find(i => i.industry === alloc.industry);
-          if (industry && alloc.pct_of_industry > 0) {
+          if (industry && !industry.excluded && alloc.pct_of_industry > 0) {
             const dollarAmount = industry.dollar_allocation * (alloc.pct_of_industry / 100);
             const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
             return { ...alloc, dollar_amount: dollarAmount, shares };
+          } else if (industry?.excluded) {
+            return { ...alloc, dollar_amount: 0, shares: 0 };
           }
           return alloc;
         });
@@ -176,6 +189,9 @@ export default function NewFundsPage() {
 
   // Handle adjustment change (basis points)
   const handleAdjustmentChange = (industry: string, bps: number) => {
+    const targetIndustry = industries.find(i => i.industry === industry);
+    if (!targetIndustry || targetIndustry.excluded) return; // Don't adjust excluded industries
+
     const updated = industries.map(ind => {
       if (ind.industry === industry) {
         const newProforma = ind.ccm_weight + (bps / 10000);
@@ -190,18 +206,102 @@ export default function NewFundsPage() {
       return ind;
     });
 
-    // Normalize if needed
-    const totalProforma = updated.reduce((sum, i) => sum + i.proforma_weight, 0);
-    if (Math.abs(totalProforma - 1) > 0.0001) {
-      const normalized = updated.map(ind => ({
-        ...ind,
-        proforma_weight: ind.proforma_weight / totalProforma,
-        active_weight: (ind.proforma_weight / totalProforma) - ind.sp500_weight,
-        dollar_allocation: totalAmount * (ind.proforma_weight / totalProforma)
-      }));
+    // Normalize if needed (only non-excluded industries)
+    const nonExcluded = updated.filter(i => !i.excluded);
+    const totalProforma = nonExcluded.reduce((sum, i) => sum + i.proforma_weight, 0);
+    if (Math.abs(totalProforma - 1) > 0.0001 && totalProforma > 0) {
+      const normalized = updated.map(ind => {
+        if (ind.excluded) {
+          return ind; // Keep excluded industries at 0
+        }
+        return {
+          ...ind,
+          proforma_weight: ind.proforma_weight / totalProforma,
+          active_weight: (ind.proforma_weight / totalProforma) - ind.sp500_weight,
+          dollar_allocation: totalAmount * (ind.proforma_weight / totalProforma)
+        };
+      });
       setIndustries(normalized);
     } else {
       setIndustries(updated);
+    }
+  };
+
+  // Handle exclusion toggle (zero out allocation for an industry)
+  const handleExclusionToggle = (industryName: string) => {
+    const targetIndustry = industries.find(i => i.industry === industryName);
+    if (!targetIndustry) return;
+
+    const newExcluded = !targetIndustry.excluded;
+
+    // Update the target industry
+    let updated = industries.map(ind => {
+      if (ind.industry === industryName) {
+        if (newExcluded) {
+          // Excluding: zero out the weights
+          return {
+            ...ind,
+            excluded: true,
+            proforma_weight: 0,
+            active_weight: -ind.sp500_weight, // Full underweight vs S&P
+            dollar_allocation: 0
+          };
+        } else {
+          // Re-including: restore to ccm_weight + adjustment
+          const baseWeight = ind.ccm_weight + (ind.adjustment_bps / 10000);
+          return {
+            ...ind,
+            excluded: false,
+            proforma_weight: baseWeight,
+            active_weight: baseWeight - ind.sp500_weight,
+            dollar_allocation: totalAmount * baseWeight
+          };
+        }
+      }
+      return ind;
+    });
+
+    // Renormalize non-excluded industries to sum to 1
+    const nonExcluded = updated.filter(i => !i.excluded);
+    const totalProforma = nonExcluded.reduce((sum, i) => sum + i.proforma_weight, 0);
+
+    if (totalProforma > 0) {
+      updated = updated.map(ind => {
+        if (ind.excluded) {
+          return ind; // Keep excluded at 0
+        }
+        return {
+          ...ind,
+          proforma_weight: ind.proforma_weight / totalProforma,
+          active_weight: (ind.proforma_weight / totalProforma) - ind.sp500_weight,
+          dollar_allocation: totalAmount * (ind.proforma_weight / totalProforma)
+        };
+      });
+    }
+
+    setIndustries(updated);
+
+    // Also update ticker allocations for excluded industries
+    if (newExcluded) {
+      setTickerAllocations(tickerAllocations.map(alloc => {
+        if (alloc.industry === industryName) {
+          return { ...alloc, dollar_amount: 0, shares: 0 };
+        }
+        return alloc;
+      }));
+    } else {
+      // Recalculate ticker allocations for re-included industry
+      const industry = updated.find(i => i.industry === industryName);
+      if (industry) {
+        setTickerAllocations(tickerAllocations.map(alloc => {
+          if (alloc.industry === industryName && alloc.pct_of_industry > 0) {
+            const dollarAmount = industry.dollar_allocation * (alloc.pct_of_industry / 100);
+            const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
+            return { ...alloc, dollar_amount: dollarAmount, shares };
+          }
+          return alloc;
+        }));
+      }
     }
   };
 
@@ -443,6 +543,7 @@ export default function NewFundsPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase" title="Include in allocation">Incl.</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Industry</th>
                     <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">S&P Weight</th>
                     <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">CCM Weight</th>
@@ -462,7 +563,16 @@ export default function NewFundsPage() {
 
                     return (
                       <>
-                        <tr key={industry.industry} className="hover:bg-gray-50">
+                        <tr key={industry.industry} className={`hover:bg-gray-50 ${industry.excluded ? 'bg-gray-100 opacity-60' : ''}`}>
+                          <td className="px-4 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={!industry.excluded}
+                              onChange={() => handleExclusionToggle(industry.industry)}
+                              className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                              title={industry.excluded ? 'Include in allocation' : 'Exclude from allocation'}
+                            />
+                          </td>
                           <td className="px-4 py-3 text-sm font-medium text-gray-900">
                             <button
                               onClick={() => setExpandedIndustry(isExpanded ? null : industry.industry)}
@@ -483,7 +593,8 @@ export default function NewFundsPage() {
                               type="number"
                               value={industry.adjustment_bps}
                               onChange={(e) => handleAdjustmentChange(industry.industry, parseInt(e.target.value) || 0)}
-                              className="w-20 px-2 py-1 text-sm text-center border border-gray-300 rounded"
+                              disabled={industry.excluded}
+                              className={`w-20 px-2 py-1 text-sm text-center border border-gray-300 rounded ${industry.excluded ? 'bg-gray-200 cursor-not-allowed' : ''}`}
                             />
                           </td>
                           <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
@@ -506,7 +617,8 @@ export default function NewFundsPage() {
                           <td className="px-4 py-3 text-center">
                             <button
                               onClick={() => addTickerToIndustry(industry.industry)}
-                              className="text-blue-600 hover:text-blue-800 text-sm"
+                              disabled={industry.excluded}
+                              className={`text-sm ${industry.excluded ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
                             >
                               + Add Ticker
                             </button>
@@ -516,7 +628,7 @@ export default function NewFundsPage() {
                         {/* Expanded ticker allocations */}
                         {isExpanded && (
                           <tr>
-                            <td colSpan={9} className="px-4 py-3 bg-gray-50">
+                            <td colSpan={10} className="px-4 py-3 bg-gray-50">
                               <div className="ml-6">
                                 {industryAllocations.length === 0 ? (
                                   <p className="text-sm text-gray-500 italic">
@@ -631,6 +743,7 @@ export default function NewFundsPage() {
             <li><strong>Optional:</strong> Upload a portfolio CSV to auto-populate tickers (columns: Ticker, Industry, % Allocation)</li>
             <li>Select the account to allocate new funds to</li>
             <li>Enter the total dollar amount to allocate</li>
+            <li><strong>Optional:</strong> Uncheck industries to exclude them (zero allocation) - remaining weights auto-normalize</li>
             <li>Optionally adjust CCM weights using basis point adjustments</li>
             <li>Click on an industry row to expand and add/edit tickers manually</li>
             <li>Click "Execute" to generate a Schwab-compatible CSV for bulk upload</li>
