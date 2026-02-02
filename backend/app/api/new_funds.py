@@ -13,7 +13,7 @@ from sqlalchemy import desc
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.api.auth import get_current_user
 from app.models import User, Account, Security, PricesEOD
 import logging
 
