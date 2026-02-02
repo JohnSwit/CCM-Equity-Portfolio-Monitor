@@ -308,6 +308,7 @@ class MarketDataProvider:
         """Fetch and store benchmark prices"""
         # Map to Tiingo-compatible symbol
         tiingo_symbol = self.get_benchmark_tiingo_symbol(benchmark_code, provider_symbol)
+        source = 'tiingo'
 
         # Try Tiingo first
         df = self.fetch_tiingo_benchmark_prices(tiingo_symbol, start_date, end_date)
@@ -315,6 +316,7 @@ class MarketDataProvider:
         if df is None or df.empty:
             # Fallback to yfinance with benchmark code
             df = self.fetch_yfinance_prices(benchmark_code, start_date, end_date)
+            source = 'yfinance'
 
         if df is None or df.empty:
             logger.warning(f"No prices fetched for benchmark {benchmark_code}")
@@ -433,83 +435,6 @@ class MarketDataProvider:
                     results['updated'] += 1
             except Exception as e:
                 logger.error(f"Failed to update {security.symbol}: {e}")
-                results['failed'] += 1
-
-        return results
-
-    async def update_factor_etf_prices(self) -> Dict[str, int]:
-        """Update prices for factor ETFs used in STYLE7 analysis"""
-        # Factor ETFs from FactorsEngine
-        FACTOR_ETFS = ['SPY', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM']
-
-        logger.info(f"Updating factor ETF prices for: {FACTOR_ETFS}")
-
-        results = {
-            'total_etfs': len(FACTOR_ETFS),
-            'updated': 0,
-            'failed': 0
-        }
-
-        # Use 5-year lookback for factor analysis
-        end_date = date.today()
-        start_date = end_date - timedelta(days=5*365)
-
-        for symbol in FACTOR_ETFS:
-            try:
-                # Find or create the security
-                security = self.db.query(Security).filter(
-                    Security.symbol == symbol
-                ).first()
-
-                if not security:
-                    from app.models import AssetClass
-                    security = Security(
-                        symbol=symbol,
-                        asset_name=f"{symbol} ETF",
-                        asset_class=AssetClass.ETF
-                    )
-                    self.db.add(security)
-                    self.db.flush()
-                    logger.info(f"Created security for factor ETF: {symbol}")
-
-                # Fetch prices from Tiingo
-                df = self.fetch_tiingo_prices(symbol, start_date, end_date)
-
-                if df is None or df.empty:
-                    logger.warning(f"No Tiingo data for factor ETF {symbol}")
-                    results['failed'] += 1
-                    continue
-
-                # Store prices
-                count = 0
-                for _, row in df.iterrows():
-                    existing = self.db.query(PricesEOD).filter(
-                        and_(
-                            PricesEOD.security_id == security.id,
-                            PricesEOD.date == row['date']
-                        )
-                    ).first()
-
-                    if not existing:
-                        price = PricesEOD(
-                            security_id=security.id,
-                            date=row['date'],
-                            close=float(row['close']),
-                            source='tiingo'
-                        )
-                        self.db.add(price)
-                        count += 1
-
-                self.db.commit()
-                logger.info(f"Stored {count} prices for factor ETF {symbol}")
-
-                if count > 0:
-                    results['updated'] += 1
-
-                await asyncio.sleep(self.rate_limit_delay)
-
-            except Exception as e:
-                logger.error(f"Failed to update factor ETF {symbol}: {e}")
                 results['failed'] += 1
 
         return results
