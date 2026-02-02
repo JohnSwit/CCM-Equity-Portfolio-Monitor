@@ -290,11 +290,13 @@ class TiingoFactorProvider(MarketDataProvider):
     """
     Provider using Tiingo API for factor ETF data.
     Primary provider for US ETFs with reliable, enterprise-grade data.
+    Uses get_dataframe() for consistent behavior with MarketDataProvider.
     """
 
     def __init__(self, api_key: Optional[str] = None):
         self._api_key = api_key
         self._client = None
+        self._initialized = False
 
     def _get_client(self):
         if self._client is None:
@@ -303,15 +305,21 @@ class TiingoFactorProvider(MarketDataProvider):
                 try:
                     from app.core.config import settings
                     self._api_key = settings.TIINGO_API_KEY
-                except Exception:
-                    pass
+                    if self._api_key:
+                        logger.info("TiingoFactorProvider: Got API key from settings")
+                except Exception as e:
+                    logger.warning(f"TiingoFactorProvider: Failed to get API key from settings: {e}")
 
             if self._api_key:
                 try:
                     from tiingo import TiingoClient
-                    self._client = TiingoClient({'api_key': self._api_key})
+                    self._client = TiingoClient({'api_key': self._api_key, 'session': True})
+                    self._initialized = True
+                    logger.info("TiingoFactorProvider: Client initialized successfully")
                 except Exception as e:
-                    logger.error(f"Failed to initialize Tiingo client: {e}")
+                    logger.error(f"TiingoFactorProvider: Failed to initialize client: {e}")
+            else:
+                logger.warning("TiingoFactorProvider: No API key available")
         return self._client
 
     def get_source_name(self) -> str:
@@ -323,47 +331,59 @@ class TiingoFactorProvider(MarketDataProvider):
         start_date: date,
         end_date: date
     ) -> Optional[pd.DataFrame]:
-        """Fetch historical prices from Tiingo"""
+        """Fetch historical prices from Tiingo using get_dataframe()"""
         client = self._get_client()
         if client is None:
-            logger.warning("Tiingo client not configured")
+            logger.warning(f"TiingoFactorProvider: Client not configured, cannot fetch {symbol}")
             return None
 
         try:
-            price_data = client.get_ticker_price(
+            logger.info(f"TiingoFactorProvider: Fetching {symbol} from {start_date} to {end_date}")
+
+            # Use get_dataframe() which is more reliable than get_ticker_price()
+            df = client.get_dataframe(
                 symbol,
                 startDate=start_date.strftime('%Y-%m-%d'),
                 endDate=end_date.strftime('%Y-%m-%d'),
                 frequency='daily'
             )
 
-            if not price_data:
-                logger.warning(f"No Tiingo data returned for {symbol}")
+            if df is None or df.empty:
+                logger.warning(f"TiingoFactorProvider: No data returned for {symbol}")
                 return None
 
-            df = pd.DataFrame(price_data)
+            logger.info(f"TiingoFactorProvider: Raw response for {symbol}: {len(df)} rows, columns: {list(df.columns)}")
 
-            if df.empty or 'adjClose' not in df.columns:
-                logger.warning(f"Tiingo returned empty or invalid data for {symbol}")
+            # Reset index (date is typically the index with get_dataframe)
+            df = df.reset_index()
+
+            # Handle column naming - get_dataframe returns 'date' as index
+            if 'date' not in df.columns and 'index' in df.columns:
+                df = df.rename(columns={'index': 'date'})
+
+            # Use adjClose if available, otherwise close
+            close_col = 'adjClose' if 'adjClose' in df.columns else 'close'
+            if close_col not in df.columns:
+                logger.warning(f"TiingoFactorProvider: No close price column found for {symbol}, columns: {list(df.columns)}")
                 return None
 
             # Select and rename columns
-            df = df[['date', 'adjClose']].copy()
-            df = df.rename(columns={'adjClose': 'close'})
+            df = df[['date', close_col]].copy()
+            df = df.rename(columns={close_col: 'close'})
             df['date'] = pd.to_datetime(df['date']).dt.date
             df = df.sort_values('date')
 
             # Compute daily returns
             df['daily_return'] = df['close'].pct_change()
 
-            # Validate - filter extreme outliers
+            # Validate - filter extreme outliers (>50% daily move)
             df = df[df['daily_return'].abs() <= 0.5]
 
-            logger.info(f"Fetched {len(df)} rows from Tiingo for {symbol}")
+            logger.info(f"TiingoFactorProvider: Fetched {len(df)} rows for {symbol}")
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching from Tiingo for {symbol}: {e}")
+            logger.error(f"TiingoFactorProvider: Error fetching {symbol}: {e}", exc_info=True)
             return None
 
 
