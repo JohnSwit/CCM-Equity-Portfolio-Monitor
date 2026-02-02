@@ -205,8 +205,9 @@ async def market_data_update_job(db: Session = None):
         factors_engine.ensure_style7_factor_set()
         factors_engine.ensure_factor_etfs_exist()
 
-        # Factor ETFs will be updated as part of security prices
-        # since they're in the Security table
+        # Explicitly update factor ETF prices (SPY, IWM, IVE, IVW, QUAL, SPLV, MTUM, etc.)
+        factor_etf_results = await market_data.update_factor_etf_prices()
+        logger.info(f"Factor ETF prices updated: {factor_etf_results}")
 
         logger.info("Market data fetched successfully")
 

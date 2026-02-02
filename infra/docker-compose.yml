@@ -26,6 +26,7 @@ services:
     environment:
       DATABASE_URL: postgresql://portfolio_user:portfolio_pass@postgres:5432/portfolio_db
       SECRET_KEY: dev-secret-key-change-in-production
+      TIINGO_API_KEY: ${TIINGO_API_KEY:-}
       ENABLE_YFINANCE_FALLBACK: "true"
       CORS_ORIGINS: http://localhost:3000
     ports:
@@ -45,6 +46,7 @@ services:
     environment:
       DATABASE_URL: postgresql://portfolio_user:portfolio_pass@postgres:5432/portfolio_db
       SECRET_KEY: dev-secret-key-change-in-production
+      TIINGO_API_KEY: ${TIINGO_API_KEY:-}
       ENABLE_YFINANCE_FALLBACK: "true"
     volumes:
       - ../backend:/app

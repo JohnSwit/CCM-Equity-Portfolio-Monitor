@@ -65,7 +65,8 @@ docker logs portfolio_frontend
 │   └── sector_models.py    # Sector classification models
 ├── services/               # Business logic layer
 │   ├── bd_parser.py        # Black Diamond CSV parser
-│   ├── market_data.py      # Price fetching (Stooq primary, yfinance fallback)
+│   ├── market_data.py      # Price service (orchestrates providers)
+│   ├── market_data_providers.py  # Data providers (Tiingo primary, Stooq/yfinance fallback)
 │   ├── positions.py        # Daily positions engine
 │   ├── returns.py          # TWR returns computation
 │   ├── benchmarks.py       # Benchmark metrics (beta, alpha, tracking error)
@@ -257,7 +258,8 @@ Key variables (see `infra/.env.template`):
 |----------|---------|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SECRET_KEY` | JWT signing key |
-| `ENABLE_YFINANCE_FALLBACK` | Use yfinance if Stooq fails |
+| `TIINGO_API_KEY` | Tiingo API key (primary market data source) |
+| `ENABLE_YFINANCE_FALLBACK` | Use yfinance as last-resort fallback |
 | `CORS_ORIGINS` | Allowed CORS origins |
 | `NEXT_PUBLIC_API_URL` | Frontend API endpoint |
 
@@ -265,7 +267,7 @@ Key variables (see `infra/.env.template`):
 
 1. **FIRM View Storage**: FIRM views use `ViewType.GROUP` in database with `is_firm=True`
 
-2. **Symbol Mapping**: US equities need `.US` suffix for Stooq (e.g., `AAPL` → `AAPL.US`)
+2. **Market Data Providers**: Tiingo is primary (requires API key), Stooq and yfinance are fallbacks
 
 3. **Trade Date Effects**: Trades update positions **after close** of trade date
 
