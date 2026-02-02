@@ -1,6 +1,6 @@
 """
 Market data service for fetching and storing security and benchmark prices.
-Uses market_data_providers for the actual data fetching with Tiingo as primary source.
+Uses Tiingo as primary source with yfinance fallback.
 """
 import pandas as pd
 from tiingo import TiingoClient
@@ -12,10 +12,6 @@ import asyncio
 import logging
 
 from app.models import Security, PricesEOD, BenchmarkDefinition, BenchmarkLevel
-from app.services.market_data_providers import (
-    MarketDataAggregator,
-    fetch_prices_with_fallback,
-)
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
