@@ -462,6 +462,15 @@ class APIClient {
     return response.data;
   }
 
+  async parsePortfolioCSV(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post('/new-funds/parse-portfolio-csv', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
   async getNewFundsAccounts() {
     const response = await this.client.get('/new-funds/accounts');
     return response.data;

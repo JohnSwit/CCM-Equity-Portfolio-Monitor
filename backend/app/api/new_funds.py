@@ -161,6 +161,143 @@ async def get_accounts(
     ]
 
 
+@router.post("/parse-portfolio-csv")
+async def parse_portfolio_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Parse uploaded CSV file containing portfolio ticker allocations.
+
+    Expected CSV format:
+    Column A: Ticker
+    Column B: Industry
+    Column C: % of industry allocation
+
+    Example:
+    Ticker,Industry,Allocation
+    AAPL,Information Technology,50
+    MSFT,Information Technology,50
+    JNJ,Health Care,100
+    """
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be a CSV")
+
+    try:
+        content = await file.read()
+        text = content.decode('utf-8')
+
+        # Parse CSV
+        reader = csv.DictReader(io.StringIO(text))
+        allocations = []
+        errors = []
+
+        for row_num, row in enumerate(reader, start=2):  # Start at 2 to account for header
+            ticker = None
+            industry = None
+            pct_allocation = None
+
+            # Find columns (flexible naming)
+            for key, value in row.items():
+                if not value:
+                    continue
+                key_lower = key.lower().strip()
+                value = value.strip()
+
+                if key_lower in ['ticker', 'symbol', 'stock']:
+                    ticker = value.upper()
+                elif key_lower in ['industry', 'sector', 'industry group', 'gics industry']:
+                    industry = value
+                elif key_lower in ['allocation', '% allocation', 'pct', 'percentage', '%', 'weight', '% of industry']:
+                    # Parse percentage - handle both "50" and "50%"
+                    pct_str = value.replace('%', '').strip()
+                    try:
+                        pct_allocation = float(pct_str)
+                    except ValueError:
+                        errors.append(f"Row {row_num}: Invalid allocation value '{value}'")
+                        continue
+
+            # If columns weren't found by name, try positional
+            if ticker is None or industry is None or pct_allocation is None:
+                values = list(row.values())
+                if len(values) >= 3:
+                    if ticker is None and values[0]:
+                        ticker = values[0].strip().upper()
+                    if industry is None and values[1]:
+                        industry = values[1].strip()
+                    if pct_allocation is None and values[2]:
+                        try:
+                            pct_allocation = float(values[2].strip().replace('%', ''))
+                        except ValueError:
+                            pass
+
+            if ticker and industry and pct_allocation is not None:
+                # Look up price for this ticker
+                price = 0.0
+                security_name = None
+
+                security = db.query(Security).filter(Security.symbol == ticker).first()
+                if not security:
+                    # Try with dot notation
+                    ticker_alt = ticker.replace('-', '.')
+                    security = db.query(Security).filter(Security.symbol == ticker_alt).first()
+
+                if security:
+                    latest_price = db.query(PricesEOD).filter(
+                        PricesEOD.security_id == security.id
+                    ).order_by(desc(PricesEOD.date)).first()
+
+                    if latest_price:
+                        price = float(latest_price.close)
+                    security_name = security.asset_name
+
+                allocations.append({
+                    "ticker": ticker,
+                    "industry": industry,
+                    "pct_of_industry": pct_allocation,
+                    "price": price,
+                    "security_name": security_name,
+                    "dollar_amount": 0.0,  # Will be calculated on frontend
+                    "shares": 0  # Will be calculated on frontend
+                })
+            else:
+                if ticker or industry or pct_allocation is not None:
+                    errors.append(f"Row {row_num}: Missing required fields (ticker={ticker}, industry={industry}, allocation={pct_allocation})")
+
+        if not allocations and not errors:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not parse any allocations from CSV. Expected columns: Ticker, Industry, Allocation"
+            )
+
+        logger.info(f"Parsed {len(allocations)} ticker allocations from portfolio CSV")
+        if errors:
+            logger.warning(f"Portfolio CSV parsing had {len(errors)} errors")
+
+        # Group by industry to show summary
+        industry_summary = {}
+        for alloc in allocations:
+            ind = alloc["industry"]
+            if ind not in industry_summary:
+                industry_summary[ind] = {"count": 0, "total_pct": 0}
+            industry_summary[ind]["count"] += 1
+            industry_summary[ind]["total_pct"] += alloc["pct_of_industry"]
+
+        return {
+            "success": True,
+            "allocations": allocations,
+            "count": len(allocations),
+            "industries_found": list(industry_summary.keys()),
+            "industry_summary": industry_summary,
+            "errors": errors if errors else None
+        }
+
+    except Exception as e:
+        logger.error(f"Error parsing portfolio CSV: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error parsing CSV: {str(e)}")
+
+
 @router.post("/calculate-allocation")
 async def calculate_allocation(
     request: AllocationRequest,

@@ -93,6 +93,58 @@ export default function NewFundsPage() {
     }
   };
 
+  // Handle portfolio CSV upload
+  const handlePortfolioUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await api.parsePortfolioCSV(file);
+      if (data.success) {
+        // Convert allocations to our format with IDs
+        const newAllocations: TickerAllocation[] = data.allocations.map((alloc: any, idx: number) => ({
+          id: `${alloc.industry}-${alloc.ticker}-${idx}`,
+          ticker: alloc.ticker,
+          industry: alloc.industry,
+          pct_of_industry: alloc.pct_of_industry,
+          dollar_amount: 0, // Will be recalculated
+          shares: 0, // Will be recalculated
+          price: alloc.price || 0,
+          security_name: alloc.security_name
+        }));
+
+        // Calculate dollar amounts if we have industries and total amount
+        if (industries.length > 0 && totalAmount > 0) {
+          const updatedAllocations = newAllocations.map(alloc => {
+            const industry = industries.find(i => i.industry === alloc.industry);
+            if (industry) {
+              const dollarAmount = industry.dollar_allocation * (alloc.pct_of_industry / 100);
+              const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
+              return { ...alloc, dollar_amount: dollarAmount, shares };
+            }
+            return alloc;
+          });
+          setTickerAllocations(updatedAllocations);
+        } else {
+          setTickerAllocations(newAllocations);
+        }
+
+        setSuccessMessage(`Loaded ${data.count} ticker allocations across ${data.industries_found.length} industries`);
+        if (data.errors && data.errors.length > 0) {
+          setError(`Warning: ${data.errors.length} rows had errors`);
+        }
+        setTimeout(() => setSuccessMessage(null), 5000);
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to parse portfolio CSV');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle total amount change
   const handleTotalAmountChange = (value: string) => {
     const amount = parseFloat(value.replace(/,/g, '')) || 0;
@@ -105,6 +157,20 @@ export default function NewFundsPage() {
         dollar_allocation: amount * ind.proforma_weight
       }));
       setIndustries(updated);
+
+      // Also recalculate ticker allocations
+      if (tickerAllocations.length > 0) {
+        const updatedTickers = tickerAllocations.map(alloc => {
+          const industry = updated.find(i => i.industry === alloc.industry);
+          if (industry && alloc.pct_of_industry > 0) {
+            const dollarAmount = industry.dollar_allocation * (alloc.pct_of_industry / 100);
+            const shares = alloc.price > 0 ? Math.floor(dollarAmount / alloc.price) : 0;
+            return { ...alloc, dollar_amount: dollarAmount, shares };
+          }
+          return alloc;
+        });
+        setTickerAllocations(updatedTickers);
+      }
     }
   };
 
@@ -271,11 +337,11 @@ export default function NewFundsPage() {
         {/* Setup Section */}
         <div className="card">
           <h2 className="text-lg font-semibold mb-4">Setup</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* CSV Upload */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Industry Weights CSV Upload */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Upload Industry Weights CSV
+                1. Upload Industry Weights CSV
               </label>
               <input
                 type="file"
@@ -284,14 +350,30 @@ export default function NewFundsPage() {
                 className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
               />
               <p className="mt-1 text-xs text-gray-500">
-                CSV with columns: Industry, Weight
+                CSV: Industry, Weight
+              </p>
+            </div>
+
+            {/* Portfolio CSV Upload */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                2. Upload Portfolio CSV (Optional)
+              </label>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handlePortfolioUpload}
+                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                CSV: Ticker, Industry, % Allocation
               </p>
             </div>
 
             {/* Account Selector */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Account
+                3. Select Account
               </label>
               <select
                 value={selectedAccount?.id || ''}
@@ -313,7 +395,7 @@ export default function NewFundsPage() {
             {/* Total Amount */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Total Amount to Allocate
+                4. Total Amount to Allocate
               </label>
               <div className="relative">
                 <span className="absolute left-3 top-2 text-gray-500">$</span>
@@ -546,16 +628,34 @@ export default function NewFundsPage() {
           <h3 className="font-medium mb-2">Instructions</h3>
           <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
             <li>Upload a CSV file with S&P 500 industry weights (columns: Industry, Weight)</li>
+            <li><strong>Optional:</strong> Upload a portfolio CSV to auto-populate tickers (columns: Ticker, Industry, % Allocation)</li>
             <li>Select the account to allocate new funds to</li>
             <li>Enter the total dollar amount to allocate</li>
             <li>Optionally adjust CCM weights using basis point adjustments</li>
-            <li>Click on an industry row to expand and add tickers</li>
-            <li>Enter ticker symbols and percentage allocation within each industry</li>
+            <li>Click on an industry row to expand and add/edit tickers manually</li>
             <li>Click "Execute" to generate a Schwab-compatible CSV for bulk upload</li>
           </ol>
-          <div className="mt-4 p-3 bg-blue-50 rounded">
-            <p className="text-sm text-blue-800">
-              <strong>Schwab CSV Format:</strong> Account Number, B (Buy), Shares, Ticker, M (Market)
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-3 bg-blue-50 rounded">
+              <p className="text-sm text-blue-800">
+                <strong>Industry Weights CSV:</strong><br/>
+                Industry, Weight<br/>
+                Information Technology, 28.5<br/>
+                Health Care, 13.5
+              </p>
+            </div>
+            <div className="p-3 bg-green-50 rounded">
+              <p className="text-sm text-green-800">
+                <strong>Portfolio CSV:</strong><br/>
+                Ticker, Industry, Allocation<br/>
+                AAPL, Information Technology, 50<br/>
+                MSFT, Information Technology, 50
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 p-3 bg-purple-50 rounded">
+            <p className="text-sm text-purple-800">
+              <strong>Schwab Output CSV:</strong> Account Number, B (Buy), Shares, Ticker, M (Market)
             </p>
           </div>
         </div>
