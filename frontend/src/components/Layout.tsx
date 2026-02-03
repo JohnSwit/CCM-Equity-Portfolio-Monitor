@@ -47,6 +47,9 @@ export default function Layout({ children }: LayoutProps) {
                 <Link href="/upload" className="inline-flex items-center px-1 pt-1 text-sm font-medium border-b-2 border-transparent hover:border-blue-500">
                   Upload
                 </Link>
+                <Link href="/bulk-import" className="inline-flex items-center px-1 pt-1 text-sm font-medium border-b-2 border-transparent hover:border-blue-500">
+                  Bulk Import
+                </Link>
                 <Link href="/new-funds" className="inline-flex items-center px-1 pt-1 text-sm font-medium border-b-2 border-transparent hover:border-blue-500">
                   New Funds
                 </Link>

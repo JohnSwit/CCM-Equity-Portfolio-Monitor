@@ -726,6 +726,68 @@ class APIClient {
     const response = await this.client.get('/tax/accounts');
     return response.data;
   }
+
+  // Bulk Import
+  async startBulkImport(file: File, options?: { batchSize?: number; skipAnalytics?: boolean; validateOnly?: boolean }) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const params = new URLSearchParams();
+    if (options?.batchSize) params.append('batch_size', options.batchSize.toString());
+    if (options?.skipAnalytics !== undefined) params.append('skip_analytics', options.skipAnalytics.toString());
+    if (options?.validateOnly !== undefined) params.append('validate_only', options.validateOnly.toString());
+
+    const response = await this.client.post(`/imports/bulk/start?${params.toString()}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getBulkImportStatus(jobId: string, includeBatches: boolean = false) {
+    const response = await this.client.get(`/imports/bulk/${jobId}/status`, {
+      params: { include_batches: includeBatches },
+    });
+    return response.data;
+  }
+
+  async listBulkImports(status?: string, limit: number = 20) {
+    const response = await this.client.get('/imports/bulk', {
+      params: { status, limit },
+    });
+    return response.data;
+  }
+
+  async pauseBulkImport(jobId: string) {
+    const response = await this.client.post(`/imports/bulk/${jobId}/pause`);
+    return response.data;
+  }
+
+  async resumeBulkImport(jobId: string) {
+    const response = await this.client.post(`/imports/bulk/${jobId}/resume`);
+    return response.data;
+  }
+
+  async cancelBulkImport(jobId: string) {
+    const response = await this.client.post(`/imports/bulk/${jobId}/cancel`);
+    return response.data;
+  }
+
+  async getBulkImportErrors(jobId: string) {
+    const response = await this.client.get(`/imports/bulk/${jobId}/errors`);
+    return response.data;
+  }
+
+  async retryFailedBatches(jobId: string) {
+    const response = await this.client.post(`/imports/bulk/${jobId}/retry-failed-batches`);
+    return response.data;
+  }
+
+  async deleteBulkImport(jobId: string, deleteTransactions: boolean = false) {
+    const response = await this.client.delete(`/imports/bulk/${jobId}`, {
+      params: { delete_transactions: deleteTransactions },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

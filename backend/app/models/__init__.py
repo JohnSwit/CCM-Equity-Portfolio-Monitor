@@ -21,6 +21,11 @@ from app.models.update_tracking import (
     UpdateJobRun, DataProviderStatus, ComputationStatus
 )
 
+from app.models.bulk_import import (
+    BulkImportJob, BulkImportBatch, ImportedTransaction,
+    BulkImportStatus, BatchStatus
+)
+
 __all__ = [
     "User", "Account", "Security", "Transaction", "TransactionTypeMap",
     "PricesEOD", "PositionsEOD", "PortfolioValueEOD", "ReturnsEOD",
@@ -39,5 +44,8 @@ __all__ = [
     "TaxLot", "RealizedGain", "WashSaleViolation",
     # Update tracking models
     "TickerProviderCoverage", "DataUpdateState", "ComputationDependency",
-    "UpdateJobRun", "DataProviderStatus", "ComputationStatus"
+    "UpdateJobRun", "DataProviderStatus", "ComputationStatus",
+    # Bulk import models
+    "BulkImportJob", "BulkImportBatch", "ImportedTransaction",
+    "BulkImportStatus", "BatchStatus"
 ]
