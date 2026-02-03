@@ -298,8 +298,8 @@ class BatchAnalyticsService:
         """
         Build positions for a single account using bulk insert.
 
-        Uses vectorized pandas operations for efficient forward-fill instead of
-        iterating through all trading dates.
+        Uses vectorized pandas operations with proper forward-fill to handle
+        transactions that occur on non-trading days.
         """
         # Get all transactions for this account
         query = self.db.query(
@@ -339,12 +339,10 @@ class BatchAnalyticsService:
         # Group by security and date, sum deltas
         daily_changes = txn_df.groupby(['security_id', 'trade_date'])['delta'].sum().reset_index()
 
-        # Pivot to wide format: dates as index, securities as columns
-        changes_wide = daily_changes.pivot(
-            index='trade_date', columns='security_id', values='delta'
-        ).fillna(0)
+        # Get unique securities
+        securities = daily_changes['security_id'].unique()
 
-        # Create full date range index using trading dates
+        # Filter trading dates
         trading_dates_filtered = [d for d in trading_dates if d <= end_date]
         if start_date:
             trading_dates_filtered = [d for d in trading_dates_filtered if d >= start_date]
@@ -352,40 +350,38 @@ class BatchAnalyticsService:
         if not trading_dates_filtered:
             return 0
 
-        # Reindex to full trading calendar
-        full_index = pd.DatetimeIndex(trading_dates_filtered)
-        changes_wide.index = pd.DatetimeIndex(changes_wide.index)
-        changes_wide = changes_wide.reindex(full_index).fillna(0)
+        positions_to_insert = []
 
-        # Cumulative sum gives us the position at each date
-        positions_wide = changes_wide.cumsum()
+        # Process each security separately to handle forward-fill correctly
+        for security_id in securities:
+            sec_changes = daily_changes[daily_changes['security_id'] == security_id].copy()
+            sec_changes = sec_changes.set_index('trade_date')['delta']
 
-        # Melt back to long format for database insert
-        positions_wide = positions_wide.reset_index()
-        positions_wide = positions_wide.melt(
-            id_vars=['index'],
-            var_name='security_id',
-            value_name='shares'
-        )
-        positions_wide.columns = ['date', 'security_id', 'shares']
+            # Compute cumulative position at each transaction date
+            cumulative_positions = sec_changes.cumsum()
 
-        # Filter out zero positions and convert date
-        positions_wide = positions_wide[positions_wide['shares'] != 0]
-        positions_wide['date'] = positions_wide['date'].dt.date
+            # Create a series with the trading calendar as index
+            trading_index = pd.DatetimeIndex([pd.Timestamp(d) for d in trading_dates_filtered])
 
-        if positions_wide.empty:
+            # Combine transaction dates with trading dates, then forward-fill
+            all_dates = cumulative_positions.index.union(trading_index)
+            full_positions = cumulative_positions.reindex(all_dates).ffill().fillna(0)
+
+            # Filter to only trading dates
+            full_positions = full_positions.reindex(trading_index)
+
+            # Add to insert list
+            for trade_date, shares in full_positions.items():
+                if shares != 0:
+                    positions_to_insert.append({
+                        "account_id": account_id,
+                        "security_id": int(security_id),
+                        "date": trade_date.date() if hasattr(trade_date, 'date') else trade_date,
+                        "shares": float(shares)
+                    })
+
+        if not positions_to_insert:
             return 0
-
-        # Prepare for bulk insert
-        positions_to_insert = [
-            {
-                "account_id": account_id,
-                "security_id": int(row['security_id']),
-                "date": row['date'],
-                "shares": float(row['shares'])
-            }
-            for _, row in positions_wide.iterrows()
-        ]
 
         # Bulk upsert positions
         return self._bulk_upsert_positions(positions_to_insert)
