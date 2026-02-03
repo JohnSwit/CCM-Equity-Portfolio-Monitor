@@ -152,6 +152,21 @@ class SectorAnalyzer:
     def __init__(self, db: Session):
         self.db = db
 
+    def _get_account_ids(self, view_type: ViewType, view_id: int) -> List[int]:
+        """Get account IDs for a given view (account, group, or firm)"""
+        from app.models import Account, Group, GroupMember
+
+        if view_type == ViewType.ACCOUNT:
+            return [view_id]
+        elif view_type in (ViewType.GROUP, ViewType.FIRM):
+            # For GROUP and FIRM views, get all member account IDs
+            members = self.db.query(GroupMember.account_id).filter(
+                GroupMember.group_id == view_id
+            ).all()
+            return [m.account_id for m in members]
+        else:
+            return []
+
     def get_portfolio_sector_weights(
         self,
         view_type: ViewType,
@@ -162,13 +177,15 @@ class SectorAnalyzer:
         if not as_of_date:
             as_of_date = date.today()
 
-        if view_type != ViewType.ACCOUNT:
-            return {'error': 'Sector analysis only supported for account views'}
+        # Get account IDs based on view type
+        account_ids = self._get_account_ids(view_type, view_id)
+        if not account_ids:
+            return {'error': 'No accounts found for this view', 'sectors': []}
 
-        # Find the latest position date on or before as_of_date
+        # Find the latest position date on or before as_of_date across all accounts
         latest_pos_date = self.db.query(func.max(PositionsEOD.date)).filter(
             and_(
-                PositionsEOD.account_id == view_id,
+                PositionsEOD.account_id.in_(account_ids),
                 PositionsEOD.date <= as_of_date
             )
         ).scalar()
@@ -176,10 +193,10 @@ class SectorAnalyzer:
         if not latest_pos_date:
             return {'error': 'No positions found', 'sectors': []}
 
-        # Get positions using the latest available date
+        # Get positions using the latest available date across all accounts
         positions = self.db.query(
             PositionsEOD.security_id,
-            PositionsEOD.shares,
+            func.sum(PositionsEOD.shares).label('shares'),
             Security.symbol,
             Security.asset_name,
             SectorClassification.sector,
@@ -190,10 +207,16 @@ class SectorAnalyzer:
             SectorClassification, SectorClassification.security_id == Security.id
         ).filter(
             and_(
-                PositionsEOD.account_id == view_id,
+                PositionsEOD.account_id.in_(account_ids),
                 PositionsEOD.date == latest_pos_date,
                 PositionsEOD.shares > 0
             )
+        ).group_by(
+            PositionsEOD.security_id,
+            Security.symbol,
+            Security.asset_name,
+            SectorClassification.sector,
+            SectorClassification.gics_sector
         ).all()
 
         if not positions:
@@ -412,9 +435,6 @@ class BrinsonAttributionAnalyzer:
         Selection = W_b * (R_p - R_b)
         Interaction = (W_p - W_b) * (R_p - R_b)
         """
-        if view_type != ViewType.ACCOUNT:
-            return {'error': 'Brinson attribution only supported for account views'}
-
         # Get sector analyzer
         sector_analyzer = SectorAnalyzer(self.db)
 
@@ -591,10 +611,13 @@ class BrinsonAttributionAnalyzer:
         """Get actual portfolio return from ReturnsEOD table"""
         from app.models import ReturnsEOD
 
+        # FIRM views are stored as GROUP in the database
+        db_vt = ViewType.GROUP if view_type == ViewType.FIRM else view_type
+
         # Get index value at start
         start_return = self.db.query(ReturnsEOD.index_value).filter(
             and_(
-                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_type == db_vt,
                 ReturnsEOD.view_id == view_id,
                 ReturnsEOD.date <= start_date
             )
@@ -603,7 +626,7 @@ class BrinsonAttributionAnalyzer:
         # Get index value at end
         end_return = self.db.query(ReturnsEOD.index_value).filter(
             and_(
-                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_type == db_vt,
                 ReturnsEOD.view_id == view_id,
                 ReturnsEOD.date <= end_date
             )
