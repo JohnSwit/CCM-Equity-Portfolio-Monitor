@@ -78,7 +78,7 @@ interface Coverage {
 
 export default function CoveragePage() {
   const router = useRouter();
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [coverages, setCoverages] = useState<Coverage[]>([]);
   const [analysts, setAnalysts] = useState<Analyst[]>([]);
   const [totalFirmValue, setTotalFirmValue] = useState<number>(0);
@@ -108,16 +108,16 @@ export default function CoveragePage() {
   const [refreshingAll, setRefreshingAll] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
+    if (!authLoading && !user) {
       router.push('/login');
     }
-  }, [authLoading, isAuthenticated, router]);
+  }, [authLoading, user, router]);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (user) {
       loadData();
     }
-  }, [isAuthenticated]);
+  }, [user]);
 
   const loadData = async () => {
     try {
