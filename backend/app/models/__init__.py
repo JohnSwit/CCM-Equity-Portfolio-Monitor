@@ -6,7 +6,8 @@ from app.models.models import (
     FactorSet, FactorReturn, FactorRegression, RiskEOD,
     ImportLog, ManualPrice,
     FactorProxySeries, FactorModelDefinition, FactorAttributionResult,
-    TransactionType, AssetClass, ViewType, GroupType, FactorDataSource
+    TransactionType, AssetClass, ViewType, GroupType, FactorDataSource,
+    Analyst, ActiveCoverage, CoverageModelData
 )
 
 from app.models.sector_models import (
@@ -28,6 +29,8 @@ __all__ = [
     "FactorProxySeries", "FactorModelDefinition", "FactorAttributionResult",
     "TransactionType", "AssetClass", "ViewType", "GroupType", "FactorDataSource",
     "SectorClassification", "BenchmarkConstituent", "FactorReturns",
+    # Active Coverage models
+    "Analyst", "ActiveCoverage", "CoverageModelData",
     # Update tracking models
     "TickerProviderCoverage", "DataUpdateState", "ComputationDependency",
     "UpdateJobRun", "DataProviderStatus", "ComputationStatus"

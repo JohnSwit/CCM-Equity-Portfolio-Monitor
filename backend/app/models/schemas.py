@@ -249,6 +249,8 @@ class ActiveCoverageCreate(BaseModel):
     model_share_link: Optional[str] = None
     notes: Optional[str] = None
 
+    model_config = {"protected_namespaces": ()}
+
 
 class ActiveCoverageUpdate(BaseModel):
     primary_analyst_id: Optional[int] = None
@@ -257,6 +259,8 @@ class ActiveCoverageUpdate(BaseModel):
     model_share_link: Optional[str] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
+
+    model_config = {"protected_namespaces": ()}
 
 
 class MetricEstimates(BaseModel):
@@ -333,8 +337,7 @@ class ActiveCoverageResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 class ActiveCoverageListResponse(BaseModel):
