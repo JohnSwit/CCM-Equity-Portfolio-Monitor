@@ -30,18 +30,24 @@ class TaxService:
         Uses FIFO method for matching sales to purchases.
         Returns number of lots created.
         """
+        # Define buy-like and sell-like transaction types
+        buy_types = [
+            TransactionType.BUY,
+            TransactionType.DIVIDEND_REINVEST,
+            TransactionType.TRANSFER_IN,  # Transfers in create new lots
+        ]
+        sell_types = [TransactionType.SELL, TransactionType.TRANSFER_OUT]
+
         # Get all buy/sell transactions for the account, ordered by date
         transactions = self.db.query(Transaction).filter(
             and_(
                 Transaction.account_id == account_id,
-                Transaction.transaction_type.in_([
-                    TransactionType.BUY,
-                    TransactionType.SELL,
-                    TransactionType.DIVIDEND_REINVEST
-                ]),
+                Transaction.transaction_type.in_(buy_types + sell_types),
                 Transaction.security_id.isnot(None)
             )
         ).order_by(Transaction.trade_date, Transaction.id).all()
+
+        logger.info(f"Found {len(transactions)} buy/sell transactions for account {account_id}")
 
         # Group by security
         by_security: Dict[int, List[Transaction]] = {}
@@ -78,8 +84,11 @@ class TaxService:
         open_lots: List[TaxLot] = []
         lots_created = 0
 
+        # Define buy-like transaction types
+        buy_types = [TransactionType.BUY, TransactionType.DIVIDEND_REINVEST, TransactionType.TRANSFER_IN]
+
         for txn in transactions:
-            if txn.transaction_type in [TransactionType.BUY, TransactionType.DIVIDEND_REINVEST]:
+            if txn.transaction_type in buy_types:
                 # Create a new tax lot
                 shares = abs(txn.units) if txn.units else 0
                 price = txn.price if txn.price else 0
@@ -102,7 +111,7 @@ class TaxService:
                 open_lots.append(lot)
                 lots_created += 1
 
-            elif txn.transaction_type == TransactionType.SELL:
+            elif txn.transaction_type in [TransactionType.SELL, TransactionType.TRANSFER_OUT]:
                 # Match against open lots using FIFO
                 shares_to_sell = abs(txn.units) if txn.units else 0
                 sale_price = txn.price if txn.price else 0
@@ -173,11 +182,12 @@ class TaxService:
         window_start = sale_date - timedelta(days=WASH_SALE_WINDOW_DAYS)
         window_end = sale_date + timedelta(days=WASH_SALE_WINDOW_DAYS)
 
+        buy_types = [TransactionType.BUY, TransactionType.DIVIDEND_REINVEST, TransactionType.TRANSFER_IN]
         replacement_purchase = self.db.query(Transaction).filter(
             and_(
                 Transaction.account_id == account_id,
                 Transaction.security_id == security_id,
-                Transaction.transaction_type.in_([TransactionType.BUY, TransactionType.DIVIDEND_REINVEST]),
+                Transaction.transaction_type.in_(buy_types),
                 Transaction.trade_date >= window_start,
                 Transaction.trade_date <= window_end,
                 Transaction.trade_date != sale_date
@@ -449,11 +459,12 @@ class TaxService:
         """Check if selling would trigger a wash sale."""
         today = date.today()
         window_start = today - timedelta(days=WASH_SALE_WINDOW_DAYS)
+        buy_types = [TransactionType.BUY, TransactionType.DIVIDEND_REINVEST, TransactionType.TRANSFER_IN]
 
         query = self.db.query(Transaction).filter(
             and_(
                 Transaction.security_id == security_id,
-                Transaction.transaction_type.in_([TransactionType.BUY, TransactionType.DIVIDEND_REINVEST]),
+                Transaction.transaction_type.in_(buy_types),
                 Transaction.trade_date >= window_start
             )
         )
@@ -484,11 +495,12 @@ class TaxService:
         window_end = trade_date + timedelta(days=WASH_SALE_WINDOW_DAYS)
 
         # Check for purchases in the window
+        buy_types = [TransactionType.BUY, TransactionType.DIVIDEND_REINVEST, TransactionType.TRANSFER_IN]
         conflicting = self.db.query(Transaction).filter(
             and_(
                 Transaction.account_id == account_id,
                 Transaction.security_id == security.id,
-                Transaction.transaction_type.in_([TransactionType.BUY, TransactionType.DIVIDEND_REINVEST]),
+                Transaction.transaction_type.in_(buy_types),
                 Transaction.trade_date >= window_start,
                 Transaction.trade_date <= window_end
             )

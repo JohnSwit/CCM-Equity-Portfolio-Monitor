@@ -58,6 +58,7 @@ class TransactionType(str, enum.Enum):
     BUY = "BUY"
     SELL = "SELL"
     DIVIDEND = "DIVIDEND"
+    DIVIDEND_REINVEST = "DIVIDEND_REINVEST"
     TRANSFER_IN = "TRANSFER_IN"
     TRANSFER_OUT = "TRANSFER_OUT"
     FEE = "FEE"

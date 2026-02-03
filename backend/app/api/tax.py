@@ -2,6 +2,7 @@
 Tax Optimization API endpoints - tax lot management, gain/loss tracking,
 wash sale detection, and tax-loss harvesting recommendations.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -9,13 +10,15 @@ from datetime import date
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, Account, Security
+from app.models.models import User, Account, Security, Transaction
 from app.models.schemas import (
     TaxLotResponse, TaxLotListResponse, RealizedGainResponse, RealizedGainListResponse,
     TaxSummaryResponse, TaxLossHarvestingResponse, TaxLossHarvestingCandidate,
     WashSaleCheckResult, TradeImpactAnalysis, TaxLotSellSuggestion, SellOrderRequest
 )
 from app.services.tax_optimization import TaxService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tax", tags=["tax"])
 
@@ -42,11 +45,22 @@ def build_tax_lots(
     else:
         accounts = db.query(Account).all()
 
+    logger.info(f"Building tax lots for {len(accounts)} accounts")
+
+    # Log transaction counts for debugging
+    total_txns = db.query(Transaction).count()
+    with_security = db.query(Transaction).filter(Transaction.security_id.isnot(None)).count()
+    logger.info(f"Total transactions in DB: {total_txns}, with security_id: {with_security}")
+
     total_lots = 0
     results = []
 
     for account in accounts:
         try:
+            # Log transaction count for this account
+            acct_txns = db.query(Transaction).filter(Transaction.account_id == account.id).count()
+            logger.info(f"Account {account.account_number}: {acct_txns} total transactions")
+
             lots_created = tax_service.build_tax_lots_for_account(account.id)
             total_lots += lots_created
             results.append({
@@ -54,13 +68,16 @@ def build_tax_lots(
                 "account_number": account.account_number,
                 "lots_created": lots_created
             })
+            logger.info(f"Account {account.account_number}: created {lots_created} lots")
         except Exception as e:
+            logger.error(f"Error building lots for account {account.account_number}: {e}")
             results.append({
                 "account_id": account.id,
                 "account_number": account.account_number,
                 "error": str(e)
             })
 
+    logger.info(f"Total lots created: {total_lots}")
     return {
         "status": "success",
         "total_lots_created": total_lots,

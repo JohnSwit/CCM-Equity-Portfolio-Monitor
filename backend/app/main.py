@@ -82,6 +82,30 @@ def ensure_tiingo_enum():
         logger.warning(f"Could not update factordatasource enum: {e}")
 
 
+def ensure_transaction_type_enum():
+    """Ensure DIVIDEND_REINVEST is added to transactiontype enum in PostgreSQL."""
+    try:
+        with engine.connect() as conn:
+            # Check if enum type exists and get current values
+            result = conn.execute(text("""
+                SELECT enumlabel FROM pg_enum
+                JOIN pg_type ON pg_enum.enumtypid = pg_type.oid
+                WHERE pg_type.typname = 'transactiontype'
+            """))
+            existing_values = [row[0] for row in result.fetchall()]
+            logger.info(f"Existing transactiontype enum values: {existing_values}")
+
+            # Add DIVIDEND_REINVEST if not present
+            if 'DIVIDEND_REINVEST' not in existing_values:
+                conn.execute(text("ALTER TYPE transactiontype ADD VALUE IF NOT EXISTS 'DIVIDEND_REINVEST'"))
+                conn.commit()
+                logger.info("Added 'DIVIDEND_REINVEST' to transactiontype enum")
+            else:
+                logger.info("'DIVIDEND_REINVEST' already exists in transactiontype enum")
+    except Exception as e:
+        logger.warning(f"Could not update transactiontype enum: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and create default admin user"""
@@ -92,8 +116,9 @@ async def startup_event():
     # Create tables
     init_db()
 
-    # Ensure TIINGO enum value exists (explicit call with logging)
+    # Ensure enum values exist (explicit call with logging)
     ensure_tiingo_enum()
+    ensure_transaction_type_enum()
 
     # Create default admin user if not exists
     db = next(get_db())
