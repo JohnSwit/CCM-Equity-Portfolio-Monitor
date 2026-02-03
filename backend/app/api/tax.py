@@ -270,7 +270,7 @@ def get_accounts_with_lots(
     results = db.query(
         Account.id,
         Account.account_number,
-        Account.name,
+        Account.display_name,
         func.count(TaxLot.id).label("lot_count"),
         func.sum(TaxLot.remaining_shares).label("total_shares")
     ).outerjoin(TaxLot, and_(
@@ -282,7 +282,7 @@ def get_accounts_with_lots(
         {
             "id": r.id,
             "account_number": r.account_number,
-            "name": r.name,
+            "name": r.display_name,
             "lot_count": r.lot_count or 0,
             "total_shares": float(r.total_shares or 0)
         }
