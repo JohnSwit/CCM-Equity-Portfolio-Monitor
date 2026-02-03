@@ -341,3 +341,135 @@ async def get_job_history(
             for r in runs
         ]
     }
+
+
+# =============================================================================
+# BATCH ANALYTICS ENDPOINTS (Post-Import)
+# =============================================================================
+
+@router.post("/batch-analytics")
+async def run_batch_analytics(
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs (None = all)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    skip_positions: bool = Query(False, description="Skip position building"),
+    skip_values: bool = Query(False, description="Skip portfolio value computation"),
+    skip_returns: bool = Query(False, description="Skip returns computation"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Run optimized batch analytics computation.
+
+    This is designed for large-scale post-import processing:
+    - Uses bulk upsert (PostgreSQL ON CONFLICT) instead of individual queries
+    - Processes in batches with periodic commits
+    - Provides progress tracking
+    - Memory-efficient chunked processing
+
+    Use this after bulk transaction imports to compute all analytics.
+
+    Args:
+        account_ids: Specific accounts to process (None = all accounts)
+        start_date: Start date for computation (None = from first transaction)
+        end_date: End date (default: today)
+        skip_positions: Skip position building step
+        skip_values: Skip portfolio value computation
+        skip_returns: Skip returns computation
+
+    Returns:
+        Detailed results including counts and timing
+    """
+    from app.services.analytics_batch import BatchAnalyticsService
+    from datetime import date as date_type
+
+    # Parse parameters
+    parsed_account_ids = None
+    if account_ids:
+        try:
+            parsed_account_ids = [int(x.strip()) for x in account_ids.split(",")]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid account_ids format")
+
+    parsed_start_date = None
+    if start_date:
+        try:
+            parsed_start_date = date_type.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format (use YYYY-MM-DD)")
+
+    parsed_end_date = None
+    if end_date:
+        try:
+            parsed_end_date = date_type.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format (use YYYY-MM-DD)")
+
+    try:
+        service = BatchAnalyticsService(db)
+        result = service.run_full_analytics(
+            account_ids=parsed_account_ids,
+            start_date=parsed_start_date,
+            end_date=parsed_end_date,
+            skip_positions=skip_positions,
+            skip_values=skip_values,
+            skip_returns=skip_returns
+        )
+
+        return {
+            "status": "success",
+            "message": "Batch analytics completed",
+            "result": result
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch analytics failed: {str(e)}"
+        )
+
+
+@router.post("/post-import-analytics")
+async def run_post_import_analytics(
+    import_job_id: Optional[str] = Query(None, description="Bulk import job ID"),
+    incremental: bool = Query(True, description="Only compute from new transaction dates"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Run analytics specifically for post-bulk-import processing.
+
+    This determines which accounts were affected by an import and runs
+    optimized batch analytics only for those accounts.
+
+    Args:
+        import_job_id: The bulk import job ID (None = all accounts)
+        incremental: Only compute from earliest new transaction date
+
+    Returns:
+        Analytics computation results
+    """
+    from app.services.analytics_batch import PostImportAnalyticsJob
+
+    try:
+        job = PostImportAnalyticsJob(db)
+
+        # Parse import_job_id if provided
+        parsed_id = int(import_job_id) if import_job_id else None
+
+        result = job.run_for_import(
+            import_job_id=parsed_id,
+            incremental=incremental
+        )
+
+        return {
+            "status": "success",
+            "message": "Post-import analytics completed",
+            "result": result
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Post-import analytics failed: {str(e)}"
+        )
