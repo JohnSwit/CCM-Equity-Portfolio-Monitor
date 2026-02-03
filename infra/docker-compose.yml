@@ -35,6 +35,8 @@ services:
       - "8000:8000"
     volumes:
       - ../backend:/app
+      # Mount OneDrive models folder - update the path below to match your OneDrive location
+      - ${ONEDRIVE_MODELS_PATH:-C:/Users/js/OneDrive - CCM}:/models:ro
     depends_on:
       postgres:
         condition: service_healthy
