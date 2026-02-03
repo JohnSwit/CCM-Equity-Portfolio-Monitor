@@ -912,16 +912,20 @@ export default function PortfolioStatisticsPage() {
                           { label: 'Allocation', value: brinsonData.allocation_effect, color: 'blue' },
                           { label: 'Selection', value: brinsonData.selection_effect, color: 'green' },
                           { label: 'Interaction', value: brinsonData.interaction_effect, color: 'purple' },
+                          // Only show unattributed if it exists and is significant (> 0.1%)
+                          ...(brinsonData.unattributed && Math.abs(brinsonData.unattributed) > 0.001
+                            ? [{ label: 'Other/Unattrib.', value: brinsonData.unattributed, color: 'gray' }]
+                            : []),
                         ].map(({ label, value, color }) => {
                           const maxVal = Math.max(
                             Math.abs(brinsonData.allocation_effect || 0),
                             Math.abs(brinsonData.selection_effect || 0),
                             Math.abs(brinsonData.interaction_effect || 0),
+                            Math.abs(brinsonData.unattributed || 0),
                             0.001
                           );
                           const barWidth = Math.abs(value || 0) / maxVal * 100;
                           const isPositive = (value || 0) >= 0;
-                          const colorClass = isPositive ? `bg-${color}-500` : `bg-${color}-300`;
 
                           return (
                             <div key={label} className="flex items-center gap-3">
@@ -930,15 +934,13 @@ export default function PortfolioStatisticsPage() {
                                 <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
                                 <div
                                   className={`absolute top-0 h-full rounded ${
-                                    isPositive
-                                      ? `bg-${color}-500 left-1/2`
-                                      : `bg-${color}-400 right-1/2`
+                                    isPositive ? 'left-1/2' : 'right-1/2'
                                   }`}
                                   style={{
                                     width: `${barWidth / 2}%`,
                                     backgroundColor: isPositive
-                                      ? (color === 'blue' ? '#3b82f6' : color === 'green' ? '#22c55e' : '#a855f7')
-                                      : (color === 'blue' ? '#93c5fd' : color === 'green' ? '#86efac' : '#d8b4fe'),
+                                      ? (color === 'blue' ? '#3b82f6' : color === 'green' ? '#22c55e' : color === 'purple' ? '#a855f7' : '#9ca3af')
+                                      : (color === 'blue' ? '#93c5fd' : color === 'green' ? '#86efac' : color === 'purple' ? '#d8b4fe' : '#d1d5db'),
                                   }}
                                 ></div>
                               </div>
@@ -950,7 +952,7 @@ export default function PortfolioStatisticsPage() {
                         })}
                         {/* Total row */}
                         <div className="flex items-center gap-3 pt-2 border-t mt-2">
-                          <div className="w-24 text-sm font-semibold text-gray-900">Total</div>
+                          <div className="w-24 text-sm font-semibold text-gray-900">Total Active</div>
                           <div className="flex-1"></div>
                           <div className={`w-24 text-right text-sm font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}

@@ -559,13 +559,25 @@ class BrinsonAttributionAnalyzer:
             key=lambda x: x['total_effect']
         )[:5]
 
+        # Get ACTUAL portfolio return from ReturnsEOD (this is what's shown on dashboard)
+        actual_portfolio_return = self._get_actual_portfolio_return(view_type, view_id, start_date, end_date)
+
+        # Get ACTUAL benchmark return (use SPY as proxy for SP500)
+        actual_benchmark_return = self._get_actual_benchmark_return('SPY', start_date, end_date)
+
+        # Calculate any unattributed return (due to unclassified holdings, missing data, etc.)
+        attributed_active_return = float(total_allocation + total_selection + total_interaction)
+        actual_active_return = (actual_portfolio_return or 0) - (actual_benchmark_return or 0)
+
         return {
             'allocation_effect': float(total_allocation),
             'selection_effect': float(total_selection),
             'interaction_effect': float(total_interaction),
-            'total_active_return': float(total_allocation + total_selection + total_interaction),
-            'portfolio_return': float(total_portfolio_return),
-            'benchmark_return': float(total_benchmark_return),
+            'total_active_return': actual_active_return,  # Use actual active return
+            'portfolio_return': actual_portfolio_return,  # Actual portfolio return
+            'benchmark_return': actual_benchmark_return,  # Actual benchmark return
+            'attributed_active_return': attributed_active_return,  # Sum of Brinson effects
+            'unattributed': actual_active_return - attributed_active_return if actual_portfolio_return and actual_benchmark_return else 0,
             'top_contributors': contributors,
             'top_detractors': detractors,
             'by_sector': attribution_by_sector,
@@ -574,6 +586,56 @@ class BrinsonAttributionAnalyzer:
             'benchmark': benchmark_code,
             'benchmark_data_date': latest_bench_date.isoformat()
         }
+
+    def _get_actual_portfolio_return(self, view_type: ViewType, view_id: int, start_date: date, end_date: date) -> Optional[float]:
+        """Get actual portfolio return from ReturnsEOD table"""
+        from app.models import ReturnsEOD
+
+        # Get index value at start
+        start_return = self.db.query(ReturnsEOD.index_value).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date <= start_date
+            )
+        ).order_by(desc(ReturnsEOD.date)).first()
+
+        # Get index value at end
+        end_return = self.db.query(ReturnsEOD.index_value).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date <= end_date
+            )
+        ).order_by(desc(ReturnsEOD.date)).first()
+
+        if start_return and end_return:
+            return (float(end_return[0]) / float(start_return[0])) - 1
+        return None
+
+    def _get_actual_benchmark_return(self, benchmark_code: str, start_date: date, end_date: date) -> Optional[float]:
+        """Get actual benchmark return from BenchmarkReturn table"""
+        from app.models import BenchmarkReturn
+
+        # Get index value at start
+        start_return = self.db.query(BenchmarkReturn.index_value).filter(
+            and_(
+                BenchmarkReturn.benchmark_code == benchmark_code,
+                BenchmarkReturn.date <= start_date
+            )
+        ).order_by(desc(BenchmarkReturn.date)).first()
+
+        # Get index value at end
+        end_return = self.db.query(BenchmarkReturn.index_value).filter(
+            and_(
+                BenchmarkReturn.benchmark_code == benchmark_code,
+                BenchmarkReturn.date <= end_date
+            )
+        ).order_by(desc(BenchmarkReturn.date)).first()
+
+        if start_return and end_return:
+            return (float(end_return[0]) / float(start_return[0])) - 1
+        return None
 
     def _calculate_sector_returns(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
         """Calculate sector returns for portfolio holdings"""
