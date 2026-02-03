@@ -66,6 +66,37 @@ class BulkImportService:
         self._txn_type_map: Dict[str, TransactionType] = {}
         self._existing_keys: Set[str] = set()  # Pre-loaded existing transaction keys
 
+    def _decode_file_content(self, file_content: bytes) -> str:
+        """
+        Decode file content with multiple encoding fallbacks.
+
+        CSV files from Windows systems often use Windows-1252 (cp1252) encoding
+        instead of UTF-8, especially if they contain special characters like
+        registered trademark (®), copyright (©), etc.
+
+        Fallback order:
+        1. UTF-8 (standard/preferred)
+        2. UTF-8 with BOM (Excel sometimes adds this)
+        3. Windows-1252/cp1252 (common Windows encoding)
+        4. Latin-1/ISO-8859-1 (fallback that accepts any byte)
+        """
+        # List of encodings to try, in order of preference
+        encodings = ['utf-8', 'utf-8-sig', 'cp1252', 'iso-8859-1']
+
+        for encoding in encodings:
+            try:
+                decoded = file_content.decode(encoding)
+                if encoding != 'utf-8':
+                    logger.info(f"File decoded successfully using {encoding} encoding")
+                return decoded
+            except (UnicodeDecodeError, LookupError) as e:
+                logger.debug(f"Failed to decode with {encoding}: {e}")
+                continue
+
+        # If all else fails, use latin-1 with replacement for truly broken bytes
+        logger.warning("Using latin-1 with error replacement as last resort")
+        return file_content.decode('iso-8859-1', errors='replace')
+
     def create_import_job(
         self,
         file_content: bytes,
@@ -170,7 +201,9 @@ class BulkImportService:
     def _validate_file(self, file_content: bytes) -> Tuple[int, Dict[str, Any]]:
         """Validate file format and count rows"""
         try:
-            content_str = file_content.decode('utf-8')
+            # Use multi-encoding decoder to handle various file encodings
+            content_str = self._decode_file_content(file_content)
+
             if '\t' in content_str:
                 df = pd.read_csv(io.StringIO(content_str), sep='\t', nrows=1)
             else:
@@ -223,8 +256,10 @@ class BulkImportService:
             with open(job.file_path, 'rb') as f:
                 file_content = f.read()
 
-            # Parse into DataFrame (memory efficient chunked reading would be better for very large files)
-            content_str = file_content.decode('utf-8')
+            # Try to decode with multiple encodings
+            content_str = self._decode_file_content(file_content)
+
+            # Parse into DataFrame
             if '\t' in content_str:
                 df = pd.read_csv(io.StringIO(content_str), sep='\t')
             else:
