@@ -8,7 +8,7 @@ from typing import List, Optional
 from datetime import date
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.api.auth import get_current_user
 from app.models.models import (
     User, Analyst, ActiveCoverage, CoverageModelData,
     Security, PositionsEOD, PricesEOD, Group, GroupMember, ViewType
