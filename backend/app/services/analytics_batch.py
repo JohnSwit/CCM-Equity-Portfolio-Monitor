@@ -197,17 +197,74 @@ class BatchAnalyticsService:
         start_date: Optional[date],
         end_date: date
     ) -> Dict[str, Any]:
-        """Build positions for all accounts using bulk operations"""
+        """
+        Build positions for all accounts using bulk operations.
+
+        Optimizations:
+        1. Skip accounts with no transactions
+        2. Incremental updates - only process from last transaction date for accounts with existing positions
+        3. Batch processing with periodic commits
+        """
         total_positions = 0
         accounts_processed = 0
+        accounts_skipped = 0
 
         # Get trading calendar once
         trading_dates = self._get_trading_calendar(start_date or self.MIN_DATE, end_date)
 
+        # Pre-fetch account transaction counts and last transaction dates for filtering
+        account_txn_info = {}
+        txn_stats = self.db.query(
+            Transaction.account_id,
+            func.count(Transaction.id).label('txn_count'),
+            func.max(Transaction.trade_date).label('last_txn_date')
+        ).filter(
+            Transaction.trade_date.isnot(None),
+            Transaction.security_id.isnot(None)
+        ).group_by(Transaction.account_id).all()
+
+        for stat in txn_stats:
+            account_txn_info[stat.account_id] = {
+                'txn_count': stat.txn_count,
+                'last_txn_date': stat.last_txn_date
+            }
+
+        # Pre-fetch last position dates for incremental updates
+        position_stats = self.db.query(
+            PositionsEOD.account_id,
+            func.max(PositionsEOD.date).label('last_pos_date')
+        ).group_by(PositionsEOD.account_id).all()
+
+        last_position_dates = {stat.account_id: stat.last_pos_date for stat in position_stats}
+
         for account in accounts:
             try:
+                # Skip accounts with no transactions
+                if account.id not in account_txn_info:
+                    accounts_skipped += 1
+                    continue
+
+                info = account_txn_info[account.id]
+                last_pos_date = last_position_dates.get(account.id)
+
+                # Determine if we need full rebuild or incremental
+                if last_pos_date and info['last_txn_date']:
+                    if last_pos_date >= info['last_txn_date'] and last_pos_date >= end_date - timedelta(days=5):
+                        # Positions are up to date, skip
+                        accounts_skipped += 1
+                        continue
+                    elif last_pos_date >= info['last_txn_date']:
+                        # Just need to extend positions to end_date (no new transactions)
+                        # Use incremental start date
+                        incremental_start = last_pos_date - timedelta(days=1)
+                    else:
+                        # New transactions since last position - rebuild from that date
+                        incremental_start = start_date
+                else:
+                    incremental_start = start_date
+
                 count = self._build_positions_for_account_bulk(
-                    account.id, trading_dates, start_date, end_date
+                    account.id, trading_dates, incremental_start, end_date
                 )
                 total_positions += count
                 accounts_processed += 1
@@ -215,7 +272,7 @@ class BatchAnalyticsService:
                 # Commit periodically
                 if accounts_processed % self.ACCOUNT_BATCH_SIZE == 0:
                     self.db.commit()
-                    logger.info(f"Positions: processed {accounts_processed}/{len(accounts)} accounts")
+                    logger.info(f"Positions: processed {accounts_processed}/{len(accounts)} accounts ({accounts_skipped} skipped)")
 
             except Exception as e:
                 self.progress.add_error(str(e), {"account_id": account.id})
@@ -223,8 +280,11 @@ class BatchAnalyticsService:
 
         self.db.commit()
 
+        logger.info(f"Positions complete: {accounts_processed} processed, {accounts_skipped} skipped")
+
         return {
             "accounts_processed": accounts_processed,
+            "accounts_skipped": accounts_skipped,
             "total_positions": total_positions
         }
 
@@ -235,71 +295,97 @@ class BatchAnalyticsService:
         start_date: Optional[date],
         end_date: date
     ) -> int:
-        """Build positions for a single account using bulk insert"""
+        """
+        Build positions for a single account using bulk insert.
+
+        Uses vectorized pandas operations for efficient forward-fill instead of
+        iterating through all trading dates.
+        """
         # Get all transactions for this account
-        query = self.db.query(Transaction).filter(
+        query = self.db.query(
+            Transaction.security_id,
+            Transaction.trade_date,
+            Transaction.transaction_type,
+            Transaction.units
+        ).filter(
             and_(
                 Transaction.account_id == account_id,
                 Transaction.trade_date.isnot(None),
-                Transaction.security_id.isnot(None)
+                Transaction.security_id.isnot(None),
+                Transaction.trade_date <= end_date
             )
         )
 
-        if start_date:
-            # For incremental, get transactions before start_date too for correct starting position
-            first_txn = self.db.query(func.min(Transaction.trade_date)).filter(
-                Transaction.account_id == account_id
-            ).scalar()
-            if first_txn:
-                query = query.filter(Transaction.trade_date >= first_txn)
-
-        query = query.filter(Transaction.trade_date <= end_date)
-        transactions = query.order_by(Transaction.trade_date, Transaction.id).all()
+        transactions = query.order_by(Transaction.trade_date).all()
 
         if not transactions:
             return 0
 
-        # Group transactions by security
-        security_txns: Dict[int, List[Tuple[date, float]]] = {}
-        for txn in transactions:
-            if txn.security_id not in security_txns:
-                security_txns[txn.security_id] = []
+        # Convert to DataFrame for vectorized operations
+        txn_df = pd.DataFrame(transactions, columns=['security_id', 'trade_date', 'txn_type', 'units'])
 
-            delta = self._get_transaction_delta(txn.transaction_type, txn.units or 0)
-            if delta != 0:
-                security_txns[txn.security_id].append((txn.trade_date, delta))
+        # Calculate deltas
+        def calc_delta(row):
+            return self._get_transaction_delta(row['txn_type'], row['units'] or 0)
 
-        # Build positions for each security
-        positions_to_insert = []
+        txn_df['delta'] = txn_df.apply(calc_delta, axis=1)
 
-        for security_id, txn_list in security_txns.items():
-            # Sort by date
-            txn_list.sort(key=lambda x: x[0])
+        # Filter out zero deltas
+        txn_df = txn_df[txn_df['delta'] != 0]
 
-            # Build cumulative position series
-            position_series = {}
-            cumulative = 0.0
-
-            for txn_date, delta in txn_list:
-                cumulative += delta
-                position_series[txn_date] = cumulative
-
-            # Forward fill across trading dates
-            current_shares = 0.0
-            for trade_date in trading_dates:
-                if trade_date in position_series:
-                    current_shares = position_series[trade_date]
-
-                if current_shares != 0 and (start_date is None or trade_date >= start_date):
-                    positions_to_insert.append({
-                        "account_id": account_id,
-                        "security_id": security_id,
-                        "date": trade_date,
-                        "shares": current_shares
-                    })
-
-        if not positions_to_insert:
+        if txn_df.empty:
             return 0
+
+        # Group by security and date, sum deltas
+        daily_changes = txn_df.groupby(['security_id', 'trade_date'])['delta'].sum().reset_index()
+
+        # Pivot to wide format: dates as index, securities as columns
+        changes_wide = daily_changes.pivot(
+            index='trade_date', columns='security_id', values='delta'
+        ).fillna(0)
+
+        # Create full date range index using trading dates
+        trading_dates_filtered = [d for d in trading_dates if d <= end_date]
+        if start_date:
+            trading_dates_filtered = [d for d in trading_dates_filtered if d >= start_date]
+
+        if not trading_dates_filtered:
+            return 0
+
+        # Reindex to full trading calendar
+        full_index = pd.DatetimeIndex(trading_dates_filtered)
+        changes_wide.index = pd.DatetimeIndex(changes_wide.index)
+        changes_wide = changes_wide.reindex(full_index).fillna(0)
+
+        # Cumulative sum gives us the position at each date
+        positions_wide = changes_wide.cumsum()
+
+        # Melt back to long format for database insert
+        positions_wide = positions_wide.reset_index()
+        positions_wide = positions_wide.melt(
+            id_vars=['index'],
+            var_name='security_id',
+            value_name='shares'
+        )
+        positions_wide.columns = ['date', 'security_id', 'shares']
+
+        # Filter out zero positions and convert date
+        positions_wide = positions_wide[positions_wide['shares'] != 0]
+        positions_wide['date'] = positions_wide['date'].dt.date
+
+        if positions_wide.empty:
+            return 0
+
+        # Prepare for bulk insert
+        positions_to_insert = [
+            {
+                "account_id": account_id,
+                "security_id": int(row['security_id']),
+                "date": row['date'],
+                "shares": float(row['shares'])
+            }
+            for _, row in positions_wide.iterrows()
+        ]
 
         # Bulk upsert positions
         return self._bulk_upsert_positions(positions_to_insert)
