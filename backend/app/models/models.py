@@ -460,3 +460,95 @@ class FactorAttributionResult(Base):
         UniqueConstraint('view_type', 'view_id', 'factor_model_code', 'start_date', 'end_date',
                         name='uq_factor_attribution_view_model_period'),
     )
+
+
+class Analyst(Base):
+    """Analysts who cover securities"""
+    __tablename__ = "analysts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ActiveCoverage(Base):
+    """Active coverage tracking - links tickers to analysts and Excel models"""
+    __tablename__ = "active_coverage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, nullable=False, unique=True, index=True)
+    primary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    secondary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    # OneDrive/SharePoint path or local path to Excel model
+    model_path = Column(String, nullable=True)
+    # OneDrive share link for opening in browser
+    model_share_link = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    primary_analyst = relationship("Analyst", foreign_keys=[primary_analyst_id])
+    secondary_analyst = relationship("Analyst", foreign_keys=[secondary_analyst_id])
+
+
+class CoverageModelData(Base):
+    """Cached data extracted from Excel models' API tabs"""
+    __tablename__ = "coverage_model_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_id = Column(Integer, ForeignKey("active_coverage.id"), nullable=False, index=True)
+
+    # IRR and Valuation (from cells E11, E13, E14)
+    irr_3yr = Column(Float, nullable=True)  # E11
+    ccm_fair_value = Column(Float, nullable=True)  # E13
+    street_price_target = Column(Float, nullable=True)  # E14
+
+    # Revenue data (CCM and Street for -1YR, 1YR, 2YR, 3YR)
+    revenue_ccm_minus1yr = Column(Float, nullable=True)
+    revenue_ccm_1yr = Column(Float, nullable=True)
+    revenue_ccm_2yr = Column(Float, nullable=True)
+    revenue_ccm_3yr = Column(Float, nullable=True)
+    revenue_street_minus1yr = Column(Float, nullable=True)
+    revenue_street_1yr = Column(Float, nullable=True)
+    revenue_street_2yr = Column(Float, nullable=True)
+    revenue_street_3yr = Column(Float, nullable=True)
+
+    # EBITDA data
+    ebitda_ccm_minus1yr = Column(Float, nullable=True)
+    ebitda_ccm_1yr = Column(Float, nullable=True)
+    ebitda_ccm_2yr = Column(Float, nullable=True)
+    ebitda_ccm_3yr = Column(Float, nullable=True)
+    ebitda_street_minus1yr = Column(Float, nullable=True)
+    ebitda_street_1yr = Column(Float, nullable=True)
+    ebitda_street_2yr = Column(Float, nullable=True)
+    ebitda_street_3yr = Column(Float, nullable=True)
+
+    # EPS data
+    eps_ccm_minus1yr = Column(Float, nullable=True)
+    eps_ccm_1yr = Column(Float, nullable=True)
+    eps_ccm_2yr = Column(Float, nullable=True)
+    eps_ccm_3yr = Column(Float, nullable=True)
+    eps_street_minus1yr = Column(Float, nullable=True)
+    eps_street_1yr = Column(Float, nullable=True)
+    eps_street_2yr = Column(Float, nullable=True)
+    eps_street_3yr = Column(Float, nullable=True)
+
+    # FCF data
+    fcf_ccm_minus1yr = Column(Float, nullable=True)
+    fcf_ccm_1yr = Column(Float, nullable=True)
+    fcf_ccm_2yr = Column(Float, nullable=True)
+    fcf_ccm_3yr = Column(Float, nullable=True)
+    fcf_street_minus1yr = Column(Float, nullable=True)
+    fcf_street_1yr = Column(Float, nullable=True)
+    fcf_street_2yr = Column(Float, nullable=True)
+    fcf_street_3yr = Column(Float, nullable=True)
+
+    # Timestamp for cache freshness
+    data_as_of = Column(DateTime, nullable=True)
+    last_refreshed = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    coverage = relationship("ActiveCoverage")

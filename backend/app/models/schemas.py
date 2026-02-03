@@ -225,3 +225,118 @@ class JobRunResponse(BaseModel):
     status: str
     message: str
     started_at: datetime
+
+
+# Active Coverage schemas
+class AnalystResponse(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class AnalystCreate(BaseModel):
+    name: str
+
+
+class ActiveCoverageCreate(BaseModel):
+    ticker: str
+    primary_analyst_id: Optional[int] = None
+    secondary_analyst_id: Optional[int] = None
+    model_path: Optional[str] = None
+    model_share_link: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ActiveCoverageUpdate(BaseModel):
+    primary_analyst_id: Optional[int] = None
+    secondary_analyst_id: Optional[int] = None
+    model_path: Optional[str] = None
+    model_share_link: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class MetricEstimates(BaseModel):
+    """Estimates for a single metric (Revenue, EBITDA, EPS, FCF)"""
+    ccm_minus1yr: Optional[float] = None
+    ccm_1yr: Optional[float] = None
+    ccm_2yr: Optional[float] = None
+    ccm_3yr: Optional[float] = None
+    street_minus1yr: Optional[float] = None
+    street_1yr: Optional[float] = None
+    street_2yr: Optional[float] = None
+    street_3yr: Optional[float] = None
+    # Calculated fields
+    growth_ccm_1yr: Optional[float] = None
+    growth_ccm_2yr: Optional[float] = None
+    growth_ccm_3yr: Optional[float] = None
+    growth_street_1yr: Optional[float] = None
+    growth_street_2yr: Optional[float] = None
+    growth_street_3yr: Optional[float] = None
+    diff_1yr_pct: Optional[float] = None  # CCM vs Street difference
+    diff_2yr_pct: Optional[float] = None
+    diff_3yr_pct: Optional[float] = None
+
+
+class MarginEstimates(BaseModel):
+    """Margin estimates (for EBITDA and FCF)"""
+    ccm_minus1yr: Optional[float] = None
+    ccm_1yr: Optional[float] = None
+    ccm_2yr: Optional[float] = None
+    ccm_3yr: Optional[float] = None
+    street_minus1yr: Optional[float] = None
+    street_1yr: Optional[float] = None
+    street_2yr: Optional[float] = None
+    street_3yr: Optional[float] = None
+
+
+class CoverageModelDataResponse(BaseModel):
+    """Extracted data from Excel model API tab"""
+    irr_3yr: Optional[float] = None
+    ccm_fair_value: Optional[float] = None
+    street_price_target: Optional[float] = None
+    current_price: Optional[float] = None
+    ccm_upside_pct: Optional[float] = None
+    street_upside_pct: Optional[float] = None
+    ccm_vs_street_diff_pct: Optional[float] = None
+
+    revenue: Optional[MetricEstimates] = None
+    ebitda: Optional[MetricEstimates] = None
+    eps: Optional[MetricEstimates] = None
+    fcf: Optional[MetricEstimates] = None
+
+    ebitda_margin: Optional[MarginEstimates] = None
+    fcf_margin: Optional[MarginEstimates] = None
+
+    data_as_of: Optional[datetime] = None
+    last_refreshed: Optional[datetime] = None
+
+
+class ActiveCoverageResponse(BaseModel):
+    id: int
+    ticker: str
+    primary_analyst: Optional[AnalystResponse] = None
+    secondary_analyst: Optional[AnalystResponse] = None
+    model_path: Optional[str] = None
+    model_share_link: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: bool
+    # Portfolio data
+    market_value: Optional[float] = None
+    weight_pct: Optional[float] = None
+    current_price: Optional[float] = None
+    # Model data
+    model_data: Optional[CoverageModelDataResponse] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ActiveCoverageListResponse(BaseModel):
+    coverages: List[ActiveCoverageResponse]
+    total_firm_value: Optional[float] = None

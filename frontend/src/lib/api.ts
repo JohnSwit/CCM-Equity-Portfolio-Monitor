@@ -519,6 +519,73 @@ class APIClient {
     const response = await this.client.post('/new-funds/validate-allocation', data);
     return response.data;
   }
+
+  // Active Coverage
+  async getAnalysts() {
+    const response = await this.client.get('/coverage/analysts');
+    return response.data;
+  }
+
+  async createAnalyst(name: string) {
+    const response = await this.client.post('/coverage/analysts', { name });
+    return response.data;
+  }
+
+  async initAnalysts() {
+    const response = await this.client.post('/coverage/init-analysts');
+    return response.data;
+  }
+
+  async getCoverageList(activeOnly: boolean = true) {
+    const response = await this.client.get('/coverage', {
+      params: { active_only: activeOnly },
+    });
+    return response.data;
+  }
+
+  async getCoverage(coverageId: number) {
+    const response = await this.client.get(`/coverage/${coverageId}`);
+    return response.data;
+  }
+
+  async createCoverage(data: {
+    ticker: string;
+    primary_analyst_id?: number;
+    secondary_analyst_id?: number;
+    model_path?: string;
+    model_share_link?: string;
+    notes?: string;
+  }) {
+    const response = await this.client.post('/coverage', data);
+    return response.data;
+  }
+
+  async updateCoverage(coverageId: number, data: {
+    primary_analyst_id?: number;
+    secondary_analyst_id?: number;
+    model_path?: string;
+    model_share_link?: string;
+    notes?: string;
+    is_active?: boolean;
+  }) {
+    const response = await this.client.put(`/coverage/${coverageId}`, data);
+    return response.data;
+  }
+
+  async deleteCoverage(coverageId: number) {
+    const response = await this.client.delete(`/coverage/${coverageId}`);
+    return response.data;
+  }
+
+  async refreshModelData(coverageId: number) {
+    const response = await this.client.post(`/coverage/${coverageId}/refresh-model-data`);
+    return response.data;
+  }
+
+  async refreshAllModels() {
+    const response = await this.client.post('/coverage/refresh-all-models');
+    return response.data;
+  }
 }
 
 export const api = new APIClient();
