@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
@@ -384,9 +384,8 @@ export default function CoveragePage() {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {coverages.map((coverage) => (
-                  <>
+                  <Fragment key={coverage.id}>
                     <tr
-                      key={coverage.id}
                       className={`hover:bg-gray-50 cursor-pointer ${expandedTicker === coverage.id ? 'bg-blue-50' : ''}`}
                       onClick={() => setExpandedTicker(expandedTicker === coverage.id ? null : coverage.id)}
                     >
@@ -576,7 +575,7 @@ export default function CoveragePage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
                 {coverages.length === 0 && (
                   <tr>
