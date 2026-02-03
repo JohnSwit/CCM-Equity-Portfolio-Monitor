@@ -342,12 +342,12 @@ export default function CoveragePage() {
               </select>
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Model Path (OneDrive)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Model Path</label>
               <input
                 type="text"
                 value={newModelPath}
                 onChange={(e) => setNewModelPath(e.target.value)}
-                placeholder="C:\Users\...\OneDrive\Models\AAPL.xlsx"
+                placeholder="/models/AAPL/AAPL Model.xlsx"
                 className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -630,16 +630,16 @@ export default function CoveragePage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Model Path (Local/OneDrive)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Model Path</label>
                   <input
                     type="text"
                     value={editModelPath}
                     onChange={(e) => setEditModelPath(e.target.value)}
-                    placeholder="C:\Users\...\OneDrive\Models\AAPL.xlsx"
+                    placeholder="/models/TICKER/TICKER Model.xlsx"
                     className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Path to the Excel model file on your local machine (OneDrive sync folder)
+                    Path to the Excel model file (e.g., /models/LLY/LLY Model.xlsx)
                   </p>
                 </div>
                 <div>

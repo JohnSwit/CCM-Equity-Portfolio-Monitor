@@ -391,20 +391,32 @@ def create_coverage(
     existing = db.query(ActiveCoverage).filter(
         ActiveCoverage.ticker == data.ticker.upper()
     ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Ticker already in coverage")
 
-    coverage = ActiveCoverage(
-        ticker=data.ticker.upper(),
-        primary_analyst_id=data.primary_analyst_id,
-        secondary_analyst_id=data.secondary_analyst_id,
-        model_path=data.model_path,
-        model_share_link=data.model_share_link,
-        notes=data.notes
-    )
-    db.add(coverage)
-    db.commit()
-    db.refresh(coverage)
+    if existing:
+        if existing.is_active:
+            raise HTTPException(status_code=400, detail="Ticker already in coverage")
+        # Reactivate inactive coverage and update fields
+        existing.is_active = True
+        existing.primary_analyst_id = data.primary_analyst_id
+        existing.secondary_analyst_id = data.secondary_analyst_id
+        existing.model_path = data.model_path
+        existing.model_share_link = data.model_share_link
+        existing.notes = data.notes
+        db.commit()
+        db.refresh(existing)
+        coverage = existing
+    else:
+        coverage = ActiveCoverage(
+            ticker=data.ticker.upper(),
+            primary_analyst_id=data.primary_analyst_id,
+            secondary_analyst_id=data.secondary_analyst_id,
+            model_path=data.model_path,
+            model_share_link=data.model_share_link,
+            notes=data.notes
+        )
+        db.add(coverage)
+        db.commit()
+        db.refresh(coverage)
 
     account_ids = _get_firm_account_ids(db)
     total_firm_value = _get_total_firm_value(db, account_ids) if account_ids else 0
