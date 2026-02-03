@@ -511,6 +511,10 @@ class BrinsonAttributionAnalyzer:
         total_selection = 0.0
         total_interaction = 0.0
 
+        # Also track total portfolio and benchmark returns (weighted)
+        total_portfolio_return = 0.0
+        total_benchmark_return = 0.0
+
         for sector in all_sectors:
             W_p = port_weights.get(sector, 0.0)
             W_b = bench_weights.get(sector, 0.0)
@@ -524,6 +528,10 @@ class BrinsonAttributionAnalyzer:
             total_allocation += allocation
             total_selection += selection
             total_interaction += interaction
+
+            # Weighted contributions to total returns
+            total_portfolio_return += W_p * R_p
+            total_benchmark_return += W_b * R_b
 
             attribution_by_sector.append({
                 'sector': sector,
@@ -539,11 +547,27 @@ class BrinsonAttributionAnalyzer:
 
         attribution_by_sector.sort(key=lambda x: abs(x['total_effect']), reverse=True)
 
+        # Get top contributors (positive total_effect) and detractors (negative total_effect)
+        contributors = sorted(
+            [s for s in attribution_by_sector if s['total_effect'] > 0],
+            key=lambda x: x['total_effect'],
+            reverse=True
+        )[:5]
+
+        detractors = sorted(
+            [s for s in attribution_by_sector if s['total_effect'] < 0],
+            key=lambda x: x['total_effect']
+        )[:5]
+
         return {
             'allocation_effect': float(total_allocation),
             'selection_effect': float(total_selection),
             'interaction_effect': float(total_interaction),
             'total_active_return': float(total_allocation + total_selection + total_interaction),
+            'portfolio_return': float(total_portfolio_return),
+            'benchmark_return': float(total_benchmark_return),
+            'top_contributors': contributors,
+            'top_detractors': detractors,
             'by_sector': attribution_by_sector,
             'start_date': start_date.isoformat(),
             'end_date': end_date.isoformat(),

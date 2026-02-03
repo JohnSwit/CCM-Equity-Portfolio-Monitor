@@ -85,6 +85,7 @@ export default function PortfolioStatisticsPage() {
   const [brinsonPeriod, setBrinsonPeriod] = useState<BrinsonPeriod>('3M');
   const [brinsonLoading, setBrinsonLoading] = useState(false);
   const [expandedSectors, setExpandedSectors] = useState<Set<string>>(new Set());
+  const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
   // Data status
   const [dataStatus, setDataStatus] = useState<any>(null);
@@ -338,6 +339,12 @@ export default function PortfolioStatisticsPage() {
   const formatPercent = (value: number | null | undefined) => {
     if (value === null || value === undefined) return 'N/A';
     return (value * 100).toFixed(2) + '%';
+  };
+
+  // Format as basis points (percentage points) - clearer for attribution
+  const formatBps = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A';
+    return (value * 100).toFixed(2) + ' pp';
   };
 
   const formatNumber = (value: number | null | undefined, decimals: number = 2) => {
@@ -842,16 +849,32 @@ export default function PortfolioStatisticsPage() {
                   </div>
                 ) : (
                   <>
-                    {/* Active Return Headline */}
+                    {/* Period Returns + Active Return Headline */}
                     <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
-                      <div className="text-center">
-                        <div className="text-sm text-gray-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
-                        <div className={`text-4xl font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.total_active_return)}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                        {/* Portfolio Return */}
+                        <div className="text-center md:text-left">
+                          <div className="text-xs text-gray-500 uppercase tracking-wide">Portfolio Return</div>
+                          <div className={`text-2xl font-bold ${(brinsonData.portfolio_return || 0) >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
+                            {(brinsonData.portfolio_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.portfolio_return)}
+                          </div>
                         </div>
-                        <div className="text-xs text-gray-500 mt-2">
-                          {brinsonData.start_date && format(new Date(brinsonData.start_date), 'MMM d, yyyy')} - {brinsonData.end_date && format(new Date(brinsonData.end_date), 'MMM d, yyyy')}
-                          {' | '}Grouping: GICS Sector
+                        {/* Active Return (center, larger) */}
+                        <div className="text-center">
+                          <div className="text-sm text-gray-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
+                          <div className={`text-4xl font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-2">
+                            {brinsonData.start_date && format(new Date(brinsonData.start_date), 'MMM d, yyyy')} - {brinsonData.end_date && format(new Date(brinsonData.end_date), 'MMM d, yyyy')}
+                          </div>
+                        </div>
+                        {/* Benchmark Return */}
+                        <div className="text-center md:text-right">
+                          <div className="text-xs text-gray-500 uppercase tracking-wide">{brinsonData.benchmark || 'Benchmark'} Return</div>
+                          <div className={`text-2xl font-bold ${(brinsonData.benchmark_return || 0) >= 0 ? 'text-gray-600' : 'text-red-600'}`}>
+                            {(brinsonData.benchmark_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.benchmark_return)}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -861,21 +884,21 @@ export default function PortfolioStatisticsPage() {
                       <div className="border-l-4 border-blue-500 pl-4">
                         <div className="text-sm text-gray-600">Allocation Effect</div>
                         <div className={`text-2xl font-bold ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.allocation_effect)}
+                          {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">Sector weighting decisions</div>
                       </div>
                       <div className="border-l-4 border-green-500 pl-4">
                         <div className="text-sm text-gray-600">Selection Effect</div>
                         <div className={`text-2xl font-bold ${(brinsonData.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.selection_effect)}
+                          {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">Security selection within sectors</div>
                       </div>
                       <div className="border-l-4 border-purple-500 pl-4">
                         <div className="text-sm text-gray-600">Interaction Effect</div>
                         <div className={`text-2xl font-bold ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.interaction_effect)}
+                          {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.interaction_effect)}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">Combined allocation & selection</div>
                       </div>
@@ -919,8 +942,8 @@ export default function PortfolioStatisticsPage() {
                                   }}
                                 ></div>
                               </div>
-                              <div className={`w-20 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                                {isPositive ? '+' : ''}{formatPercent(value)}
+                              <div className={`w-24 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                                {isPositive ? '+' : ''}{formatBps(value)}
                               </div>
                             </div>
                           );
@@ -929,10 +952,153 @@ export default function PortfolioStatisticsPage() {
                         <div className="flex items-center gap-3 pt-2 border-t mt-2">
                           <div className="w-24 text-sm font-semibold text-gray-900">Total</div>
                           <div className="flex-1"></div>
-                          <div className={`w-20 text-right text-sm font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.total_active_return)}
+                          <div className={`w-24 text-right text-sm font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Top Drivers Panels */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                      {/* Top Contributors */}
+                      <div className="border rounded-lg p-4 bg-green-50">
+                        <h3 className="text-sm font-semibold text-green-800 mb-3">Top 5 Contributors</h3>
+                        {brinsonData.top_contributors && brinsonData.top_contributors.length > 0 ? (
+                          <div className="space-y-2">
+                            {brinsonData.top_contributors.map((sector: any, idx: number) => {
+                              const isExpanded = expandedDrivers.has(`contrib-${sector.sector}`);
+                              return (
+                                <div key={idx} className="bg-white rounded border border-green-200">
+                                  <button
+                                    onClick={() => {
+                                      const newSet = new Set(expandedDrivers);
+                                      if (isExpanded) newSet.delete(`contrib-${sector.sector}`);
+                                      else newSet.add(`contrib-${sector.sector}`);
+                                      setExpandedDrivers(newSet);
+                                    }}
+                                    className="w-full flex items-center justify-between p-2 hover:bg-green-50"
+                                  >
+                                    <span className="text-sm font-medium text-gray-800">{sector.sector}</span>
+                                    <span className="text-sm font-bold text-green-600">+{formatBps(sector.total_effect)}</span>
+                                  </button>
+                                  {isExpanded && (
+                                    <div className="px-3 pb-2 pt-1 border-t text-xs text-gray-600 space-y-1">
+                                      <div className="flex justify-between">
+                                        <span>Portfolio Weight:</span>
+                                        <span className="font-medium">{formatPercent(sector.portfolio_weight)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Benchmark Weight:</span>
+                                        <span className="font-medium">{formatPercent(sector.benchmark_weight)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Active Weight:</span>
+                                        <span className={`font-medium ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                          {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Portfolio Return:</span>
+                                        <span className="font-medium">{formatPercent(sector.portfolio_return)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Benchmark Return:</span>
+                                        <span className="font-medium">{formatPercent(sector.benchmark_return)}</span>
+                                      </div>
+                                      <div className="border-t pt-1 mt-1">
+                                        <div className="flex justify-between">
+                                          <span>Allocation:</span>
+                                          <span className={`font-medium ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>{formatBps(sector.allocation_effect)}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Selection:</span>
+                                          <span className={`font-medium ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Interaction:</span>
+                                          <span className={`font-medium ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>{formatBps(sector.interaction_effect)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-500 italic">No positive contributors</p>
+                        )}
+                      </div>
+
+                      {/* Top Detractors */}
+                      <div className="border rounded-lg p-4 bg-red-50">
+                        <h3 className="text-sm font-semibold text-red-800 mb-3">Top 5 Detractors</h3>
+                        {brinsonData.top_detractors && brinsonData.top_detractors.length > 0 ? (
+                          <div className="space-y-2">
+                            {brinsonData.top_detractors.map((sector: any, idx: number) => {
+                              const isExpanded = expandedDrivers.has(`detract-${sector.sector}`);
+                              return (
+                                <div key={idx} className="bg-white rounded border border-red-200">
+                                  <button
+                                    onClick={() => {
+                                      const newSet = new Set(expandedDrivers);
+                                      if (isExpanded) newSet.delete(`detract-${sector.sector}`);
+                                      else newSet.add(`detract-${sector.sector}`);
+                                      setExpandedDrivers(newSet);
+                                    }}
+                                    className="w-full flex items-center justify-between p-2 hover:bg-red-50"
+                                  >
+                                    <span className="text-sm font-medium text-gray-800">{sector.sector}</span>
+                                    <span className="text-sm font-bold text-red-600">{formatBps(sector.total_effect)}</span>
+                                  </button>
+                                  {isExpanded && (
+                                    <div className="px-3 pb-2 pt-1 border-t text-xs text-gray-600 space-y-1">
+                                      <div className="flex justify-between">
+                                        <span>Portfolio Weight:</span>
+                                        <span className="font-medium">{formatPercent(sector.portfolio_weight)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Benchmark Weight:</span>
+                                        <span className="font-medium">{formatPercent(sector.benchmark_weight)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Active Weight:</span>
+                                        <span className={`font-medium ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                          {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Portfolio Return:</span>
+                                        <span className="font-medium">{formatPercent(sector.portfolio_return)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Benchmark Return:</span>
+                                        <span className="font-medium">{formatPercent(sector.benchmark_return)}</span>
+                                      </div>
+                                      <div className="border-t pt-1 mt-1">
+                                        <div className="flex justify-between">
+                                          <span>Allocation:</span>
+                                          <span className={`font-medium ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>{formatBps(sector.allocation_effect)}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Selection:</span>
+                                          <span className={`font-medium ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Interaction:</span>
+                                          <span className={`font-medium ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>{formatBps(sector.interaction_effect)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-500 italic">No negative detractors</p>
+                        )}
                       </div>
                     </div>
 
@@ -950,10 +1116,10 @@ export default function PortfolioStatisticsPage() {
                                 <th className="text-right py-2 px-2">Active Wt</th>
                                 <th className="text-right py-2 px-2">Port Ret</th>
                                 <th className="text-right py-2 px-2">Bench Ret</th>
-                                <th className="text-right py-2 px-2">Alloc</th>
-                                <th className="text-right py-2 px-2">Select</th>
-                                <th className="text-right py-2 px-2">Inter</th>
-                                <th className="text-right py-2 px-2 font-semibold">Total</th>
+                                <th className="text-right py-2 px-2" title="Allocation Effect (pp)">Alloc (pp)</th>
+                                <th className="text-right py-2 px-2" title="Selection Effect (pp)">Select (pp)</th>
+                                <th className="text-right py-2 px-2" title="Interaction Effect (pp)">Inter (pp)</th>
+                                <th className="text-right py-2 px-2 font-semibold" title="Total Effect (pp)">Total (pp)</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -970,16 +1136,16 @@ export default function PortfolioStatisticsPage() {
                                     <td className="py-2 px-2 text-right">{formatPercent(sector.portfolio_return)}</td>
                                     <td className="py-2 px-2 text-right text-gray-600">{formatPercent(sector.benchmark_return)}</td>
                                     <td className={`py-2 px-2 text-right ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
-                                      {(sector.allocation_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.allocation_effect)}
+                                      {(sector.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.allocation_effect)}
                                     </td>
                                     <td className={`py-2 px-2 text-right ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>
-                                      {(sector.selection_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.selection_effect)}
+                                      {(sector.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.selection_effect)}
                                     </td>
                                     <td className={`py-2 px-2 text-right ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>
-                                      {(sector.interaction_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.interaction_effect)}
+                                      {(sector.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.interaction_effect)}
                                     </td>
                                     <td className={`py-2 px-2 text-right font-semibold ${(sector.total_effect || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                      {(sector.total_effect || 0) >= 0 ? '+' : ''}{formatPercent(sector.total_effect)}
+                                      {(sector.total_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.total_effect)}
                                     </td>
                                   </tr>
                                 );
@@ -994,16 +1160,16 @@ export default function PortfolioStatisticsPage() {
                                 <td className="py-2 px-2 text-right">-</td>
                                 <td className="py-2 px-2 text-right">-</td>
                                 <td className={`py-2 px-2 text-right ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
-                                  {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.allocation_effect)}
+                                  {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                                 </td>
                                 <td className={`py-2 px-2 text-right ${(brinsonData.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>
-                                  {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.selection_effect)}
+                                  {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                                 </td>
                                 <td className={`py-2 px-2 text-right ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>
-                                  {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.interaction_effect)}
+                                  {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.interaction_effect)}
                                 </td>
                                 <td className={`py-2 px-2 text-right ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                  {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.total_active_return)}
+                                  {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                                 </td>
                               </tr>
                             </tfoot>
