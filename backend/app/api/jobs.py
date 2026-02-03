@@ -358,6 +358,7 @@ async def run_batch_analytics(
     skip_positions: bool = Query(False, description="Skip position building"),
     skip_values: bool = Query(False, description="Skip portfolio value computation"),
     skip_returns: bool = Query(False, description="Skip returns computation"),
+    force_full_rebuild: bool = Query(False, description="Force full rebuild (bypass incremental skip logic)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_admin_user)
 ):
@@ -379,6 +380,7 @@ async def run_batch_analytics(
         skip_positions: Skip position building step
         skip_values: Skip portfolio value computation
         skip_returns: Skip returns computation
+        force_full_rebuild: Force full rebuild, bypass incremental skip (use after bug fixes)
 
     Returns:
         Detailed results including counts and timing
@@ -416,7 +418,8 @@ async def run_batch_analytics(
             end_date=parsed_end_date,
             skip_positions=skip_positions,
             skip_values=skip_values,
-            skip_returns=skip_returns
+            skip_returns=skip_returns,
+            force_full_rebuild=force_full_rebuild
         )
 
         return {

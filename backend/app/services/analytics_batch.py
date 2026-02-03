@@ -108,7 +108,8 @@ class BatchAnalyticsService:
         end_date: Optional[date] = None,
         skip_positions: bool = False,
         skip_values: bool = False,
-        skip_returns: bool = False
+        skip_returns: bool = False,
+        force_full_rebuild: bool = False
     ) -> Dict[str, Any]:
         """
         Run full analytics computation with progress tracking.
@@ -120,6 +121,7 @@ class BatchAnalyticsService:
             skip_positions: Skip position building
             skip_values: Skip portfolio value computation
             skip_returns: Skip returns computation
+            force_full_rebuild: Force full rebuild, bypass incremental skip logic
 
         Returns:
             Summary of computation results
@@ -162,8 +164,11 @@ class BatchAnalyticsService:
             # Step 1: Build positions
             if not skip_positions:
                 self.progress.start_step("Building positions")
-                pos_result = self._build_all_positions_bulk(accounts, start_date, end_date)
+                pos_result = self._build_all_positions_bulk(
+                    accounts, start_date, end_date, force_full_rebuild=force_full_rebuild
+                )
                 results["positions_created"] = pos_result.get("total_positions", 0)
+                results["positions_skipped"] = pos_result.get("accounts_skipped", 0)
                 self.progress.complete_step(pos_result)
 
             # Step 2: Compute portfolio values
@@ -195,7 +200,8 @@ class BatchAnalyticsService:
         self,
         accounts: List[Account],
         start_date: Optional[date],
-        end_date: date
+        end_date: date,
+        force_full_rebuild: bool = False
     ) -> Dict[str, Any]:
         """
         Build positions for all accounts using bulk operations.
@@ -204,6 +210,9 @@ class BatchAnalyticsService:
         1. Skip accounts with no transactions
         2. Incremental updates - only process from last transaction date for accounts with existing positions
         3. Batch processing with periodic commits
+
+        Args:
+            force_full_rebuild: If True, rebuild all positions regardless of existing data
         """
         total_positions = 0
         accounts_processed = 0
@@ -248,7 +257,10 @@ class BatchAnalyticsService:
                 last_pos_date = last_position_dates.get(account.id)
 
                 # Determine if we need full rebuild or incremental
-                if last_pos_date and info['last_txn_date']:
+                if force_full_rebuild:
+                    # Force full rebuild - process all accounts from the beginning
+                    incremental_start = None  # None means full rebuild
+                elif last_pos_date and info['last_txn_date']:
                     if last_pos_date >= info['last_txn_date'] and last_pos_date >= end_date - timedelta(days=5):
                         # Positions are up to date, skip
                         accounts_skipped += 1
@@ -301,18 +313,19 @@ class BatchAnalyticsService:
         Uses vectorized pandas operations with proper forward-fill to handle
         transactions that occur on non-trading days.
         """
-        # Get all transactions for this account
+        # Get all transactions for this account, excluding options (no reliable prices)
         query = self.db.query(
             Transaction.security_id,
             Transaction.trade_date,
             Transaction.transaction_type,
             Transaction.units
-        ).filter(
+        ).join(Security, Transaction.security_id == Security.id).filter(
             and_(
                 Transaction.account_id == account_id,
                 Transaction.trade_date.isnot(None),
                 Transaction.security_id.isnot(None),
-                Transaction.trade_date <= end_date
+                Transaction.trade_date <= end_date,
+                Security.is_option == False  # Exclude options
             )
         )
 
@@ -355,16 +368,20 @@ class BatchAnalyticsService:
         # Process each security separately to handle forward-fill correctly
         for security_id in securities:
             sec_changes = daily_changes[daily_changes['security_id'] == security_id].copy()
+
+            # Convert trade_date to Timestamp for consistent index type
+            sec_changes['trade_date'] = pd.to_datetime(sec_changes['trade_date'])
             sec_changes = sec_changes.set_index('trade_date')['delta']
 
             # Compute cumulative position at each transaction date
             cumulative_positions = sec_changes.cumsum()
 
-            # Create a series with the trading calendar as index
+            # Create a series with the trading calendar as index (also as Timestamps)
             trading_index = pd.DatetimeIndex([pd.Timestamp(d) for d in trading_dates_filtered])
 
             # Combine transaction dates with trading dates, then forward-fill
-            all_dates = cumulative_positions.index.union(trading_index)
+            # Both indices are now DatetimeIndex so union works correctly
+            all_dates = cumulative_positions.index.union(trading_index).sort_values()
             full_positions = cumulative_positions.reindex(all_dates).ffill().fillna(0)
 
             # Filter to only trading dates
@@ -373,10 +390,12 @@ class BatchAnalyticsService:
             # Add to insert list
             for trade_date, shares in full_positions.items():
                 if shares != 0:
+                    # Convert Timestamp back to date for database
+                    date_val = trade_date.date() if hasattr(trade_date, 'date') else trade_date
                     positions_to_insert.append({
                         "account_id": account_id,
                         "security_id": int(security_id),
-                        "date": trade_date.date() if hasattr(trade_date, 'date') else trade_date,
+                        "date": date_val,
                         "shares": float(shares)
                     })
 
@@ -454,6 +473,7 @@ class BatchAnalyticsService:
         Missing prices on a given day will use the last known price instead of 0.
         """
         # Get positions and prices separately for proper forward-fill handling
+        # Join with securities to exclude options (no reliable prices)
         query = """
             SELECT
                 p.date,
@@ -461,9 +481,11 @@ class BatchAnalyticsService:
                 p.shares,
                 pr.close as price
             FROM positions_eod p
+            JOIN securities s ON p.security_id = s.id
             LEFT JOIN prices_eod pr ON p.security_id = pr.security_id AND p.date = pr.date
             WHERE p.account_id = :account_id
               AND p.date <= :end_date
+              AND (s.is_option = false OR s.is_option IS NULL)
         """
         params = {"account_id": account_id, "end_date": end_date}
 
@@ -576,6 +598,7 @@ class BatchAnalyticsService:
         where V_t^{no-trade} = sum(shares_{t-1} * price_t)
         """
         # Get positions and prices efficiently using raw SQL for performance
+        # Exclude options from calculations (no reliable prices)
         query = """
             WITH position_prices AS (
                 SELECT
@@ -584,9 +607,11 @@ class BatchAnalyticsService:
                     p.shares,
                     pr.close as price
                 FROM positions_eod p
+                JOIN securities s ON p.security_id = s.id
                 LEFT JOIN prices_eod pr ON p.security_id = pr.security_id AND p.date = pr.date
                 WHERE p.account_id = :account_id
                   AND p.date <= :end_date
+                  AND (s.is_option = false OR s.is_option IS NULL)
         """
         params = {"account_id": account_id, "end_date": end_date}
 
