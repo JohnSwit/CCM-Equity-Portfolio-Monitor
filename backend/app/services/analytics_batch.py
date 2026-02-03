@@ -365,12 +365,19 @@ class BatchAnalyticsService:
         start_date: Optional[date],
         end_date: date
     ) -> int:
-        """Compute portfolio values using vectorized operations"""
-        # Get positions with prices in a single query
+        """
+        Compute portfolio values using vectorized operations.
+
+        Uses forward-filled prices to handle missing price data correctly.
+        Missing prices on a given day will use the last known price instead of 0.
+        """
+        # Get positions and prices separately for proper forward-fill handling
         query = """
             SELECT
                 p.date,
-                SUM(p.shares * COALESCE(pr.close, 0)) as total_value
+                p.security_id,
+                p.shares,
+                pr.close as price
             FROM positions_eod p
             LEFT JOIN prices_eod pr ON p.security_id = pr.security_id AND p.date = pr.date
             WHERE p.account_id = :account_id
@@ -382,24 +389,50 @@ class BatchAnalyticsService:
             query += " AND p.date >= :start_date"
             params["start_date"] = start_date
 
-        query += " GROUP BY p.date ORDER BY p.date"
+        query += " ORDER BY p.date, p.security_id"
 
         result = self.db.execute(text(query), params)
-        daily_values = result.fetchall()
+        rows = result.fetchall()
 
-        if not daily_values:
+        if not rows:
             return 0
+
+        # Convert to DataFrame
+        df = pd.DataFrame(rows, columns=['date', 'security_id', 'shares', 'price'])
+
+        # Pivot prices and forward-fill missing values
+        price_wide = df.pivot_table(
+            index='date', columns='security_id', values='price', aggfunc='first'
+        )
+        # Forward fill, then backward fill for any missing at start, then 0 for truly missing
+        price_wide = price_wide.ffill().bfill().fillna(0)
+
+        # Pivot positions
+        pos_wide = df.pivot_table(
+            index='date', columns='security_id', values='shares', aggfunc='sum'
+        ).fillna(0)
+
+        # Align columns
+        common_securities = list(set(pos_wide.columns) & set(price_wide.columns))
+        if not common_securities:
+            return 0
+
+        pos_wide = pos_wide[common_securities]
+        price_wide = price_wide[common_securities]
+
+        # Compute portfolio values: shares * prices, summed across securities
+        portfolio_values = (pos_wide * price_wide).sum(axis=1)
 
         # Prepare for bulk upsert
         values_to_insert = [
             {
                 "view_type": ViewType.ACCOUNT,
                 "view_id": account_id,
-                "date": row[0],
-                "total_value": float(row[1]) if row[1] else 0.0
+                "date": trade_date,
+                "total_value": float(value)
             }
-            for row in daily_values
-            if row[1] is not None and row[1] > 0
+            for trade_date, value in portfolio_values.items()
+            if value is not None and value > 0
         ]
 
         if not values_to_insert:
@@ -495,7 +528,7 @@ class BatchAnalyticsService:
 
         # Convert to DataFrame for vectorized computation
         df = pd.DataFrame(rows, columns=['date', 'security_id', 'shares', 'price'])
-        df['price'] = df['price'].fillna(0)
+        # Don't fill NaN prices with 0 here - we'll handle them after pivoting
 
         # Pivot to wide format
         pos_wide = df.pivot_table(
@@ -506,8 +539,9 @@ class BatchAnalyticsService:
             index='date', columns='security_id', values='price', aggfunc='first'
         )
 
-        # Forward fill prices
-        price_wide = price_wide.ffill().fillna(0)
+        # Forward fill prices first, then backward fill any remaining at start
+        # This ensures we use last known price instead of 0 for missing data
+        price_wide = price_wide.ffill().bfill().fillna(0)
 
         # Align indices
         common_dates = sorted(set(pos_wide.index) & set(price_wide.index))

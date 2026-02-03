@@ -299,48 +299,82 @@ class MarketDataProvider:
         benchmark_code: str,
         provider_symbol: str,
         start_date: date,
-        end_date: date
+        end_date: date,
+        force_refresh: bool = False
     ) -> int:
-        """Fetch and store benchmark prices"""
+        """Fetch and store benchmark prices - optimized to only fetch missing dates"""
         # Map to Tiingo-compatible symbol
         tiingo_symbol = self.get_benchmark_tiingo_symbol(benchmark_code, provider_symbol)
         source = 'tiingo'
 
+        # Check what data we already have (incremental update)
+        if not force_refresh:
+            latest_level = self.db.query(func.max(BenchmarkLevel.date)).filter(
+                BenchmarkLevel.code == benchmark_code
+            ).scalar()
+
+            if latest_level and latest_level >= end_date:
+                logger.debug(f"Benchmark {benchmark_code} already up to date (latest: {latest_level})")
+                return 0
+
+            # Only fetch from after our latest data
+            if latest_level:
+                fetch_start = latest_level + timedelta(days=1)
+            else:
+                fetch_start = start_date
+
+            if fetch_start > end_date:
+                logger.debug(f"No new dates to fetch for benchmark {benchmark_code}")
+                return 0
+        else:
+            fetch_start = start_date
+
+        logger.info(f"Fetching benchmark {benchmark_code} prices: {fetch_start} to {end_date}")
+
         # Try Tiingo first
-        df = self.fetch_tiingo_benchmark_prices(tiingo_symbol, start_date, end_date)
+        df = self.fetch_tiingo_benchmark_prices(tiingo_symbol, fetch_start, end_date)
 
         if df is None or df.empty:
             # Fallback to yfinance with benchmark code
-            df = self.fetch_yfinance_prices(benchmark_code, start_date, end_date)
+            df = self.fetch_yfinance_prices(benchmark_code, fetch_start, end_date)
             source = 'yfinance'
 
         if df is None or df.empty:
-            logger.warning(f"No prices fetched for benchmark {benchmark_code}")
+            today = date.today()
+            if fetch_start < today:
+                logger.warning(f"No prices fetched for benchmark {benchmark_code}")
+            else:
+                logger.debug(f"No new market data yet for benchmark {benchmark_code}")
             return 0
 
-        # Store benchmark levels
-        count = 0
-        for _, row in df.iterrows():
-            existing = self.db.query(BenchmarkLevel).filter(
+        # Get existing dates to avoid duplicates
+        existing_dates = set(
+            row[0] for row in self.db.query(BenchmarkLevel.date).filter(
                 and_(
                     BenchmarkLevel.code == benchmark_code,
-                    BenchmarkLevel.date == row['date']
+                    BenchmarkLevel.date >= fetch_start,
+                    BenchmarkLevel.date <= end_date
                 )
-            ).first()
+            ).all()
+        )
 
-            if not existing:
-                level = BenchmarkLevel(
+        # Bulk insert only new levels
+        new_levels = []
+        for _, row in df.iterrows():
+            if row['date'] not in existing_dates:
+                new_levels.append(BenchmarkLevel(
                     code=benchmark_code,
                     date=row['date'],
                     level=float(row['close'])
-                )
-                self.db.add(level)
-                count += 1
+                ))
 
-        self.db.commit()
-        if count > 0:
-            logger.info(f"Stored {count} levels for benchmark {benchmark_code} from {source}")
-        return count
+        if new_levels:
+            self.db.bulk_save_objects(new_levels)
+            self.db.commit()
+
+        if len(new_levels) > 0:
+            logger.info(f"Stored {len(new_levels)} levels for benchmark {benchmark_code} from {source}")
+        return len(new_levels)
 
     def get_missing_price_dates(
         self,
@@ -399,8 +433,17 @@ class MarketDataProvider:
 
         return count
 
-    async def update_all_security_prices(self, force_refresh: bool = False) -> Dict[str, int]:
-        """Update prices for all securities with transactions"""
+    async def update_all_security_prices(
+        self,
+        force_refresh: bool = False,
+        max_concurrent: int = 10
+    ) -> Dict[str, int]:
+        """
+        Update prices for all securities with transactions.
+
+        Uses parallel fetching with semaphore to control concurrency.
+        This significantly speeds up the process while respecting rate limits.
+        """
         from app.models import Transaction
 
         # Log Tiingo client status
@@ -413,29 +456,48 @@ class MarketDataProvider:
         securities = self.db.query(Security).join(Transaction).distinct().all()
 
         logger.info(f"Found {len(securities)} securities with transactions to update")
+        logger.info(f"Using parallel fetching with max_concurrent={max_concurrent}")
 
         results = {
             'total_securities': len(securities),
             'updated': 0,
-            'failed': 0
+            'failed': 0,
+            'skipped': 0
         }
 
-        for security in securities:
-            try:
-                logger.info(f"Processing security: {security.symbol} (id={security.id})")
-                count = await self.update_security_prices(
-                    security.id, security.symbol, force_refresh=force_refresh
-                )
-                logger.info(f"Updated {count} prices for {security.symbol}")
-                if count > 0:
-                    results['updated'] += 1
-            except Exception as e:
-                logger.error(f"Failed to update {security.symbol}: {e}")
-                results['failed'] += 1
+        # Create semaphore for concurrency control
+        semaphore = asyncio.Semaphore(max_concurrent)
 
+        async def fetch_with_semaphore(security):
+            async with semaphore:
+                try:
+                    count = await self.update_security_prices(
+                        security.id, security.symbol, force_refresh=force_refresh
+                    )
+                    return (security.symbol, count, None)
+                except Exception as e:
+                    logger.error(f"Failed to update {security.symbol}: {e}")
+                    return (security.symbol, 0, str(e))
+
+        # Process all securities in parallel (controlled by semaphore)
+        tasks = [fetch_with_semaphore(security) for security in securities]
+        fetch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Aggregate results
+        for result in fetch_results:
+            if isinstance(result, Exception):
+                results['failed'] += 1
+            elif result[2] is not None:  # Error case
+                results['failed'] += 1
+            elif result[1] > 0:
+                results['updated'] += 1
+            else:
+                results['skipped'] += 1
+
+        logger.info(f"Price update complete: {results['updated']} updated, {results['skipped']} skipped, {results['failed']} failed")
         return results
 
-    async def update_benchmark_prices(self) -> Dict[str, int]:
+    async def update_benchmark_prices(self, start_date: Optional[date] = None) -> Dict[str, int]:
         """Update prices for all benchmarks"""
         benchmarks = self.db.query(BenchmarkDefinition).all()
 
@@ -445,9 +507,18 @@ class MarketDataProvider:
             'failed': 0
         }
 
-        # Use a reasonable lookback (e.g., 5 years)
         end_date = date.today()
-        start_date = end_date - timedelta(days=5*365)
+
+        # If no start_date provided, determine from earliest transaction or default to 25 years
+        if start_date is None:
+            from app.models import Transaction
+            earliest_txn = self.db.query(func.min(Transaction.trade_date)).scalar()
+            if earliest_txn:
+                # Go back a bit before earliest transaction for proper benchmark comparison
+                start_date = earliest_txn - timedelta(days=30)
+            else:
+                # Default to 25 years for comprehensive history
+                start_date = end_date - timedelta(days=25*365)
 
         for benchmark in benchmarks:
             try:
@@ -466,7 +537,7 @@ class MarketDataProvider:
 
         return results
 
-    async def update_factor_etf_prices(self) -> Dict[str, int]:
+    async def update_factor_etf_prices(self, start_date: Optional[date] = None) -> Dict[str, int]:
         """Update prices for factor analysis ETFs"""
         # Factor ETFs used in STYLE7 analysis
         factor_etfs = ['SPY', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM']
@@ -483,7 +554,15 @@ class MarketDataProvider:
         }
 
         end_date = date.today()
-        start_date = end_date - timedelta(days=5*365)
+
+        # If no start_date provided, determine from earliest transaction or default to 25 years
+        if start_date is None:
+            from app.models import Transaction
+            earliest_txn = self.db.query(func.min(Transaction.trade_date)).scalar()
+            if earliest_txn:
+                start_date = earliest_txn - timedelta(days=30)
+            else:
+                start_date = end_date - timedelta(days=25*365)
 
         for symbol in all_etfs:
             try:

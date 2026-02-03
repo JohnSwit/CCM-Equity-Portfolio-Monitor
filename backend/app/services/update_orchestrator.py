@@ -562,7 +562,13 @@ class UpdateOrchestrator:
         benchmarks = self.db.query(BenchmarkDefinition).all()
 
         end_date = date.today()
-        start_date = end_date - timedelta(days=5*365)
+
+        # Get start date from earliest transaction to match portfolio history
+        earliest_txn = self.db.query(func.min(Transaction.trade_date)).scalar()
+        if earliest_txn:
+            start_date = earliest_txn - timedelta(days=30)
+        else:
+            start_date = end_date - timedelta(days=25*365)  # Default 25 years
 
         for benchmark in benchmarks:
             try:
@@ -601,7 +607,13 @@ class UpdateOrchestrator:
         factor_etfs = ['SPY', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM', 'QQQ']
 
         end_date = date.today()
-        start_date = end_date - timedelta(days=5*365)
+
+        # Get start date from earliest transaction to match portfolio history
+        earliest_txn = self.db.query(func.min(Transaction.trade_date)).scalar()
+        if earliest_txn:
+            start_date = earliest_txn - timedelta(days=30)
+        else:
+            start_date = end_date - timedelta(days=25*365)  # Default 25 years
 
         for symbol in factor_etfs:
             try:
@@ -643,21 +655,93 @@ class UpdateOrchestrator:
                 logger.error(f"Failed to update factor ETF {symbol}: {e}")
                 self.metrics.add_error(f"factor_etf:{symbol}", str(e))
 
-    async def _update_analytics(self):
-        """Update analytics with dependency awareness"""
+    async def _update_analytics(self, use_batch_service: bool = True):
+        """
+        Update analytics with dependency awareness.
+
+        Args:
+            use_batch_service: Use optimized BatchAnalyticsService for bulk operations (default True)
+        """
         start_time = time.time()
 
         accounts = self.db.query(Account).all()
         groups = self.db.query(Group).all()
         as_of_date = date.today()
 
-        # Process accounts
-        for account in accounts:
-            await self._compute_account_analytics(account, as_of_date)
+        if use_batch_service:
+            # Use optimized batch service for positions, values, and returns
+            from app.services.analytics_batch import BatchAnalyticsService
 
-        # Process groups (after accounts)
-        for group in groups:
-            await self._compute_group_analytics(group, as_of_date)
+            logger.info("Using BatchAnalyticsService for optimized analytics computation")
+
+            batch_service = BatchAnalyticsService(self.db)
+            batch_result = batch_service.run_full_analytics()
+            logger.info(f"Batch analytics result: {batch_result}")
+
+            # Compute group rollups
+            from app.services.groups import GroupsEngine
+            groups_engine = GroupsEngine(self.db)
+            groups_results = groups_engine.compute_all_groups()
+            logger.info(f"Groups computed: {groups_results}")
+
+            # Compute benchmark returns
+            from app.services.benchmarks import BenchmarksEngine
+            benchmarks_engine = BenchmarksEngine(self.db)
+            benchmarks_engine.ensure_default_benchmarks()
+            benchmark_results = benchmarks_engine.compute_all_benchmark_returns()
+            logger.info(f"Benchmarks computed: {benchmark_results}")
+
+            # Compute benchmark metrics for all views
+            for account in accounts:
+                for benchmark_code in ['SPY', 'QQQ', 'INDU']:
+                    try:
+                        benchmarks_engine.compute_benchmark_metrics(
+                            ViewType.ACCOUNT, account.id, benchmark_code, as_of_date
+                        )
+                    except Exception:
+                        pass
+
+            for group in groups:
+                for benchmark_code in ['SPY', 'QQQ', 'INDU']:
+                    try:
+                        benchmarks_engine.compute_benchmark_metrics(
+                            ViewType.GROUP, group.id, benchmark_code, as_of_date
+                        )
+                    except Exception:
+                        pass
+
+            # Compute factor returns and regressions
+            from app.services.factors import FactorsEngine
+            factors_engine = FactorsEngine(self.db)
+            factors_engine.ensure_style7_factor_set()
+            factor_returns_count = factors_engine.compute_factor_returns()
+            logger.info(f"Factor returns computed: {factor_returns_count}")
+
+            for account in accounts:
+                try:
+                    factors_engine.compute_factor_regression(ViewType.ACCOUNT, account.id, as_of_date)
+                except Exception:
+                    pass
+
+            for group in groups:
+                try:
+                    factors_engine.compute_factor_regression(ViewType.GROUP, group.id, as_of_date)
+                except Exception:
+                    pass
+
+            # Compute risk metrics
+            from app.services.risk import RiskEngine
+            risk_engine = RiskEngine(self.db)
+            risk_results = risk_engine.compute_all_risk_metrics(as_of_date)
+            logger.info(f"Risk metrics computed: {risk_results}")
+        else:
+            # Legacy path: process accounts one by one with dependency tracking
+            for account in accounts:
+                await self._compute_account_analytics(account, as_of_date)
+
+            # Process groups (after accounts)
+            for group in groups:
+                await self._compute_group_analytics(group, as_of_date)
 
         self.metrics.compute_duration_ms = int((time.time() - start_time) * 1000)
 
