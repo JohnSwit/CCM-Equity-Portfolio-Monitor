@@ -56,6 +56,9 @@ export default function Layout({ children }: LayoutProps) {
                 <Link href="/ideas" className="inline-flex items-center px-1 pt-1 text-sm font-medium border-b-2 border-transparent hover:border-blue-500">
                   Idea Pipeline
                 </Link>
+                <Link href="/tax" className="inline-flex items-center px-1 pt-1 text-sm font-medium border-b-2 border-transparent hover:border-blue-500">
+                  Tax Optimization
+                </Link>
               </div>
             </div>
             <div className="flex items-center">

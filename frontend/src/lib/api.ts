@@ -665,6 +665,67 @@ class APIClient {
     const token = localStorage.getItem('token');
     return `${API_URL}/ideas/${ideaId}/documents/${documentId}/download?token=${token}`;
   }
+
+  // Tax Optimization
+  async buildTaxLots(accountId?: number) {
+    const response = await this.client.post('/tax/build-lots', null, {
+      params: accountId ? { account_id: accountId } : {},
+    });
+    return response.data;
+  }
+
+  async getTaxLots(params?: { account_id?: number; symbol?: string; include_closed?: boolean }) {
+    const response = await this.client.get('/tax/lots', { params });
+    return response.data;
+  }
+
+  async getTaxLotsBySymbol(symbol: string, accountId?: number) {
+    const response = await this.client.get(`/tax/lots/${symbol}`, {
+      params: accountId ? { account_id: accountId } : {},
+    });
+    return response.data;
+  }
+
+  async getRealizedGains(params?: { account_id?: number; tax_year?: number }) {
+    const response = await this.client.get('/tax/realized-gains', { params });
+    return response.data;
+  }
+
+  async getTaxSummary(params?: { account_id?: number; tax_year?: number }) {
+    const response = await this.client.get('/tax/summary', { params });
+    return response.data;
+  }
+
+  async getHarvestCandidates(params?: { account_id?: number; min_loss?: number }) {
+    const response = await this.client.get('/tax/harvest-candidates', { params });
+    return response.data;
+  }
+
+  async checkWashSale(accountId: number, symbol: string, tradeDate?: string) {
+    const response = await this.client.get('/tax/wash-sale-check', {
+      params: { account_id: accountId, symbol, trade_date: tradeDate },
+    });
+    return response.data;
+  }
+
+  async getTradeImpact(accountId: number, symbol: string, shares: number, price?: number) {
+    const response = await this.client.get('/tax/trade-impact', {
+      params: { account_id: accountId, symbol, shares, price },
+    });
+    return response.data;
+  }
+
+  async getSellSuggestions(accountId: number, symbol: string, shares: number, objective: string = 'minimize_tax') {
+    const response = await this.client.get('/tax/sell-suggestions', {
+      params: { account_id: accountId, symbol, shares, objective },
+    });
+    return response.data;
+  }
+
+  async getTaxAccounts() {
+    const response = await this.client.get('/tax/accounts');
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

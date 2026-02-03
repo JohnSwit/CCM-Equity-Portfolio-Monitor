@@ -8,7 +8,8 @@ from app.models.models import (
     FactorProxySeries, FactorModelDefinition, FactorAttributionResult,
     TransactionType, AssetClass, ViewType, GroupType, FactorDataSource,
     Analyst, ActiveCoverage, CoverageModelData,
-    IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument
+    IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument,
+    TaxLot, RealizedGain, WashSaleViolation
 )
 
 from app.models.sector_models import (
@@ -34,6 +35,8 @@ __all__ = [
     "Analyst", "ActiveCoverage", "CoverageModelData",
     # Idea Pipeline models
     "IdeaPipeline", "IdeaPipelineModelData", "IdeaPipelineDocument",
+    # Tax Optimization models
+    "TaxLot", "RealizedGain", "WashSaleViolation",
     # Update tracking models
     "TickerProviderCoverage", "DataUpdateState", "ComputationDependency",
     "UpdateJobRun", "DataProviderStatus", "ComputationStatus"

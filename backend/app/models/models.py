@@ -664,3 +664,113 @@ class IdeaPipelineDocument(Base):
 
     idea = relationship("IdeaPipeline", back_populates="documents")
     uploaded_by = relationship("User")
+
+
+# ============== Tax Optimization Models ==============
+
+class TaxLot(Base):
+    """Individual tax lots tracking cost basis for positions"""
+    __tablename__ = "tax_lots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+    purchase_date = Column(Date, nullable=False, index=True)
+    purchase_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+
+    # Original lot info
+    original_shares = Column(Float, nullable=False)
+    cost_basis_per_share = Column(Float, nullable=False)
+    total_cost_basis = Column(Float, nullable=False)
+
+    # Current state (after partial sales)
+    remaining_shares = Column(Float, nullable=False)
+    remaining_cost_basis = Column(Float, nullable=False)
+
+    # Status
+    is_closed = Column(Boolean, default=False, index=True)
+    closed_date = Column(Date, nullable=True)
+
+    # Wash sale adjustments
+    wash_sale_adjustment = Column(Float, default=0.0)
+    wash_sale_disallowed_loss = Column(Float, default=0.0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("Account")
+    security = relationship("Security")
+    purchase_transaction = relationship("Transaction")
+
+
+class RealizedGain(Base):
+    """Record of realized gains/losses from sales"""
+    __tablename__ = "realized_gains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+    tax_lot_id = Column(Integer, ForeignKey("tax_lots.id"), nullable=False, index=True)
+    sale_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+
+    sale_date = Column(Date, nullable=False, index=True)
+    purchase_date = Column(Date, nullable=False)
+
+    shares_sold = Column(Float, nullable=False)
+    sale_price_per_share = Column(Float, nullable=False)
+    cost_basis_per_share = Column(Float, nullable=False)
+
+    proceeds = Column(Float, nullable=False)
+    cost_basis = Column(Float, nullable=False)
+    gain_loss = Column(Float, nullable=False)  # Proceeds - Cost Basis
+
+    # Tax classification
+    is_short_term = Column(Boolean, nullable=False)  # < 1 year holding
+    holding_period_days = Column(Integer, nullable=False)
+
+    # Wash sale info
+    is_wash_sale = Column(Boolean, default=False)
+    wash_sale_disallowed = Column(Float, default=0.0)
+    adjusted_gain_loss = Column(Float, nullable=False)  # After wash sale adjustment
+
+    tax_year = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("Account")
+    security = relationship("Security")
+    tax_lot = relationship("TaxLot")
+    sale_transaction = relationship("Transaction")
+
+
+class WashSaleViolation(Base):
+    """Track wash sale violations for IRS reporting"""
+    __tablename__ = "wash_sale_violations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+
+    # The loss sale
+    loss_sale_date = Column(Date, nullable=False)
+    loss_sale_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    loss_amount = Column(Float, nullable=False)
+
+    # The replacement purchase (within 30 days before/after)
+    replacement_date = Column(Date, nullable=False)
+    replacement_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    replacement_shares = Column(Float, nullable=False)
+
+    # Disallowed loss (full or partial)
+    disallowed_loss = Column(Float, nullable=False)
+    shares_affected = Column(Float, nullable=False)
+
+    # The tax lot that gets the basis adjustment
+    adjusted_lot_id = Column(Integer, ForeignKey("tax_lots.id"), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("Account")
+    security = relationship("Security")
+    loss_transaction = relationship("Transaction", foreign_keys=[loss_sale_transaction_id])
+    replacement_transaction = relationship("Transaction", foreign_keys=[replacement_transaction_id])
+    adjusted_lot = relationship("TaxLot")

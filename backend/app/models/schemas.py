@@ -418,3 +418,169 @@ class IdeaPipelineResponse(BaseModel):
 
 class IdeaPipelineListResponse(BaseModel):
     ideas: List[IdeaPipelineResponse]
+
+
+# ============== Tax Optimization Schemas ==============
+
+class TaxLotResponse(BaseModel):
+    id: int
+    account_id: int
+    account_number: Optional[str] = None
+    security_id: int
+    symbol: str
+    purchase_date: date
+    original_shares: float
+    remaining_shares: float
+    cost_basis_per_share: float
+    remaining_cost_basis: float
+    current_price: Optional[float] = None
+    current_value: Optional[float] = None
+    unrealized_gain_loss: Optional[float] = None
+    unrealized_gain_loss_pct: Optional[float] = None
+    holding_period_days: int
+    is_short_term: bool
+    wash_sale_adjustment: float = 0.0
+
+    model_config = {"from_attributes": True}
+
+
+class RealizedGainResponse(BaseModel):
+    id: int
+    account_id: int
+    account_number: Optional[str] = None
+    security_id: int
+    symbol: str
+    sale_date: date
+    purchase_date: date
+    shares_sold: float
+    sale_price_per_share: float
+    cost_basis_per_share: float
+    proceeds: float
+    cost_basis: float
+    gain_loss: float
+    is_short_term: bool
+    holding_period_days: int
+    is_wash_sale: bool = False
+    wash_sale_disallowed: float = 0.0
+    adjusted_gain_loss: float
+    tax_year: int
+
+    model_config = {"from_attributes": True}
+
+
+class TaxLotSellSuggestion(BaseModel):
+    """Suggestion for which lot to sell based on tax optimization"""
+    lot_id: int
+    symbol: str
+    purchase_date: date
+    shares_available: float
+    cost_basis_per_share: float
+    current_price: float
+    gain_loss_per_share: float
+    total_gain_loss: float
+    is_short_term: bool
+    holding_period_days: int
+    tax_efficiency_score: float  # Higher = more tax efficient to sell
+    recommendation: str  # "harvest_loss", "long_term_gain", "short_term_gain"
+
+
+class TaxLossHarvestingCandidate(BaseModel):
+    """Security with unrealized loss that could be harvested"""
+    symbol: str
+    security_id: int
+    total_shares: float
+    total_cost_basis: float
+    current_value: float
+    unrealized_loss: float
+    unrealized_loss_pct: float
+    short_term_loss: float
+    long_term_loss: float
+    # Wash sale risk
+    has_recent_purchase: bool  # Purchased within last 30 days
+    has_pending_wash_sale: bool  # Would trigger wash sale if sold
+    wash_sale_window_end: Optional[date] = None  # When safe to sell
+    lots: List[TaxLotResponse] = []
+
+
+class WashSaleCheckResult(BaseModel):
+    """Result of wash sale check for a potential trade"""
+    symbol: str
+    would_trigger_wash_sale: bool
+    reason: Optional[str] = None
+    conflicting_transactions: List[dict] = []
+    safe_to_trade_date: Optional[date] = None
+    disallowed_loss_estimate: Optional[float] = None
+
+
+class TradeImpactAnalysis(BaseModel):
+    """Projected tax impact of a proposed trade"""
+    symbol: str
+    action: str  # "sell"
+    shares: float
+    estimated_proceeds: float
+    # By lot method
+    fifo_impact: dict  # First In First Out
+    lifo_impact: dict  # Last In First Out
+    hifo_impact: dict  # Highest In First Out (tax loss harvesting)
+    lofo_impact: dict  # Lowest In First Out (minimize gains)
+    specific_lot_impact: Optional[dict] = None
+    # Recommendations
+    recommended_method: str
+    recommended_lots: List[int] = []
+    tax_savings_vs_fifo: float
+
+
+class TaxSummaryResponse(BaseModel):
+    """Summary of realized and unrealized gains/losses"""
+    tax_year: int
+    # Realized
+    short_term_realized_gains: float
+    short_term_realized_losses: float
+    net_short_term: float
+    long_term_realized_gains: float
+    long_term_realized_losses: float
+    net_long_term: float
+    total_realized: float
+    wash_sale_disallowed: float
+    # Unrealized
+    short_term_unrealized_gains: float
+    short_term_unrealized_losses: float
+    net_short_term_unrealized: float
+    long_term_unrealized_gains: float
+    long_term_unrealized_losses: float
+    net_long_term_unrealized: float
+    total_unrealized: float
+    # Estimated tax
+    estimated_tax_liability: float
+    marginal_rate_short_term: float = 0.37  # Default to highest bracket
+    marginal_rate_long_term: float = 0.20
+
+
+class TaxLotListResponse(BaseModel):
+    lots: List[TaxLotResponse]
+    total_cost_basis: float
+    total_current_value: float
+    total_unrealized_gain_loss: float
+
+
+class RealizedGainListResponse(BaseModel):
+    gains: List[RealizedGainResponse]
+    summary: TaxSummaryResponse
+
+
+class TaxLossHarvestingResponse(BaseModel):
+    candidates: List[TaxLossHarvestingCandidate]
+    total_harvestable_loss: float
+    short_term_harvestable: float
+    long_term_harvestable: float
+    wash_sale_restricted: List[str]  # Symbols with wash sale restrictions
+
+
+class SellOrderRequest(BaseModel):
+    """Request to simulate or execute a sell order"""
+    account_id: int
+    symbol: str
+    shares: float
+    lot_selection_method: str = "tax_optimal"  # fifo, lifo, hifo, lofo, tax_optimal, specific
+    specific_lot_ids: Optional[List[int]] = None
+    price_override: Optional[float] = None  # Use this price instead of current market
