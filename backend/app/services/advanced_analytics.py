@@ -616,8 +616,8 @@ class BrinsonAttributionAnalyzer:
         # FIRM views are stored as GROUP in the database
         db_vt = ViewType.GROUP if view_type == ViewType.FIRM else view_type
 
-        # Get index value at start
-        start_return = self.db.query(ReturnsEOD.index_value).filter(
+        # Get twr_index at start (closest date on or before start_date)
+        start_record = self.db.query(ReturnsEOD.twr_index).filter(
             and_(
                 ReturnsEOD.view_type == db_vt,
                 ReturnsEOD.view_id == view_id,
@@ -625,8 +625,8 @@ class BrinsonAttributionAnalyzer:
             )
         ).order_by(desc(ReturnsEOD.date)).first()
 
-        # Get index value at end
-        end_return = self.db.query(ReturnsEOD.index_value).filter(
+        # Get twr_index at end (closest date on or before end_date)
+        end_record = self.db.query(ReturnsEOD.twr_index).filter(
             and_(
                 ReturnsEOD.view_type == db_vt,
                 ReturnsEOD.view_id == view_id,
@@ -634,33 +634,34 @@ class BrinsonAttributionAnalyzer:
             )
         ).order_by(desc(ReturnsEOD.date)).first()
 
-        if start_return and end_return:
-            return (float(end_return[0]) / float(start_return[0])) - 1
+        if start_record and end_record and start_record[0] and end_record[0]:
+            return (float(end_record[0]) / float(start_record[0])) - 1
         return None
 
     def _get_actual_benchmark_return(self, benchmark_code: str, start_date: date, end_date: date) -> Optional[float]:
-        """Get actual benchmark return from BenchmarkReturn table"""
+        """Get actual benchmark return from BenchmarkReturn table by compounding daily returns"""
         from app.models import BenchmarkReturn
 
-        # Get index value at start
-        start_return = self.db.query(BenchmarkReturn.index_value).filter(
+        # BenchmarkReturn stores daily returns in return_value field, with code field for benchmark
+        # Get all daily returns in the date range (exclusive of start_date, inclusive of end_date)
+        daily_returns = self.db.query(BenchmarkReturn.return_value).filter(
             and_(
-                BenchmarkReturn.benchmark_code == benchmark_code,
-                BenchmarkReturn.date <= start_date
-            )
-        ).order_by(desc(BenchmarkReturn.date)).first()
-
-        # Get index value at end
-        end_return = self.db.query(BenchmarkReturn.index_value).filter(
-            and_(
-                BenchmarkReturn.benchmark_code == benchmark_code,
+                BenchmarkReturn.code == benchmark_code,
+                BenchmarkReturn.date > start_date,
                 BenchmarkReturn.date <= end_date
             )
-        ).order_by(desc(BenchmarkReturn.date)).first()
+        ).order_by(BenchmarkReturn.date).all()
 
-        if start_return and end_return:
-            return (float(end_return[0]) / float(start_return[0])) - 1
-        return None
+        if not daily_returns:
+            return None
+
+        # Compound the daily returns: (1 + r1) * (1 + r2) * ... - 1
+        cumulative = 1.0
+        for (ret,) in daily_returns:
+            if ret is not None:
+                cumulative *= (1.0 + ret)
+
+        return cumulative - 1.0
 
     def _calculate_sector_returns(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
         """Calculate sector returns for portfolio holdings"""
