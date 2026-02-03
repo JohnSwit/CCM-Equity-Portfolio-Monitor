@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 import asyncio
+import logging
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import User
 from app.models.schemas import JobRunResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -472,4 +475,88 @@ async def run_post_import_analytics(
         raise HTTPException(
             status_code=500,
             detail=f"Post-import analytics failed: {str(e)}"
+        )
+
+
+@router.post("/backfill-benchmarks")
+async def backfill_benchmark_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Backfill historical benchmark data to match transaction history.
+
+    The incremental update only fetches data FORWARD from the latest date.
+    This endpoint fetches BACKWARD to fill historical gaps.
+
+    Use this after importing historical transactions that predate existing benchmark data.
+    """
+    from app.services.market_data import MarketDataProvider
+    from app.models import Transaction, BenchmarkDefinition, BenchmarkLevel
+    from sqlalchemy import func
+    from datetime import timedelta
+
+    try:
+        market_data = MarketDataProvider(db)
+
+        # Get earliest transaction date
+        earliest_txn = db.query(func.min(Transaction.trade_date)).scalar()
+        if not earliest_txn:
+            return {
+                "status": "success",
+                "message": "No transactions found",
+                "benchmarks_updated": 0
+            }
+
+        target_start = earliest_txn - timedelta(days=30)
+        end_date = date.today()
+
+        benchmarks = db.query(BenchmarkDefinition).all()
+        results = []
+
+        for benchmark in benchmarks:
+            # Get earliest existing benchmark data
+            earliest_benchmark = db.query(func.min(BenchmarkLevel.date)).filter(
+                BenchmarkLevel.code == benchmark.code
+            ).scalar()
+
+            if earliest_benchmark and earliest_benchmark <= target_start:
+                # Already have data back to target
+                results.append({
+                    "code": benchmark.code,
+                    "status": "skipped",
+                    "reason": f"Already has data from {earliest_benchmark}"
+                })
+                continue
+
+            # Need to backfill - fetch from target_start to earliest existing (or end_date if no data)
+            fetch_end = earliest_benchmark - timedelta(days=1) if earliest_benchmark else end_date
+
+            logger.info(f"Backfilling {benchmark.code}: {target_start} to {fetch_end}")
+
+            count = await market_data.fetch_and_store_benchmark_prices(
+                benchmark.code,
+                benchmark.provider_symbol,
+                target_start,
+                fetch_end,
+                force_refresh=False
+            )
+
+            results.append({
+                "code": benchmark.code,
+                "status": "updated",
+                "rows_added": count
+            })
+
+        return {
+            "status": "success",
+            "message": "Benchmark backfill completed",
+            "target_start_date": str(target_start),
+            "benchmarks": results
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Benchmark backfill failed: {str(e)}"
         )
