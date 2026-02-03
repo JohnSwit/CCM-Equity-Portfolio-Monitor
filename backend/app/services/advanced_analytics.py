@@ -160,10 +160,12 @@ class SectorAnalyzer:
             return [view_id]
         elif view_type in (ViewType.GROUP, ViewType.FIRM):
             # For GROUP and FIRM views, get all member account IDs
-            members = self.db.query(GroupMember.account_id).filter(
-                GroupMember.group_id == view_id
+            # GroupMember uses member_id and member_type fields
+            members = self.db.query(GroupMember.member_id).filter(
+                GroupMember.group_id == view_id,
+                GroupMember.member_type == "account"
             ).all()
-            return [m.account_id for m in members]
+            return [m.member_id for m in members]
         else:
             return []
 
