@@ -586,6 +586,85 @@ class APIClient {
     const response = await this.client.post('/coverage/refresh-all-models');
     return response.data;
   }
+
+  // Idea Pipeline
+  async getIdeas(activeOnly: boolean = true) {
+    const response = await this.client.get('/ideas', {
+      params: { active_only: activeOnly },
+    });
+    return response.data;
+  }
+
+  async getIdea(ideaId: number) {
+    const response = await this.client.get(`/ideas/${ideaId}`);
+    return response.data;
+  }
+
+  async createIdea(data: {
+    ticker: string;
+    primary_analyst_id?: number;
+    secondary_analyst_id?: number;
+    model_path?: string;
+    model_share_link?: string;
+    thesis?: string;
+    next_steps?: string;
+    notes?: string;
+  }) {
+    const response = await this.client.post('/ideas', data);
+    return response.data;
+  }
+
+  async updateIdea(ideaId: number, data: {
+    primary_analyst_id?: number;
+    secondary_analyst_id?: number;
+    model_path?: string;
+    model_share_link?: string;
+    initial_review_complete?: boolean;
+    deep_dive_complete?: boolean;
+    model_complete?: boolean;
+    writeup_complete?: boolean;
+    thesis?: string;
+    next_steps?: string;
+    notes?: string;
+    is_active?: boolean;
+  }) {
+    const response = await this.client.put(`/ideas/${ideaId}`, data);
+    return response.data;
+  }
+
+  async deleteIdea(ideaId: number) {
+    const response = await this.client.delete(`/ideas/${ideaId}`);
+    return response.data;
+  }
+
+  async refreshIdeaModelData(ideaId: number) {
+    const response = await this.client.post(`/ideas/${ideaId}/refresh-model-data`);
+    return response.data;
+  }
+
+  async getIdeaDocuments(ideaId: number) {
+    const response = await this.client.get(`/ideas/${ideaId}/documents`);
+    return response.data;
+  }
+
+  async uploadIdeaDocument(ideaId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/ideas/${ideaId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async deleteIdeaDocument(ideaId: number, documentId: number) {
+    const response = await this.client.delete(`/ideas/${ideaId}/documents/${documentId}`);
+    return response.data;
+  }
+
+  getIdeaDocumentDownloadUrl(ideaId: number, documentId: number): string {
+    const token = localStorage.getItem('token');
+    return `${API_URL}/ideas/${ideaId}/documents/${documentId}/download?token=${token}`;
+  }
 }
 
 export const api = new APIClient();

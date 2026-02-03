@@ -343,3 +343,78 @@ class ActiveCoverageResponse(BaseModel):
 class ActiveCoverageListResponse(BaseModel):
     coverages: List[ActiveCoverageResponse]
     total_firm_value: Optional[float] = None
+
+
+# ============== Idea Pipeline Schemas ==============
+
+class IdeaPipelineCreate(BaseModel):
+    ticker: str
+    primary_analyst_id: Optional[int] = None
+    secondary_analyst_id: Optional[int] = None
+    model_path: Optional[str] = None
+    model_share_link: Optional[str] = None
+    thesis: Optional[str] = None
+    next_steps: Optional[str] = None
+    notes: Optional[str] = None
+
+    model_config = {"protected_namespaces": ()}
+
+
+class IdeaPipelineUpdate(BaseModel):
+    primary_analyst_id: Optional[int] = None
+    secondary_analyst_id: Optional[int] = None
+    model_path: Optional[str] = None
+    model_share_link: Optional[str] = None
+    initial_review_complete: Optional[bool] = None
+    deep_dive_complete: Optional[bool] = None
+    model_complete: Optional[bool] = None
+    writeup_complete: Optional[bool] = None
+    thesis: Optional[str] = None
+    next_steps: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    model_config = {"protected_namespaces": ()}
+
+
+class IdeaPipelineDocumentResponse(BaseModel):
+    id: int
+    idea_id: int
+    filename: str
+    original_filename: str
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    uploaded_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class IdeaPipelineResponse(BaseModel):
+    id: int
+    ticker: str
+    primary_analyst: Optional[AnalystResponse] = None
+    secondary_analyst: Optional[AnalystResponse] = None
+    model_path: Optional[str] = None
+    model_share_link: Optional[str] = None
+    # Research pipeline
+    initial_review_complete: bool = False
+    deep_dive_complete: bool = False
+    model_complete: bool = False
+    writeup_complete: bool = False
+    # Research content
+    thesis: Optional[str] = None
+    next_steps: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: bool
+    # Model data (same structure as coverage)
+    model_data: Optional[CoverageModelDataResponse] = None
+    # Documents
+    documents: List[IdeaPipelineDocumentResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
+
+
+class IdeaPipelineListResponse(BaseModel):
+    ideas: List[IdeaPipelineResponse]

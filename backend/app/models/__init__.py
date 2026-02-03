@@ -7,7 +7,8 @@ from app.models.models import (
     ImportLog, ManualPrice,
     FactorProxySeries, FactorModelDefinition, FactorAttributionResult,
     TransactionType, AssetClass, ViewType, GroupType, FactorDataSource,
-    Analyst, ActiveCoverage, CoverageModelData
+    Analyst, ActiveCoverage, CoverageModelData,
+    IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument
 )
 
 from app.models.sector_models import (
@@ -31,6 +32,8 @@ __all__ = [
     "SectorClassification", "BenchmarkConstituent", "FactorReturns",
     # Active Coverage models
     "Analyst", "ActiveCoverage", "CoverageModelData",
+    # Idea Pipeline models
+    "IdeaPipeline", "IdeaPipelineModelData", "IdeaPipelineDocument",
     # Update tracking models
     "TickerProviderCoverage", "DataUpdateState", "ComputationDependency",
     "UpdateJobRun", "DataProviderStatus", "ComputationStatus"

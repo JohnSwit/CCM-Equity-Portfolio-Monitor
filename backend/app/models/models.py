@@ -552,3 +552,115 @@ class CoverageModelData(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     coverage = relationship("ActiveCoverage")
+
+
+class IdeaPipeline(Base):
+    """Idea Pipeline - tracks research ideas before they become active coverage"""
+    __tablename__ = "idea_pipeline"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, nullable=False, unique=True, index=True)
+    primary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    secondary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    # OneDrive/SharePoint path or local path to Excel model
+    model_path = Column(String, nullable=True)
+    # OneDrive share link for opening in browser
+    model_share_link = Column(String, nullable=True)
+
+    # Research Pipeline checkboxes
+    initial_review_complete = Column(Boolean, default=False)
+    deep_dive_complete = Column(Boolean, default=False)
+    model_complete = Column(Boolean, default=False)
+    writeup_complete = Column(Boolean, default=False)
+
+    # Research content
+    thesis = Column(Text, nullable=True)
+    next_steps = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    primary_analyst = relationship("Analyst", foreign_keys=[primary_analyst_id])
+    secondary_analyst = relationship("Analyst", foreign_keys=[secondary_analyst_id])
+    documents = relationship("IdeaPipelineDocument", back_populates="idea", cascade="all, delete-orphan")
+
+
+class IdeaPipelineModelData(Base):
+    """Cached data extracted from Excel models' API tabs for idea pipeline"""
+    __tablename__ = "idea_pipeline_model_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    idea_id = Column(Integer, ForeignKey("idea_pipeline.id"), nullable=False, index=True)
+
+    # IRR and Valuation (from cells E11, E13, E14)
+    irr_3yr = Column(Float, nullable=True)
+    ccm_fair_value = Column(Float, nullable=True)
+    street_price_target = Column(Float, nullable=True)
+
+    # Revenue data
+    revenue_ccm_minus1yr = Column(Float, nullable=True)
+    revenue_ccm_1yr = Column(Float, nullable=True)
+    revenue_ccm_2yr = Column(Float, nullable=True)
+    revenue_ccm_3yr = Column(Float, nullable=True)
+    revenue_street_minus1yr = Column(Float, nullable=True)
+    revenue_street_1yr = Column(Float, nullable=True)
+    revenue_street_2yr = Column(Float, nullable=True)
+    revenue_street_3yr = Column(Float, nullable=True)
+
+    # EBITDA data
+    ebitda_ccm_minus1yr = Column(Float, nullable=True)
+    ebitda_ccm_1yr = Column(Float, nullable=True)
+    ebitda_ccm_2yr = Column(Float, nullable=True)
+    ebitda_ccm_3yr = Column(Float, nullable=True)
+    ebitda_street_minus1yr = Column(Float, nullable=True)
+    ebitda_street_1yr = Column(Float, nullable=True)
+    ebitda_street_2yr = Column(Float, nullable=True)
+    ebitda_street_3yr = Column(Float, nullable=True)
+
+    # EPS data
+    eps_ccm_minus1yr = Column(Float, nullable=True)
+    eps_ccm_1yr = Column(Float, nullable=True)
+    eps_ccm_2yr = Column(Float, nullable=True)
+    eps_ccm_3yr = Column(Float, nullable=True)
+    eps_street_minus1yr = Column(Float, nullable=True)
+    eps_street_1yr = Column(Float, nullable=True)
+    eps_street_2yr = Column(Float, nullable=True)
+    eps_street_3yr = Column(Float, nullable=True)
+
+    # FCF data
+    fcf_ccm_minus1yr = Column(Float, nullable=True)
+    fcf_ccm_1yr = Column(Float, nullable=True)
+    fcf_ccm_2yr = Column(Float, nullable=True)
+    fcf_ccm_3yr = Column(Float, nullable=True)
+    fcf_street_minus1yr = Column(Float, nullable=True)
+    fcf_street_1yr = Column(Float, nullable=True)
+    fcf_street_2yr = Column(Float, nullable=True)
+    fcf_street_3yr = Column(Float, nullable=True)
+
+    # Timestamp for cache freshness
+    data_as_of = Column(DateTime, nullable=True)
+    last_refreshed = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    idea = relationship("IdeaPipeline")
+
+
+class IdeaPipelineDocument(Base):
+    """Documents (PDFs, Word files) attached to idea pipeline items"""
+    __tablename__ = "idea_pipeline_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    idea_id = Column(Integer, ForeignKey("idea_pipeline.id"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_type = Column(String, nullable=True)  # pdf, docx, etc.
+    file_size = Column(Integer, nullable=True)  # bytes
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    idea = relationship("IdeaPipeline", back_populates="documents")
+    uploaded_by = relationship("User")

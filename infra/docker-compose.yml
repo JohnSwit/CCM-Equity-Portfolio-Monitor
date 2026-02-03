@@ -37,6 +37,8 @@ services:
       - ../backend:/app
       # Mount Excel models folder - update MODELS_PATH in .env to match your location
       - ${MODELS_PATH:-C:/Users/js/CCM/IMRT - Docs/Equity}:/models:ro
+      # Persist uploaded documents
+      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,3 +82,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:
