@@ -323,7 +323,7 @@ async def market_data_update_job(db: Session = None):
             db.close()
 
 
-async def recompute_analytics_job(db: Session = None):
+async def recompute_analytics_job(db: Session = None, use_batch_service: bool = True):
     """
     Daily job to recompute analytics:
     0. Clear old analytics for accounts without transactions and all group/firm data
@@ -334,6 +334,10 @@ async def recompute_analytics_job(db: Session = None):
     5. Compute basket returns
     6. Compute factor returns and regressions
     7. Compute risk metrics
+
+    Args:
+        db: Database session
+        use_batch_service: Use optimized BatchAnalyticsService for steps 1-2 (default True)
     """
     close_db = False
     if db is None:
@@ -342,6 +346,7 @@ async def recompute_analytics_job(db: Session = None):
 
     try:
         logger.info("Starting analytics recomputation job")
+        logger.info(f"Using batch service: {use_batch_service}")
 
         as_of_date = date.today()
 
@@ -372,23 +377,34 @@ async def recompute_analytics_job(db: Session = None):
             except Exception as e:
                 logger.error(f"Failed to refresh classifications: {e}")
 
-        # 1. Build positions
-        logger.info("Building positions...")
-        positions_engine = PositionsEngine(db)
-        positions_results = positions_engine.build_positions_for_all_accounts()
-        logger.info(f"Positions built: {positions_results}")
+        # Steps 1 & 2: Build positions, compute values and returns
+        if use_batch_service:
+            # Use optimized batch service (bulk upserts, vectorized computation)
+            logger.info("Using BatchAnalyticsService for positions/values/returns...")
+            from app.services.analytics_batch import BatchAnalyticsService
 
-        # 2. Compute account values and returns
-        logger.info("Computing account analytics...")
-        returns_engine = ReturnsEngine(db)
-        accounts = db.query(Account).all()
+            batch_service = BatchAnalyticsService(db)
+            batch_result = batch_service.run_full_analytics()
+            logger.info(f"Batch analytics result: {batch_result}")
+        else:
+            # Legacy path (individual queries - slower but more tested)
+            # 1. Build positions
+            logger.info("Building positions (legacy)...")
+            positions_engine = PositionsEngine(db)
+            positions_results = positions_engine.build_positions_for_all_accounts()
+            logger.info(f"Positions built: {positions_results}")
 
-        for account in accounts:
-            try:
-                returns_engine.compute_portfolio_values_for_account(account.id)
-                returns_engine.compute_returns_for_account(account.id)
-            except Exception as e:
-                logger.error(f"Failed to compute analytics for account {account.id}: {e}")
+            # 2. Compute account values and returns
+            logger.info("Computing account analytics (legacy)...")
+            returns_engine = ReturnsEngine(db)
+            accounts = db.query(Account).all()
+
+            for account in accounts:
+                try:
+                    returns_engine.compute_portfolio_values_for_account(account.id)
+                    returns_engine.compute_returns_for_account(account.id)
+                except Exception as e:
+                    logger.error(f"Failed to compute analytics for account {account.id}: {e}")
 
         # 3. Compute groups and firm
         logger.info("Computing group rollups...")
@@ -405,6 +421,7 @@ async def recompute_analytics_job(db: Session = None):
 
         # Compute benchmark metrics for all views
         logger.info("Computing benchmark metrics...")
+        accounts = db.query(Account).all()
         for account in accounts:
             for benchmark_code in ['SPY', 'QQQ', 'INDU']:
                 try:
