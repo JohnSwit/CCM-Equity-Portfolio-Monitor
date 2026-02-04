@@ -614,3 +614,143 @@ async def cleanup_orphaned_data_endpoint(
             status_code=500,
             detail=f"Cleanup failed: {str(e)}"
         )
+
+
+@router.get("/debug/account-transaction-counts")
+async def get_account_transaction_counts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Debug endpoint: Show transaction counts per account.
+
+    Helps diagnose why accounts are not being detected as orphaned.
+    """
+    from app.models import Account, Transaction
+    from sqlalchemy import func
+
+    # Get all accounts with their transaction counts
+    account_txn_counts = db.query(
+        Account.id,
+        Account.account_number,
+        Account.account_name,
+        func.count(Transaction.id).label('transaction_count')
+    ).outerjoin(
+        Transaction, Account.id == Transaction.account_id
+    ).group_by(Account.id).all()
+
+    # Get accounts with no transactions
+    orphaned = [a for a in account_txn_counts if a.transaction_count == 0]
+    with_txns = [a for a in account_txn_counts if a.transaction_count > 0]
+
+    return {
+        "total_accounts": len(account_txn_counts),
+        "accounts_with_transactions": len(with_txns),
+        "orphaned_accounts": len(orphaned),
+        "orphaned_account_details": [
+            {
+                "id": a.id,
+                "account_number": a.account_number,
+                "account_name": a.account_name
+            }
+            for a in orphaned
+        ],
+        "accounts_with_transactions_details": [
+            {
+                "id": a.id,
+                "account_number": a.account_number,
+                "account_name": a.account_name,
+                "transaction_count": a.transaction_count
+            }
+            for a in with_txns[:20]  # Show first 20
+        ]
+    }
+
+
+@router.delete("/debug/delete-account/{account_id}")
+async def force_delete_account(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Force delete an account and ALL its associated data.
+
+    This will delete:
+    - All transactions for the account
+    - All positions for the account
+    - All portfolio values for the account
+    - All returns for the account
+    - All risk metrics for the account
+    - All benchmark metrics for the account
+    - All factor regressions for the account
+    - The account record itself
+
+    WARNING: This is irreversible!
+    """
+    from app.models import (
+        Account, Transaction, PositionsEOD, PortfolioValueEOD,
+        ReturnsEOD, RiskEOD, BenchmarkMetric, FactorRegression, ViewType
+    )
+
+    # Check account exists
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    account_name = account.account_name
+    account_number = account.account_number
+
+    # Delete all related data
+    deleted_counts = {}
+
+    # Transactions
+    deleted_counts['transactions'] = db.query(Transaction).filter(
+        Transaction.account_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Positions
+    deleted_counts['positions'] = db.query(PositionsEOD).filter(
+        PositionsEOD.account_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Portfolio values
+    deleted_counts['portfolio_values'] = db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+        PortfolioValueEOD.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Returns
+    deleted_counts['returns'] = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT,
+        ReturnsEOD.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Risk metrics
+    deleted_counts['risk'] = db.query(RiskEOD).filter(
+        RiskEOD.view_type == ViewType.ACCOUNT,
+        RiskEOD.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Benchmark metrics
+    deleted_counts['benchmark_metrics'] = db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type == ViewType.ACCOUNT,
+        BenchmarkMetric.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Factor regressions
+    deleted_counts['factor_regressions'] = db.query(FactorRegression).filter(
+        FactorRegression.view_type == ViewType.ACCOUNT,
+        FactorRegression.view_id == account_id
+    ).delete(synchronize_session=False)
+
+    # Delete the account itself
+    db.delete(account)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Deleted account '{account_name}' ({account_number})",
+        "account_id": account_id,
+        "deleted_counts": deleted_counts
+    }
