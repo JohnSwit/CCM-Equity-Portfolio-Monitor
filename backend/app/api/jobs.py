@@ -794,11 +794,16 @@ async def delete_all_portfolio_data(
         ReturnsEOD, RiskEOD, BenchmarkMetric, FactorRegression,
         ImportLog, ViewType, GroupMember
     )
+    from app.models.models import TaxLot, RealizedGain
 
     deleted_counts = {}
 
     # Delete in order to respect foreign key constraints
-    # First: analytics data
+    # First: tax-related tables (they reference transactions)
+    deleted_counts['realized_gains'] = db.query(RealizedGain).delete(synchronize_session=False)
+    deleted_counts['tax_lots'] = db.query(TaxLot).delete(synchronize_session=False)
+
+    # Second: analytics data
     deleted_counts['factor_regressions'] = db.query(FactorRegression).filter(
         FactorRegression.view_type == ViewType.ACCOUNT
     ).delete(synchronize_session=False)
@@ -821,13 +826,13 @@ async def delete_all_portfolio_data(
 
     deleted_counts['positions'] = db.query(PositionsEOD).delete(synchronize_session=False)
 
-    # Second: transactions
+    # Third: transactions
     deleted_counts['transactions'] = db.query(Transaction).delete(synchronize_session=False)
 
-    # Third: group memberships
+    # Fourth: group memberships
     deleted_counts['group_members'] = db.query(GroupMember).delete(synchronize_session=False)
 
-    # Fourth: import logs
+    # Fifth: import logs
     deleted_counts['import_logs'] = db.query(ImportLog).delete(synchronize_session=False)
 
     # Finally: accounts
