@@ -792,7 +792,7 @@ async def delete_all_portfolio_data(
     from app.models import (
         Account, Transaction, PositionsEOD, PortfolioValueEOD,
         ReturnsEOD, RiskEOD, BenchmarkMetric, FactorRegression,
-        ImportLog, ViewType, GroupMember
+        ImportLog, ViewType, GroupMember, Group
     )
     from app.models.models import TaxLot, RealizedGain
 
@@ -803,45 +803,69 @@ async def delete_all_portfolio_data(
     deleted_counts['realized_gains'] = db.query(RealizedGain).delete(synchronize_session=False)
     deleted_counts['tax_lots'] = db.query(TaxLot).delete(synchronize_session=False)
 
-    # Second: analytics data
-    deleted_counts['factor_regressions'] = db.query(FactorRegression).filter(
+    # Second: analytics data for ACCOUNTS
+    deleted_counts['factor_regressions_account'] = db.query(FactorRegression).filter(
         FactorRegression.view_type == ViewType.ACCOUNT
     ).delete(synchronize_session=False)
 
-    deleted_counts['benchmark_metrics'] = db.query(BenchmarkMetric).filter(
+    deleted_counts['benchmark_metrics_account'] = db.query(BenchmarkMetric).filter(
         BenchmarkMetric.view_type == ViewType.ACCOUNT
     ).delete(synchronize_session=False)
 
-    deleted_counts['risk'] = db.query(RiskEOD).filter(
+    deleted_counts['risk_account'] = db.query(RiskEOD).filter(
         RiskEOD.view_type == ViewType.ACCOUNT
     ).delete(synchronize_session=False)
 
-    deleted_counts['returns'] = db.query(ReturnsEOD).filter(
+    deleted_counts['returns_account'] = db.query(ReturnsEOD).filter(
         ReturnsEOD.view_type == ViewType.ACCOUNT
     ).delete(synchronize_session=False)
 
-    deleted_counts['portfolio_values'] = db.query(PortfolioValueEOD).filter(
+    deleted_counts['portfolio_values_account'] = db.query(PortfolioValueEOD).filter(
         PortfolioValueEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+
+    # Third: analytics data for GROUPS (includes Firm view)
+    deleted_counts['factor_regressions_group'] = db.query(FactorRegression).filter(
+        FactorRegression.view_type == ViewType.GROUP
+    ).delete(synchronize_session=False)
+
+    deleted_counts['benchmark_metrics_group'] = db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type == ViewType.GROUP
+    ).delete(synchronize_session=False)
+
+    deleted_counts['risk_group'] = db.query(RiskEOD).filter(
+        RiskEOD.view_type == ViewType.GROUP
+    ).delete(synchronize_session=False)
+
+    deleted_counts['returns_group'] = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.GROUP
+    ).delete(synchronize_session=False)
+
+    deleted_counts['portfolio_values_group'] = db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type == ViewType.GROUP
     ).delete(synchronize_session=False)
 
     deleted_counts['positions'] = db.query(PositionsEOD).delete(synchronize_session=False)
 
-    # Third: transactions
+    # Fourth: transactions
     deleted_counts['transactions'] = db.query(Transaction).delete(synchronize_session=False)
 
-    # Fourth: group memberships
+    # Fifth: group memberships
     deleted_counts['group_members'] = db.query(GroupMember).delete(synchronize_session=False)
 
-    # Fifth: import logs
+    # Sixth: import logs
     deleted_counts['import_logs'] = db.query(ImportLog).delete(synchronize_session=False)
 
-    # Finally: accounts
+    # Seventh: accounts
     deleted_counts['accounts'] = db.query(Account).delete(synchronize_session=False)
+
+    # Eighth: groups (including Firm)
+    deleted_counts['groups'] = db.query(Group).delete(synchronize_session=False)
 
     db.commit()
 
     return {
         "status": "success",
-        "message": "All portfolio data deleted",
+        "message": "All portfolio data deleted (including Firm and Groups)",
         "deleted_counts": deleted_counts
     }
