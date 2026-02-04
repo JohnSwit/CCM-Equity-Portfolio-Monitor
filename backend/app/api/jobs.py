@@ -754,3 +754,89 @@ async def force_delete_account(
         "account_id": account_id,
         "deleted_counts": deleted_counts
     }
+
+
+@router.delete("/debug/delete-all-data")
+async def delete_all_portfolio_data(
+    confirm: bool = Query(False, description="Must be true to confirm deletion"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Delete ALL portfolio data: accounts, transactions, positions, values, returns, etc.
+
+    This keeps benchmark data and factor ETFs intact but removes all portfolio-related data.
+
+    WARNING: This is irreversible! Pass confirm=true to execute.
+    """
+    if not confirm:
+        # Count what would be deleted
+        from app.models import (
+            Account, Transaction, PositionsEOD, PortfolioValueEOD,
+            ReturnsEOD, RiskEOD, BenchmarkMetric, FactorRegression, ImportLog
+        )
+
+        counts = {
+            "accounts": db.query(Account).count(),
+            "transactions": db.query(Transaction).count(),
+            "positions": db.query(PositionsEOD).count(),
+            "import_logs": db.query(ImportLog).count()
+        }
+
+        return {
+            "status": "preview",
+            "message": "Pass confirm=true to delete all data",
+            "would_delete": counts
+        }
+
+    from app.models import (
+        Account, Transaction, PositionsEOD, PortfolioValueEOD,
+        ReturnsEOD, RiskEOD, BenchmarkMetric, FactorRegression,
+        ImportLog, ViewType, GroupMember
+    )
+
+    deleted_counts = {}
+
+    # Delete in order to respect foreign key constraints
+    # First: analytics data
+    deleted_counts['factor_regressions'] = db.query(FactorRegression).filter(
+        FactorRegression.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+
+    deleted_counts['benchmark_metrics'] = db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+
+    deleted_counts['risk'] = db.query(RiskEOD).filter(
+        RiskEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+
+    deleted_counts['returns'] = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+
+    deleted_counts['portfolio_values'] = db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+
+    deleted_counts['positions'] = db.query(PositionsEOD).delete(synchronize_session=False)
+
+    # Second: transactions
+    deleted_counts['transactions'] = db.query(Transaction).delete(synchronize_session=False)
+
+    # Third: group memberships
+    deleted_counts['group_members'] = db.query(GroupMember).delete(synchronize_session=False)
+
+    # Fourth: import logs
+    deleted_counts['import_logs'] = db.query(ImportLog).delete(synchronize_session=False)
+
+    # Finally: accounts
+    deleted_counts['accounts'] = db.query(Account).delete(synchronize_session=False)
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "All portfolio data deleted",
+        "deleted_counts": deleted_counts
+    }
