@@ -98,7 +98,8 @@ async def delete_import(
 ):
     """
     Delete an import and all its transactions.
-    Automatically recomputes analytics after deletion.
+    Clears analytics for affected accounts but does NOT recompute.
+    Use the analytics endpoints to rebuild if needed.
     WARNING: This will delete all transactions from this import.
     """
     # Find the import
@@ -118,6 +119,8 @@ async def delete_import(
         Transaction.import_log_id == import_id
     ).count()
 
+    file_name = import_log.file_name
+
     # Delete all transactions from this import
     db.query(Transaction).filter(
         Transaction.import_log_id == import_id
@@ -127,22 +130,15 @@ async def delete_import(
     db.delete(import_log)
     db.commit()
 
-    # Clear analytics for all affected accounts
-    from app.workers.jobs import recompute_analytics_job, clear_analytics_for_account
+    # Clear analytics for all affected accounts (each call commits automatically)
+    from app.workers.jobs import clear_analytics_for_account
     for account_id in affected_account_ids:
         clear_analytics_for_account(db, account_id)
-
-    # Automatically recompute analytics after deletion
-    try:
-        await recompute_analytics_job(db)
-    except Exception as e:
-        # Don't fail the deletion if analytics recomputation fails
-        import logging
-        logging.error(f"Failed to recompute analytics after deletion: {e}")
 
     return {
         'deleted': True,
         'import_id': import_id,
         'transactions_deleted': txn_count,
-        'message': f'Deleted import {import_log.file_name} and {txn_count} transactions. Analytics have been recomputed.'
+        'accounts_affected': len(affected_account_ids),
+        'message': f'Deleted import {file_name} and {txn_count} transactions. Analytics cleared for {len(affected_account_ids)} accounts.'
     }
