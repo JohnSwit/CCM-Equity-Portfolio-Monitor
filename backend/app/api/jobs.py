@@ -563,3 +563,54 @@ async def backfill_benchmark_data(
             status_code=500,
             detail=f"Benchmark backfill failed: {str(e)}"
         )
+
+
+@router.post("/cleanup-orphaned-data")
+async def cleanup_orphaned_data_endpoint(
+    delete_accounts: bool = Query(False, description="Delete orphaned Account records (accounts with no transactions)"),
+    delete_securities: bool = Query(False, description="Delete orphaned Security records (securities with no transactions)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Clean up orphaned data after transaction deletions.
+
+    When transactions are deleted, the Account and Security records remain in the database.
+    This can cause the update process to attempt to fetch data or compute analytics for
+    entities that no longer have any transactions.
+
+    This endpoint:
+    1. Always clears analytics for accounts without transactions
+    2. Optionally deletes the Account records themselves
+    3. Optionally deletes orphaned Security records and their price data
+
+    Note: Benchmark/Factor ETF securities (SPY, QQQ, etc.) are never deleted as they're
+    needed for analytics even if no transactions reference them.
+
+    Args:
+        delete_accounts: If True, deletes Account records with no transactions
+        delete_securities: If True, deletes Security records with no transactions (except ETFs)
+
+    Returns:
+        Summary of cleanup operations
+    """
+    from app.workers.jobs import cleanup_orphaned_data
+
+    try:
+        results = cleanup_orphaned_data(
+            db,
+            delete_accounts=delete_accounts,
+            delete_securities=delete_securities
+        )
+
+        return {
+            "status": "success",
+            "message": "Orphaned data cleanup completed",
+            "results": results
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cleanup failed: {str(e)}"
+        )

@@ -664,9 +664,16 @@ class UpdateOrchestrator:
         """
         start_time = time.time()
 
-        accounts = self.db.query(Account).all()
+        # Only get accounts that have at least one transaction (skip orphaned accounts)
+        accounts_with_txns = self.db.query(Transaction.account_id).distinct().subquery()
+        accounts = self.db.query(Account).filter(
+            Account.id.in_(accounts_with_txns)
+        ).all()
+
         groups = self.db.query(Group).all()
         as_of_date = date.today()
+
+        logger.info(f"Processing analytics for {len(accounts)} accounts with transactions")
 
         if use_batch_service:
             # Use optimized batch service for positions, values, and returns

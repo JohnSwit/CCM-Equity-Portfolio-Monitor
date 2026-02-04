@@ -1,4 +1,5 @@
 import asyncio
+from typing import Dict, Any
 from sqlalchemy.orm import Session
 from datetime import date
 from app.core.database import SessionLocal
@@ -93,6 +94,116 @@ def is_classification_data_fresh(db: Session) -> bool:
 
     logger.info(f"Classification data is fresh ({age_hours:.1f}h old, {classified_securities}/{total_securities} securities) - skipping refresh")
     return True
+
+
+def cleanup_orphaned_data(db: Session, delete_accounts: bool = False, delete_securities: bool = False) -> Dict[str, Any]:
+    """
+    Clean up orphaned data after transaction deletions.
+
+    Args:
+        db: Database session
+        delete_accounts: If True, delete Account records with no transactions
+        delete_securities: If True, delete Security records with no transactions
+
+    Returns:
+        Summary of cleanup operations
+    """
+    from app.models import Security, PricesEOD
+    from app.models.update_tracking import TickerProviderCoverage, DataUpdateState
+
+    logger.info("Starting orphaned data cleanup...")
+
+    results = {
+        'accounts_cleared': 0,
+        'accounts_deleted': 0,
+        'securities_deleted': 0,
+        'prices_deleted': 0,
+        'provider_coverage_deleted': 0,
+        'update_state_deleted': 0
+    }
+
+    # Get account IDs that have transactions
+    accounts_with_txns = set([
+        txn.account_id for txn in db.query(Transaction.account_id).distinct().all()
+    ])
+
+    # Get all account IDs
+    all_account_ids = [acc.id for acc in db.query(Account.id).all()]
+
+    # Find orphaned accounts
+    orphaned_account_ids = [acc_id for acc_id in all_account_ids if acc_id not in accounts_with_txns]
+
+    if orphaned_account_ids:
+        logger.info(f"Found {len(orphaned_account_ids)} orphaned accounts")
+
+        # Always clear analytics for orphaned accounts
+        clear_analytics_for_accounts_without_transactions(db)
+        results['accounts_cleared'] = len(orphaned_account_ids)
+
+        # Optionally delete account records
+        if delete_accounts:
+            deleted = db.query(Account).filter(
+                Account.id.in_(orphaned_account_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            results['accounts_deleted'] = deleted
+            logger.info(f"Deleted {deleted} orphaned account records")
+
+    # Get security IDs that have transactions
+    securities_with_txns = set([
+        txn.security_id for txn in db.query(Transaction.security_id).distinct().all()
+        if txn.security_id is not None
+    ])
+
+    # Get all security IDs (excluding ETFs used for benchmarks/factors)
+    benchmark_etf_symbols = ['SPY', 'QQQ', 'DIA', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM', 'USMV']
+    all_securities = db.query(Security.id, Security.symbol).all()
+
+    # Find orphaned securities (not used in transactions and not benchmark/factor ETFs)
+    orphaned_security_ids = [
+        sec.id for sec in all_securities
+        if sec.id not in securities_with_txns and sec.symbol not in benchmark_etf_symbols
+    ]
+
+    if orphaned_security_ids and delete_securities:
+        logger.info(f"Found {len(orphaned_security_ids)} orphaned securities")
+
+        # Delete prices for orphaned securities
+        prices_deleted = db.query(PricesEOD).filter(
+            PricesEOD.security_id.in_(orphaned_security_ids)
+        ).delete(synchronize_session=False)
+        results['prices_deleted'] = prices_deleted
+
+        # Delete provider coverage for orphaned securities
+        orphaned_symbols = [sec.symbol for sec in all_securities if sec.id in orphaned_security_ids]
+        if orphaned_symbols:
+            try:
+                coverage_deleted = db.query(TickerProviderCoverage).filter(
+                    TickerProviderCoverage.symbol.in_(orphaned_symbols)
+                ).delete(synchronize_session=False)
+                results['provider_coverage_deleted'] = coverage_deleted
+            except Exception:
+                pass
+
+            try:
+                state_deleted = db.query(DataUpdateState).filter(
+                    DataUpdateState.entity_id.in_(orphaned_symbols)
+                ).delete(synchronize_session=False)
+                results['update_state_deleted'] = state_deleted
+            except Exception:
+                pass
+
+        # Delete security records
+        securities_deleted = db.query(Security).filter(
+            Security.id.in_(orphaned_security_ids)
+        ).delete(synchronize_session=False)
+        results['securities_deleted'] = securities_deleted
+
+        db.commit()
+        logger.info(f"Deleted {securities_deleted} orphaned securities and {prices_deleted} price records")
+
+    logger.info(f"Orphaned data cleanup complete: {results}")
+    return results
 
 
 def clear_analytics_for_accounts_without_transactions(db: Session):
@@ -419,9 +530,13 @@ async def recompute_analytics_job(db: Session = None, use_batch_service: bool = 
         benchmark_results = benchmarks_engine.compute_all_benchmark_returns()
         logger.info(f"Benchmarks computed: {benchmark_results}")
 
-        # Compute benchmark metrics for all views
+        # Compute benchmark metrics for all views (only accounts with transactions)
         logger.info("Computing benchmark metrics...")
-        accounts = db.query(Account).all()
+        accounts_with_txns = db.query(Transaction.account_id).distinct().subquery()
+        accounts = db.query(Account).filter(
+            Account.id.in_(accounts_with_txns)
+        ).all()
+        logger.info(f"Computing benchmark metrics for {len(accounts)} accounts with transactions")
         for account in accounts:
             for benchmark_code in ['SPY', 'QQQ', 'INDU']:
                 try:
@@ -454,7 +569,7 @@ async def recompute_analytics_job(db: Session = None, use_batch_service: bool = 
         factor_returns_count = factors_engine.compute_factor_returns()
         logger.info(f"Factor returns computed: {factor_returns_count}")
 
-        # Compute factor regressions for all views
+        # Compute factor regressions for all views (accounts already filtered above)
         logger.info("Computing factor regressions...")
         for account in accounts:
             try:

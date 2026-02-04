@@ -115,7 +115,7 @@ class BatchAnalyticsService:
         Run full analytics computation with progress tracking.
 
         Args:
-            account_ids: Specific accounts to process (None = all)
+            account_ids: Specific accounts to process (None = all with transactions)
             start_date: Start date for computation
             end_date: End date (default: today)
             skip_positions: Skip position building
@@ -129,11 +129,15 @@ class BatchAnalyticsService:
         if not end_date:
             end_date = date.today()
 
-        # Get accounts
+        # Get accounts - only those with transactions (to skip orphaned accounts)
         if account_ids:
             accounts = self.db.query(Account).filter(Account.id.in_(account_ids)).all()
         else:
-            accounts = self.db.query(Account).all()
+            # Only get accounts that have at least one transaction
+            accounts_with_txns = self.db.query(Transaction.account_id).distinct().subquery()
+            accounts = self.db.query(Account).filter(
+                Account.id.in_(accounts_with_txns)
+            ).all()
 
         if not accounts:
             return {"status": "no_accounts", "accounts_processed": 0}
