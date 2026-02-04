@@ -633,7 +633,7 @@ async def get_account_transaction_counts(
     account_txn_counts = db.query(
         Account.id,
         Account.account_number,
-        Account.account_name,
+        Account.display_name,
         func.count(Transaction.id).label('transaction_count')
     ).outerjoin(
         Transaction, Account.id == Transaction.account_id
@@ -651,7 +651,7 @@ async def get_account_transaction_counts(
             {
                 "id": a.id,
                 "account_number": a.account_number,
-                "account_name": a.account_name
+                "display_name": a.display_name
             }
             for a in orphaned
         ],
@@ -659,7 +659,7 @@ async def get_account_transaction_counts(
             {
                 "id": a.id,
                 "account_number": a.account_number,
-                "account_name": a.account_name,
+                "display_name": a.display_name,
                 "transaction_count": a.transaction_count
             }
             for a in with_txns[:20]  # Show first 20
@@ -698,7 +698,7 @@ async def force_delete_account(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    account_name = account.account_name
+    display_name = account.display_name
     account_number = account.account_number
 
     # Delete all related data
@@ -750,7 +750,7 @@ async def force_delete_account(
 
     return {
         "status": "success",
-        "message": f"Deleted account '{account_name}' ({account_number})",
+        "message": f"Deleted account '{display_name}' ({account_number})",
         "account_id": account_id,
         "deleted_counts": deleted_counts
     }
