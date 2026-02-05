@@ -788,6 +788,47 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Tax Lot Import (separate from transaction imports)
+  async importTaxLots(file: File, mode: 'preview' | 'commit') {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/tax-lots/import?mode=${mode}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getTaxLotImports(limit: number = 50) {
+    const response = await this.client.get('/tax-lots/imports', {
+      params: { limit },
+    });
+    return response.data;
+  }
+
+  async deleteTaxLotImport(importId: number) {
+    const response = await this.client.delete(`/tax-lots/imports/${importId}`);
+    return response.data;
+  }
+
+  async getTaxLotsFromImport(params?: { account_id?: number; symbol?: string; include_closed?: boolean; limit?: number; offset?: number }) {
+    const response = await this.client.get('/tax-lots/', { params });
+    return response.data;
+  }
+
+  async getTaxLotSummary(accountId?: number) {
+    const response = await this.client.get('/tax-lots/summary', {
+      params: accountId ? { account_id: accountId } : {},
+    });
+    return response.data;
+  }
+
+  async deleteAllTaxLots(confirm: boolean = false) {
+    const response = await this.client.delete('/tax-lots/all', {
+      params: { confirm },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

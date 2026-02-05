@@ -92,7 +92,43 @@ interface Account {
   lot_count: number;
 }
 
-type TabType = 'summary' | 'lots' | 'harvest' | 'realized' | 'simulator';
+type TabType = 'summary' | 'lots' | 'harvest' | 'realized' | 'simulator' | 'import';
+
+interface TaxLotImport {
+  id: number;
+  file_name: string;
+  status: string;
+  rows_processed: number;
+  rows_imported: number;
+  rows_skipped: number;
+  rows_error: number;
+  created_at: string;
+}
+
+interface ImportPreview {
+  status: string;
+  file_name: string;
+  total_rows: number;
+  valid_rows: number;
+  error_rows: number;
+  errors: Array<{ row: number; error: string }>;
+  warnings: Array<{ row: number; warning: string }>;
+  preview_data: Array<{
+    row_num: number;
+    account_number: string;
+    account_name: string;
+    symbol: string;
+    asset_name: string;
+    open_date: string;
+    unit_cost: number;
+    units: number;
+    cost_basis: number;
+    market_value: number | null;
+    short_term_gain_loss: number | null;
+    long_term_gain_loss: number | null;
+    total_gain_loss: number | null;
+  }>;
+}
 
 export default function TaxPage() {
   const router = useRouter();
@@ -120,6 +156,13 @@ export default function TaxPage() {
   // Build lots
   const [building, setBuilding] = useState(false);
 
+  // Import state
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importHistory, setImportHistory] = useState<TaxLotImport[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login');
@@ -141,6 +184,8 @@ export default function TaxPage() {
       loadHarvestCandidates();
     } else if (user && activeTab === 'realized') {
       loadRealizedGains();
+    } else if (user && activeTab === 'import') {
+      loadImportHistory();
     }
   }, [activeTab, selectedAccount, taxYear]);
 
@@ -234,6 +279,79 @@ export default function TaxPage() {
       setError(err.response?.data?.detail || 'Failed to simulate trade');
     } finally {
       setSimulating(false);
+    }
+  };
+
+  const loadImportHistory = async () => {
+    try {
+      const data = await api.getTaxLotImports(50);
+      setImportHistory(data);
+    } catch (err: any) {
+      console.error('Failed to load import history:', err);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setImportFile(file);
+      setImportPreview(null);
+      setError(null);
+    }
+  };
+
+  const handlePreviewImport = async () => {
+    if (!importFile) {
+      setError('Please select a file first');
+      return;
+    }
+
+    try {
+      setPreviewLoading(true);
+      setError(null);
+      const data = await api.importTaxLots(importFile, 'preview');
+      setImportPreview(data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to preview file');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleCommitImport = async () => {
+    if (!importFile) {
+      setError('Please select a file first');
+      return;
+    }
+
+    try {
+      setImporting(true);
+      setError(null);
+      const result = await api.importTaxLots(importFile, 'commit');
+      alert(`Successfully imported ${result.imported} tax lots`);
+      setImportFile(null);
+      setImportPreview(null);
+      await loadImportHistory();
+      // Clear file input
+      const fileInput = document.getElementById('tax-lot-file-input') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to import file');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleDeleteImport = async (importId: number, fileName: string) => {
+    if (!confirm(`Delete import "${fileName}" and all associated tax lots?`)) {
+      return;
+    }
+
+    try {
+      await api.deleteTaxLotImport(importId);
+      await loadImportHistory();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to delete import');
     }
   };
 
@@ -333,6 +451,7 @@ export default function TaxPage() {
               { id: 'harvest', label: 'Loss Harvesting' },
               { id: 'realized', label: 'Realized Gains' },
               { id: 'simulator', label: 'Trade Simulator' },
+              { id: 'import', label: 'Import Tax Lots' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -723,6 +842,184 @@ export default function TaxPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'import' && (
+          <div className="space-y-6">
+            {/* Upload Section */}
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold mb-4">Import Tax Lots from CSV</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Upload a CSV file with tax lot data. Required columns: Account Number, Symbol, Open Date, Units, Unit Cost.
+                Optional columns: Account Display Name, Class, Asset Name, Cost Basis, Market Value, Short-Term Gain/Loss, Long-Term Gain/Loss, Total Gain Loss.
+              </p>
+
+              <div className="flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Select CSV File</label>
+                  <input
+                    id="tax-lot-file-input"
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileSelect}
+                    className="block w-full text-sm text-gray-500
+                      file:mr-4 file:py-2 file:px-4
+                      file:rounded file:border-0
+                      file:text-sm file:font-semibold
+                      file:bg-blue-50 file:text-blue-700
+                      hover:file:bg-blue-100"
+                  />
+                </div>
+                <button
+                  onClick={handlePreviewImport}
+                  disabled={!importFile || previewLoading}
+                  className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
+                >
+                  {previewLoading ? 'Previewing...' : 'Preview'}
+                </button>
+                <button
+                  onClick={handleCommitImport}
+                  disabled={!importPreview || importPreview.valid_rows === 0 || importing}
+                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                >
+                  {importing ? 'Importing...' : 'Import'}
+                </button>
+              </div>
+            </div>
+
+            {/* Preview Section */}
+            {importPreview && (
+              <div className="card p-6">
+                <h3 className="text-lg font-semibold mb-4">
+                  Preview: {importPreview.file_name}
+                </h3>
+
+                <div className="grid grid-cols-4 gap-4 mb-6">
+                  <div className="text-center p-3 bg-gray-50 rounded">
+                    <div className="text-2xl font-bold text-gray-800">{importPreview.total_rows}</div>
+                    <div className="text-sm text-gray-500">Total Rows</div>
+                  </div>
+                  <div className="text-center p-3 bg-green-50 rounded">
+                    <div className="text-2xl font-bold text-green-600">{importPreview.valid_rows}</div>
+                    <div className="text-sm text-gray-500">Valid Rows</div>
+                  </div>
+                  <div className="text-center p-3 bg-red-50 rounded">
+                    <div className="text-2xl font-bold text-red-600">{importPreview.error_rows}</div>
+                    <div className="text-sm text-gray-500">Errors</div>
+                  </div>
+                  <div className="text-center p-3 bg-yellow-50 rounded">
+                    <div className="text-2xl font-bold text-yellow-600">{importPreview.warnings?.length || 0}</div>
+                    <div className="text-sm text-gray-500">Warnings</div>
+                  </div>
+                </div>
+
+                {importPreview.errors && importPreview.errors.length > 0 && (
+                  <div className="mb-4">
+                    <h4 className="font-medium text-red-700 mb-2">Errors</h4>
+                    <div className="bg-red-50 rounded p-3 max-h-40 overflow-y-auto">
+                      {importPreview.errors.map((e, i) => (
+                        <div key={i} className="text-sm text-red-600">
+                          Row {e.row}: {e.error}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {importPreview.preview_data && importPreview.preview_data.length > 0 && (
+                  <div>
+                    <h4 className="font-medium text-gray-700 mb-2">Preview Data (first {importPreview.preview_data.length} rows)</h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Account</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Symbol</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Open Date</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Units</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Unit Cost</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Cost Basis</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Market Value</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Gain/Loss</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {importPreview.preview_data.map((row) => (
+                            <tr key={row.row_num} className="hover:bg-gray-50">
+                              <td className="px-3 py-2">{row.account_number}</td>
+                              <td className="px-3 py-2 font-medium">{row.symbol}</td>
+                              <td className="px-3 py-2">{row.open_date}</td>
+                              <td className="px-3 py-2 text-right">{row.units?.toFixed(2)}</td>
+                              <td className="px-3 py-2 text-right">{formatCurrency(row.unit_cost)}</td>
+                              <td className="px-3 py-2 text-right">{formatCurrency(row.cost_basis)}</td>
+                              <td className="px-3 py-2 text-right">{row.market_value ? formatCurrency(row.market_value) : '-'}</td>
+                              <td className={`px-3 py-2 text-right ${(row.total_gain_loss || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {row.total_gain_loss ? formatCurrency(row.total_gain_loss) : '-'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Import History */}
+            <div className="card p-6">
+              <h3 className="text-lg font-semibold mb-4">Import History</h3>
+              {importHistory.length === 0 ? (
+                <p className="text-gray-500 text-center py-4">No imports yet</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">File Name</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Processed</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Imported</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Skipped</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Errors</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                        <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {importHistory.map((imp) => (
+                        <tr key={imp.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium">{imp.file_name}</td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-1 rounded text-xs ${
+                              imp.status === 'completed' ? 'bg-green-100 text-green-800' :
+                              imp.status === 'completed_with_errors' ? 'bg-yellow-100 text-yellow-800' :
+                              'bg-gray-100 text-gray-800'
+                            }`}>
+                              {imp.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">{imp.rows_processed}</td>
+                          <td className="px-4 py-3 text-right text-green-600">{imp.rows_imported}</td>
+                          <td className="px-4 py-3 text-right text-yellow-600">{imp.rows_skipped}</td>
+                          <td className="px-4 py-3 text-right text-red-600">{imp.rows_error}</td>
+                          <td className="px-4 py-3">{formatDate(imp.created_at)}</td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => handleDeleteImport(imp.id, imp.file_name)}
+                              className="text-red-600 hover:text-red-800"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
