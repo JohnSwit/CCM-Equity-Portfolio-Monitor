@@ -160,6 +160,19 @@ export default function TaxPage() {
   const [importing, setImporting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // Tax Lots filters
+  const [lotsFilterSymbol, setLotsFilterSymbol] = useState<string>('');
+  const [lotsFilterAccount, setLotsFilterAccount] = useState<number | null>(null);
+  const [lotsFilterGainLoss, setLotsFilterGainLoss] = useState<'all' | 'gains' | 'losses'>('all');
+
+  // Harvest filters
+  const [harvestFilterSymbol, setHarvestFilterSymbol] = useState<string>('');
+  const [harvestFilterType, setHarvestFilterType] = useState<'all' | 'short_term' | 'long_term'>('all');
+  const [harvestMinLoss, setHarvestMinLoss] = useState<number>(100);
+
+  // Simulator symbols for selected account
+  const [simAccountSymbols, setSimAccountSymbols] = useState<string[]>([]);
+
   useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login');
@@ -185,6 +198,29 @@ export default function TaxPage() {
       loadImportHistory();
     }
   }, [activeTab, selectedAccount, taxYear]);
+
+  // Load symbols when simulator account changes
+  useEffect(() => {
+    if (simAccountId && lots.length > 0) {
+      const accountSymbols = [...new Set(
+        lots
+          .filter(lot => lot.account_id === simAccountId)
+          .map(lot => lot.symbol)
+      )].sort();
+      setSimAccountSymbols(accountSymbols);
+      // Reset symbol if it's not in the new account's symbols
+      if (simSymbol && !accountSymbols.includes(simSymbol)) {
+        setSimSymbol('');
+      }
+    } else if (simAccountId && activeTab === 'simulator') {
+      // Load lots if not already loaded
+      loadLots().then(() => {
+        // Symbols will be set by the next effect trigger
+      });
+    } else {
+      setSimAccountSymbols([]);
+    }
+  }, [simAccountId, lots]);
 
   const loadInitialData = async () => {
     try {
@@ -356,6 +392,31 @@ export default function TaxPage() {
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString();
   };
+
+  // Get unique symbols from lots for filter dropdown
+  const uniqueSymbols = [...new Set(lots.map(lot => lot.symbol))].sort();
+  const uniqueAccountsInLots = [...new Set(lots.map(lot => lot.account_id))];
+
+  // Filtered lots based on filters
+  const filteredLots = lots.filter(lot => {
+    if (lotsFilterSymbol && lot.symbol !== lotsFilterSymbol) return false;
+    if (lotsFilterAccount && lot.account_id !== lotsFilterAccount) return false;
+    if (lotsFilterGainLoss === 'gains' && (lot.unrealized_gain_loss || 0) < 0) return false;
+    if (lotsFilterGainLoss === 'losses' && (lot.unrealized_gain_loss || 0) >= 0) return false;
+    return true;
+  });
+
+  // Get unique symbols from harvest candidates
+  const harvestUniqueSymbols = [...new Set(harvestCandidates.map(c => c.symbol))].sort();
+
+  // Filtered harvest candidates
+  const filteredHarvestCandidates = harvestCandidates.filter(c => {
+    if (harvestFilterSymbol && c.symbol !== harvestFilterSymbol) return false;
+    if (harvestFilterType === 'short_term' && c.short_term_loss >= 0) return false;
+    if (harvestFilterType === 'long_term' && c.long_term_loss >= 0) return false;
+    if (Math.abs(c.unrealized_loss) < harvestMinLoss) return false;
+    return true;
+  });
 
   if (authLoading || loading) {
     return (
@@ -546,51 +607,100 @@ export default function TaxPage() {
         )}
 
         {activeTab === 'lots' && (
-          <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Account</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Purchase Date</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Shares</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cost Basis</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current Value</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Gain/Loss</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Term</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Days Held</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {lots.map((lot) => (
-                    <tr key={lot.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium">{lot.symbol}</td>
-                      <td className="px-4 py-3 text-gray-600">{lot.account_number || '-'}</td>
-                      <td className="px-4 py-3">{formatDate(lot.purchase_date)}</td>
-                      <td className="px-4 py-3 text-right">{lot.remaining_shares.toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(lot.remaining_cost_basis)}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(lot.current_value)}</td>
-                      <td className={`px-4 py-3 text-right ${(lot.unrealized_gain_loss || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(lot.unrealized_gain_loss)} ({formatPercent(lot.unrealized_gain_loss_pct)})
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-1 rounded text-xs ${lot.is_short_term ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
-                          {lot.is_short_term ? 'Short' : 'Long'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">{lot.holding_period_days}</td>
-                    </tr>
-                  ))}
-                  {lots.length === 0 && (
+          <div className="space-y-4">
+            {/* Filters */}
+            <div className="card p-4">
+              <div className="flex flex-wrap gap-4 items-end">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+                  <select
+                    value={lotsFilterSymbol}
+                    onChange={(e) => setLotsFilterSymbol(e.target.value)}
+                    className="px-3 py-2 border rounded min-w-[120px]"
+                  >
+                    <option value="">All Symbols</option>
+                    {uniqueSymbols.map(symbol => (
+                      <option key={symbol} value={symbol}>{symbol}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Account</label>
+                  <select
+                    value={lotsFilterAccount || ''}
+                    onChange={(e) => setLotsFilterAccount(e.target.value ? Number(e.target.value) : null)}
+                    className="px-3 py-2 border rounded min-w-[150px]"
+                  >
+                    <option value="">All Accounts</option>
+                    {accounts.filter(a => uniqueAccountsInLots.includes(a.id)).map(a => (
+                      <option key={a.id} value={a.id}>{a.account_number}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Gain/Loss</label>
+                  <select
+                    value={lotsFilterGainLoss}
+                    onChange={(e) => setLotsFilterGainLoss(e.target.value as 'all' | 'gains' | 'losses')}
+                    className="px-3 py-2 border rounded min-w-[120px]"
+                  >
+                    <option value="all">All</option>
+                    <option value="gains">Gains Only</option>
+                    <option value="losses">Losses Only</option>
+                  </select>
+                </div>
+                <div className="text-sm text-gray-500">
+                  Showing {filteredLots.length} of {lots.length} lots
+                </div>
+              </div>
+            </div>
+
+            <div className="card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
                     <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
-                        No tax lots found. Click "Rebuild Tax Lots" to generate from transactions.
-                      </td>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Account</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Purchase Date</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Shares</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cost Basis</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current Value</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Gain/Loss</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Term</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Days Held</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {filteredLots.map((lot) => (
+                      <tr key={lot.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-medium">{lot.symbol}</td>
+                        <td className="px-4 py-3 text-gray-600">{lot.account_number || '-'}</td>
+                        <td className="px-4 py-3">{formatDate(lot.purchase_date)}</td>
+                        <td className="px-4 py-3 text-right">{lot.remaining_shares.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right">{formatCurrency(lot.remaining_cost_basis)}</td>
+                        <td className="px-4 py-3 text-right">{formatCurrency(lot.current_value)}</td>
+                        <td className={`px-4 py-3 text-right ${(lot.unrealized_gain_loss || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {formatCurrency(lot.unrealized_gain_loss)} ({formatPercent(lot.unrealized_gain_loss_pct)})
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2 py-1 rounded text-xs ${lot.is_short_term ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                            {lot.is_short_term ? 'Short' : 'Long'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right">{lot.holding_period_days}</td>
+                      </tr>
+                    ))}
+                    {filteredLots.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
+                          {lots.length === 0 ? 'No tax lots found. Import tax lots from the Import tab.' : 'No lots match the current filters.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -603,6 +713,51 @@ export default function TaxPage() {
                 Positions below have unrealized losses that could be harvested to offset gains.
                 Watch for wash sale restrictions (30-day window).
               </p>
+            </div>
+
+            {/* Filters */}
+            <div className="card p-4">
+              <div className="flex flex-wrap gap-4 items-end">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+                  <select
+                    value={harvestFilterSymbol}
+                    onChange={(e) => setHarvestFilterSymbol(e.target.value)}
+                    className="px-3 py-2 border rounded min-w-[120px]"
+                  >
+                    <option value="">All Symbols</option>
+                    {harvestUniqueSymbols.map(symbol => (
+                      <option key={symbol} value={symbol}>{symbol}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Loss Type</label>
+                  <select
+                    value={harvestFilterType}
+                    onChange={(e) => setHarvestFilterType(e.target.value as 'all' | 'short_term' | 'long_term')}
+                    className="px-3 py-2 border rounded min-w-[150px]"
+                  >
+                    <option value="all">All Losses</option>
+                    <option value="short_term">Short-Term Losses</option>
+                    <option value="long_term">Long-Term Losses</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Min Loss Amount</label>
+                  <input
+                    type="number"
+                    value={harvestMinLoss}
+                    onChange={(e) => setHarvestMinLoss(Number(e.target.value))}
+                    className="px-3 py-2 border rounded w-[120px]"
+                    min={0}
+                    step={100}
+                  />
+                </div>
+                <div className="text-sm text-gray-500">
+                  Showing {filteredHarvestCandidates.length} of {harvestCandidates.length} candidates
+                </div>
+              </div>
             </div>
 
             <div className="card overflow-hidden">
@@ -621,7 +776,7 @@ export default function TaxPage() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {harvestCandidates.map((c) => (
+                    {filteredHarvestCandidates.map((c) => (
                       <tr key={c.security_id} className="hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium">{c.symbol}</td>
                         <td className="px-4 py-3 text-right">{c.total_shares.toFixed(2)}</td>
@@ -643,10 +798,10 @@ export default function TaxPage() {
                         </td>
                       </tr>
                     ))}
-                    {harvestCandidates.length === 0 && (
+                    {filteredHarvestCandidates.length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                          No tax-loss harvesting opportunities found.
+                          {harvestCandidates.length === 0 ? 'No tax-loss harvesting opportunities found.' : 'No candidates match the current filters.'}
                         </td>
                       </tr>
                     )}
@@ -725,7 +880,11 @@ export default function TaxPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Account</label>
                   <select
                     value={simAccountId || ''}
-                    onChange={(e) => setSimAccountId(e.target.value ? Number(e.target.value) : null)}
+                    onChange={(e) => {
+                      setSimAccountId(e.target.value ? Number(e.target.value) : null);
+                      setSimSymbol(''); // Reset symbol when account changes
+                      setTradeImpact(null); // Clear previous results
+                    }}
                     className="w-full px-3 py-2 border rounded"
                   >
                     <option value="">Select Account</option>
@@ -736,13 +895,20 @@ export default function TaxPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Symbol</label>
-                  <input
-                    type="text"
+                  <select
                     value={simSymbol}
-                    onChange={(e) => setSimSymbol(e.target.value.toUpperCase())}
-                    placeholder="AAPL"
+                    onChange={(e) => setSimSymbol(e.target.value)}
                     className="w-full px-3 py-2 border rounded"
-                  />
+                    disabled={!simAccountId}
+                  >
+                    <option value="">{simAccountId ? 'Select Symbol' : 'Select account first'}</option>
+                    {simAccountSymbols.map((symbol) => (
+                      <option key={symbol} value={symbol}>{symbol}</option>
+                    ))}
+                  </select>
+                  {simAccountId && simAccountSymbols.length === 0 && (
+                    <p className="text-xs text-gray-500 mt-1">No holdings found for this account</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Shares to Sell</label>
