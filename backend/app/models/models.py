@@ -371,6 +371,22 @@ class ImportLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class TaxLotImportLog(Base):
+    """Track tax lot CSV imports separately from transaction imports"""
+    __tablename__ = "tax_lot_import_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_name = Column(String)
+    file_hash = Column(String, index=True)
+    status = Column(String)  # pending, completed, completed_with_errors, failed
+    rows_processed = Column(Integer, default=0)
+    rows_imported = Column(Integer, default=0)
+    rows_skipped = Column(Integer, default=0)
+    rows_error = Column(Integer, default=0)
+    errors = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class ManualPrice(Base):
     __tablename__ = "manual_prices"
 
@@ -678,6 +694,7 @@ class TaxLot(Base):
     security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
     purchase_date = Column(Date, nullable=False, index=True)
     purchase_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    import_log_id = Column(Integer, ForeignKey("tax_lot_import_logs.id"), nullable=True, index=True)
 
     # Original lot info
     original_shares = Column(Float, nullable=False)
@@ -687,6 +704,12 @@ class TaxLot(Base):
     # Current state (after partial sales)
     remaining_shares = Column(Float, nullable=False)
     remaining_cost_basis = Column(Float, nullable=False)
+
+    # Market value snapshot (from import)
+    market_value = Column(Float, nullable=True)
+    short_term_gain_loss = Column(Float, nullable=True)
+    long_term_gain_loss = Column(Float, nullable=True)
+    total_gain_loss = Column(Float, nullable=True)
 
     # Status
     is_closed = Column(Boolean, default=False, index=True)
@@ -702,6 +725,7 @@ class TaxLot(Base):
     account = relationship("Account")
     security = relationship("Security")
     purchase_transaction = relationship("Transaction")
+    import_log = relationship("TaxLotImportLog")
 
 
 class RealizedGain(Base):
