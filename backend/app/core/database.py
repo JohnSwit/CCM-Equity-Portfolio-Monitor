@@ -72,10 +72,89 @@ def update_enum_values():
                 logger.debug(f"Could not update enum {enum_type}: {e}")
 
 
+def run_migrations():
+    """Run database migrations for adding new columns to existing tables."""
+    migrations = [
+        # Active Coverage new columns
+        ("active_coverage", "model_updated", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS model_updated BOOLEAN DEFAULT false"),
+        ("active_coverage", "thesis", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS thesis TEXT"),
+        ("active_coverage", "bull_case", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS bull_case TEXT"),
+        ("active_coverage", "bear_case", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS bear_case TEXT"),
+        ("active_coverage", "alert", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS alert TEXT"),
+    ]
+
+    # New tables to create
+    new_tables = [
+        """
+        CREATE TABLE IF NOT EXISTS coverage_documents (
+            id SERIAL PRIMARY KEY,
+            coverage_id INTEGER NOT NULL REFERENCES active_coverage(id) ON DELETE CASCADE,
+            file_name VARCHAR NOT NULL,
+            file_path VARCHAR NOT NULL,
+            file_type VARCHAR,
+            file_size INTEGER,
+            description TEXT,
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS coverage_model_snapshots (
+            id SERIAL PRIMARY KEY,
+            coverage_id INTEGER NOT NULL REFERENCES active_coverage(id) ON DELETE CASCADE,
+            snapshot_name VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ccm_fair_value FLOAT,
+            street_price_target FLOAT,
+            irr_3yr FLOAT,
+            revenue_ccm_1yr FLOAT,
+            revenue_ccm_2yr FLOAT,
+            revenue_ccm_3yr FLOAT,
+            ebitda_ccm_1yr FLOAT,
+            ebitda_ccm_2yr FLOAT,
+            ebitda_ccm_3yr FLOAT,
+            fcf_ccm_1yr FLOAT,
+            fcf_ccm_2yr FLOAT,
+            fcf_ccm_3yr FLOAT,
+            eps_ccm_1yr FLOAT,
+            eps_ccm_2yr FLOAT,
+            eps_ccm_3yr FLOAT
+        )
+        """,
+        # Create indexes for the new tables
+        "CREATE INDEX IF NOT EXISTS idx_coverage_documents_coverage_id ON coverage_documents(coverage_id)",
+        "CREATE INDEX IF NOT EXISTS idx_coverage_model_snapshots_coverage_id ON coverage_model_snapshots(coverage_id)",
+    ]
+
+    with engine.connect() as conn:
+        # Run column migrations
+        for table, column, sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                logger.info(f"Migration: Added column {column} to {table}")
+            except Exception as e:
+                logger.debug(f"Migration skipped for {table}.{column}: {e}")
+
+        # Create new tables
+        for sql in new_tables:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                logger.info(f"Migration: Executed table creation/index")
+            except Exception as e:
+                logger.debug(f"Migration skipped: {e}")
+
+
 def init_db():
     """Initialize database - create all tables and update enums"""
     # First create all tables
     Base.metadata.create_all(bind=engine)
+
+    # Run migrations for adding new columns to existing tables
+    try:
+        run_migrations()
+    except Exception as e:
+        logger.warning(f"Could not run migrations: {e}")
 
     # Then update any enum types with new values
     try:
