@@ -164,11 +164,13 @@ export default function TaxPage() {
   const [lotsFilterSymbol, setLotsFilterSymbol] = useState<string>('');
   const [lotsFilterAccount, setLotsFilterAccount] = useState<number | null>(null);
   const [lotsFilterGainLoss, setLotsFilterGainLoss] = useState<'all' | 'gains' | 'losses'>('all');
+  const [lotsSortBy, setLotsSortBy] = useState<'none' | 'gain_high' | 'gain_low' | 'loss_high' | 'loss_low'>('none');
 
   // Harvest filters
   const [harvestFilterSymbol, setHarvestFilterSymbol] = useState<string>('');
   const [harvestFilterType, setHarvestFilterType] = useState<'all' | 'short_term' | 'long_term'>('all');
   const [harvestMinLoss, setHarvestMinLoss] = useState<number>(100);
+  const [harvestSortBy, setHarvestSortBy] = useState<'none' | 'loss_high' | 'loss_low' | 'st_high' | 'lt_high'>('loss_high');
 
   // Simulator symbols for selected account
   const [simAccountSymbols, setSimAccountSymbols] = useState<string[]>([]);
@@ -397,26 +399,48 @@ export default function TaxPage() {
   const uniqueSymbols = [...new Set(lots.map(lot => lot.symbol))].sort();
   const uniqueAccountsInLots = [...new Set(lots.map(lot => lot.account_id))];
 
-  // Filtered lots based on filters
-  const filteredLots = lots.filter(lot => {
-    if (lotsFilterSymbol && lot.symbol !== lotsFilterSymbol) return false;
-    if (lotsFilterAccount && lot.account_id !== lotsFilterAccount) return false;
-    if (lotsFilterGainLoss === 'gains' && (lot.unrealized_gain_loss || 0) < 0) return false;
-    if (lotsFilterGainLoss === 'losses' && (lot.unrealized_gain_loss || 0) >= 0) return false;
-    return true;
-  });
+  // Filtered and sorted lots
+  const filteredLots = lots
+    .filter(lot => {
+      if (lotsFilterSymbol && lot.symbol !== lotsFilterSymbol) return false;
+      if (lotsFilterAccount && lot.account_id !== lotsFilterAccount) return false;
+      if (lotsFilterGainLoss === 'gains' && (lot.unrealized_gain_loss || 0) < 0) return false;
+      if (lotsFilterGainLoss === 'losses' && (lot.unrealized_gain_loss || 0) >= 0) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const aVal = a.unrealized_gain_loss || 0;
+      const bVal = b.unrealized_gain_loss || 0;
+      switch (lotsSortBy) {
+        case 'gain_high': return bVal - aVal; // Highest gains first
+        case 'gain_low': return aVal - bVal; // Lowest gains (biggest losses) first
+        case 'loss_high': return aVal - bVal; // Biggest losses first (most negative)
+        case 'loss_low': return bVal - aVal; // Smallest losses first
+        default: return 0;
+      }
+    });
 
   // Get unique symbols from harvest candidates
   const harvestUniqueSymbols = [...new Set(harvestCandidates.map(c => c.symbol))].sort();
 
-  // Filtered harvest candidates
-  const filteredHarvestCandidates = harvestCandidates.filter(c => {
-    if (harvestFilterSymbol && c.symbol !== harvestFilterSymbol) return false;
-    if (harvestFilterType === 'short_term' && c.short_term_loss >= 0) return false;
-    if (harvestFilterType === 'long_term' && c.long_term_loss >= 0) return false;
-    if (Math.abs(c.unrealized_loss) < harvestMinLoss) return false;
-    return true;
-  });
+  // Filtered and sorted harvest candidates
+  const filteredHarvestCandidates = harvestCandidates
+    .filter(c => {
+      if (harvestFilterSymbol && c.symbol !== harvestFilterSymbol) return false;
+      if (harvestFilterType === 'short_term' && c.short_term_loss >= 0) return false;
+      if (harvestFilterType === 'long_term' && c.long_term_loss >= 0) return false;
+      if (Math.abs(c.unrealized_loss) < harvestMinLoss) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      switch (harvestSortBy) {
+        case 'loss_high': return a.unrealized_loss - b.unrealized_loss; // Most negative first
+        case 'loss_low': return b.unrealized_loss - a.unrealized_loss; // Least negative first
+        case 'st_high': return a.short_term_loss - b.short_term_loss; // Biggest ST losses first
+        case 'lt_high': return a.long_term_loss - b.long_term_loss; // Biggest LT losses first
+        default: return 0;
+      }
+    });
 
   if (authLoading || loading) {
     return (
@@ -649,6 +673,20 @@ export default function TaxPage() {
                     <option value="losses">Losses Only</option>
                   </select>
                 </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Sort By</label>
+                  <select
+                    value={lotsSortBy}
+                    onChange={(e) => setLotsSortBy(e.target.value as 'none' | 'gain_high' | 'gain_low' | 'loss_high' | 'loss_low')}
+                    className="px-3 py-2 border rounded min-w-[180px]"
+                  >
+                    <option value="none">Default</option>
+                    <option value="gain_high">Gains: High to Low</option>
+                    <option value="gain_low">Gains: Low to High</option>
+                    <option value="loss_high">Losses: High to Low</option>
+                    <option value="loss_low">Losses: Low to High</option>
+                  </select>
+                </div>
                 <div className="text-sm text-gray-500">
                   Showing {filteredLots.length} of {lots.length} lots
                 </div>
@@ -753,6 +791,20 @@ export default function TaxPage() {
                     min={0}
                     step={100}
                   />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Sort By</label>
+                  <select
+                    value={harvestSortBy}
+                    onChange={(e) => setHarvestSortBy(e.target.value as 'none' | 'loss_high' | 'loss_low' | 'st_high' | 'lt_high')}
+                    className="px-3 py-2 border rounded min-w-[180px]"
+                  >
+                    <option value="loss_high">Total Loss: High to Low</option>
+                    <option value="loss_low">Total Loss: Low to High</option>
+                    <option value="st_high">Short-Term Loss: High to Low</option>
+                    <option value="lt_high">Long-Term Loss: High to Low</option>
+                    <option value="none">Default</option>
+                  </select>
                 </div>
                 <div className="text-sm text-gray-500">
                   Showing {filteredHarvestCandidates.length} of {harvestCandidates.length} candidates
