@@ -108,6 +108,51 @@ def ensure_transaction_type_enum():
         logger.warning(f"Could not update transactiontype enum: {e}")
 
 
+def ensure_tax_lot_columns():
+    """Add new columns to tax_lots table if they don't exist."""
+    try:
+        with engine.connect() as conn:
+            # Check if import_log_id column exists
+            result = conn.execute(text("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'tax_lots' AND column_name = 'import_log_id'
+            """))
+            if not result.fetchone():
+                logger.info("Adding new columns to tax_lots table...")
+
+                # First ensure the tax_lot_import_logs table exists
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS tax_lot_import_logs (
+                        id SERIAL PRIMARY KEY,
+                        file_name VARCHAR,
+                        file_hash VARCHAR,
+                        status VARCHAR,
+                        rows_processed INTEGER DEFAULT 0,
+                        rows_imported INTEGER DEFAULT 0,
+                        rows_skipped INTEGER DEFAULT 0,
+                        rows_error INTEGER DEFAULT 0,
+                        errors JSON,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tax_lot_import_logs_file_hash ON tax_lot_import_logs (file_hash)"))
+
+                # Add new columns to tax_lots
+                conn.execute(text("ALTER TABLE tax_lots ADD COLUMN IF NOT EXISTS import_log_id INTEGER REFERENCES tax_lot_import_logs(id)"))
+                conn.execute(text("ALTER TABLE tax_lots ADD COLUMN IF NOT EXISTS market_value FLOAT"))
+                conn.execute(text("ALTER TABLE tax_lots ADD COLUMN IF NOT EXISTS short_term_gain_loss FLOAT"))
+                conn.execute(text("ALTER TABLE tax_lots ADD COLUMN IF NOT EXISTS long_term_gain_loss FLOAT"))
+                conn.execute(text("ALTER TABLE tax_lots ADD COLUMN IF NOT EXISTS total_gain_loss FLOAT"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tax_lots_import_log_id ON tax_lots (import_log_id)"))
+
+                conn.commit()
+                logger.info("Successfully added new columns to tax_lots table")
+            else:
+                logger.info("tax_lots table already has new columns")
+    except Exception as e:
+        logger.warning(f"Could not update tax_lots table: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and create default admin user"""
@@ -121,6 +166,9 @@ async def startup_event():
     # Ensure enum values exist (explicit call with logging)
     ensure_tiingo_enum()
     ensure_transaction_type_enum()
+
+    # Ensure tax_lots table has new columns
+    ensure_tax_lot_columns()
 
     # Create default admin user if not exists
     db = next(get_db())
