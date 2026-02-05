@@ -248,6 +248,11 @@ class ActiveCoverageCreate(BaseModel):
     model_path: Optional[str] = None
     model_share_link: Optional[str] = None
     notes: Optional[str] = None
+    model_updated: Optional[bool] = False
+    thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    alert: Optional[str] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -259,6 +264,11 @@ class ActiveCoverageUpdate(BaseModel):
     model_share_link: Optional[str] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
+    model_updated: Optional[bool] = None
+    thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    alert: Optional[str] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -319,6 +329,52 @@ class CoverageModelDataResponse(BaseModel):
     last_refreshed: Optional[datetime] = None
 
 
+class CoverageDocumentResponse(BaseModel):
+    id: int
+    coverage_id: int
+    file_name: str
+    file_path: str
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    description: Optional[str] = None
+    uploaded_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CoverageModelSnapshotResponse(BaseModel):
+    id: int
+    coverage_id: int
+    snapshot_name: Optional[str] = None
+    created_at: datetime
+    ccm_fair_value: Optional[float] = None
+    street_price_target: Optional[float] = None
+    irr_3yr: Optional[float] = None
+    revenue_ccm_1yr: Optional[float] = None
+    revenue_ccm_2yr: Optional[float] = None
+    revenue_ccm_3yr: Optional[float] = None
+    ebitda_ccm_1yr: Optional[float] = None
+    ebitda_ccm_2yr: Optional[float] = None
+    ebitda_ccm_3yr: Optional[float] = None
+    fcf_ccm_1yr: Optional[float] = None
+    fcf_ccm_2yr: Optional[float] = None
+    fcf_ccm_3yr: Optional[float] = None
+    eps_ccm_1yr: Optional[float] = None
+    eps_ccm_2yr: Optional[float] = None
+    eps_ccm_3yr: Optional[float] = None
+
+    model_config = {"from_attributes": True}
+
+
+class CoverageModelSnapshotDiff(BaseModel):
+    """Diff between two snapshots"""
+    field: str
+    old_value: Optional[float] = None
+    new_value: Optional[float] = None
+    change: Optional[float] = None
+    change_pct: Optional[float] = None
+
+
 class ActiveCoverageResponse(BaseModel):
     id: int
     ticker: str
@@ -328,12 +384,22 @@ class ActiveCoverageResponse(BaseModel):
     model_share_link: Optional[str] = None
     notes: Optional[str] = None
     is_active: bool
+    # New fields
+    model_updated: bool = False
+    thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    alert: Optional[str] = None
+    has_alert: bool = False  # Computed from alert field
     # Portfolio data
     market_value: Optional[float] = None
     weight_pct: Optional[float] = None
     current_price: Optional[float] = None
     # Model data
     model_data: Optional[CoverageModelDataResponse] = None
+    # Documents and snapshots
+    documents: List[CoverageDocumentResponse] = []
+    snapshots: List[CoverageModelSnapshotResponse] = []
     created_at: datetime
     updated_at: datetime
 

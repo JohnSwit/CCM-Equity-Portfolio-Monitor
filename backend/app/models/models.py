@@ -503,11 +503,25 @@ class ActiveCoverage(Base):
     model_share_link = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
+
+    # Model status toggle
+    model_updated = Column(Boolean, default=False)
+
+    # Research content
+    thesis = Column(Text, nullable=True)
+    bull_case = Column(Text, nullable=True)
+    bear_case = Column(Text, nullable=True)
+
+    # Alert/action item - triggers UI icon when populated
+    alert = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     primary_analyst = relationship("Analyst", foreign_keys=[primary_analyst_id])
     secondary_analyst = relationship("Analyst", foreign_keys=[secondary_analyst_id])
+    documents = relationship("CoverageDocument", back_populates="coverage", cascade="all, delete-orphan")
+    snapshots = relationship("CoverageModelSnapshot", back_populates="coverage", cascade="all, delete-orphan")
 
 
 class CoverageModelData(Base):
@@ -569,6 +583,61 @@ class CoverageModelData(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     coverage = relationship("ActiveCoverage")
+
+
+class CoverageDocument(Base):
+    """Documents associated with coverage items"""
+    __tablename__ = "coverage_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_id = Column(Integer, ForeignKey("active_coverage.id"), nullable=False, index=True)
+    file_name = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_type = Column(String, nullable=True)
+    file_size = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+    coverage = relationship("ActiveCoverage", back_populates="documents")
+
+
+class CoverageModelSnapshot(Base):
+    """Snapshots of model data for version tracking and diff comparison"""
+    __tablename__ = "coverage_model_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_id = Column(Integer, ForeignKey("active_coverage.id"), nullable=False, index=True)
+
+    # Snapshot metadata
+    snapshot_name = Column(String, nullable=True)  # Optional name for the snapshot
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Key metrics to track changes
+    ccm_fair_value = Column(Float, nullable=True)
+    street_price_target = Column(Float, nullable=True)
+    irr_3yr = Column(Float, nullable=True)
+
+    # Revenue forecasts
+    revenue_ccm_1yr = Column(Float, nullable=True)
+    revenue_ccm_2yr = Column(Float, nullable=True)
+    revenue_ccm_3yr = Column(Float, nullable=True)
+
+    # EBITDA forecasts
+    ebitda_ccm_1yr = Column(Float, nullable=True)
+    ebitda_ccm_2yr = Column(Float, nullable=True)
+    ebitda_ccm_3yr = Column(Float, nullable=True)
+
+    # FCF forecasts
+    fcf_ccm_1yr = Column(Float, nullable=True)
+    fcf_ccm_2yr = Column(Float, nullable=True)
+    fcf_ccm_3yr = Column(Float, nullable=True)
+
+    # EPS forecasts
+    eps_ccm_1yr = Column(Float, nullable=True)
+    eps_ccm_2yr = Column(Float, nullable=True)
+    eps_ccm_3yr = Column(Float, nullable=True)
+
+    coverage = relationship("ActiveCoverage", back_populates="snapshots")
 
 
 class IdeaPipeline(Base):

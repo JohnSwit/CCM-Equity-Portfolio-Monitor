@@ -59,6 +59,28 @@ interface ModelData {
   last_refreshed: string | null;
 }
 
+interface CoverageDocument {
+  id: number;
+  coverage_id: number;
+  file_name: string;
+  file_path: string;
+  file_type: string | null;
+  file_size: number | null;
+  description: string | null;
+  uploaded_at: string;
+}
+
+interface CoverageSnapshot {
+  id: number;
+  coverage_id: number;
+  snapshot_name: string | null;
+  created_at: string;
+  ccm_fair_value: number | null;
+  irr_3yr: number | null;
+  revenue_ccm_1yr: number | null;
+  ebitda_ccm_1yr: number | null;
+}
+
 interface Coverage {
   id: number;
   ticker: string;
@@ -68,10 +90,18 @@ interface Coverage {
   model_share_link: string | null;
   notes: string | null;
   is_active: boolean;
+  model_updated: boolean;
+  thesis: string | null;
+  bull_case: string | null;
+  bear_case: string | null;
+  alert: string | null;
+  has_alert: boolean;
   market_value: number | null;
   weight_pct: number | null;
   current_price: number | null;
   model_data: ModelData | null;
+  documents: CoverageDocument[];
+  snapshots: CoverageSnapshot[];
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +129,20 @@ export default function CoveragePage() {
   const [editSecondaryAnalyst, setEditSecondaryAnalyst] = useState<number | null>(null);
   const [editModelPath, setEditModelPath] = useState('');
   const [editModelShareLink, setEditModelShareLink] = useState('');
+  const [editThesis, setEditThesis] = useState('');
+  const [editBullCase, setEditBullCase] = useState('');
+  const [editBearCase, setEditBearCase] = useState('');
+  const [editAlert, setEditAlert] = useState('');
+
+  // Document modal
+  const [addingDocument, setAddingDocument] = useState<number | null>(null);
+  const [newDocFileName, setNewDocFileName] = useState('');
+  const [newDocFilePath, setNewDocFilePath] = useState('');
+  const [newDocDescription, setNewDocDescription] = useState('');
+
+  // Snapshot diff view
+  const [viewingSnapshotDiff, setViewingSnapshotDiff] = useState<{ coverageId: number; snapshotId: number } | null>(null);
+  const [snapshotDiff, setSnapshotDiff] = useState<any>(null);
 
   // Expanded detail view
   const [expandedTicker, setExpandedTicker] = useState<number | null>(null);
@@ -180,6 +224,10 @@ export default function CoveragePage() {
         secondary_analyst_id: editSecondaryAnalyst || undefined,
         model_path: editModelPath || undefined,
         model_share_link: editModelShareLink || undefined,
+        thesis: editThesis || undefined,
+        bull_case: editBullCase || undefined,
+        bear_case: editBearCase || undefined,
+        alert: editAlert || undefined,
       });
 
       setEditingCoverage(null);
@@ -233,6 +281,70 @@ export default function CoveragePage() {
     setEditSecondaryAnalyst(coverage.secondary_analyst?.id || null);
     setEditModelPath(coverage.model_path || '');
     setEditModelShareLink(coverage.model_share_link || '');
+    setEditThesis(coverage.thesis || '');
+    setEditBullCase(coverage.bull_case || '');
+    setEditBearCase(coverage.bear_case || '');
+    setEditAlert(coverage.alert || '');
+  };
+
+  const handleToggleModelUpdated = async (coverageId: number, currentValue: boolean) => {
+    try {
+      await api.updateCoverage(coverageId, { model_updated: !currentValue });
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to update model status');
+    }
+  };
+
+  const handleAddDocument = async (coverageId: number) => {
+    if (!newDocFileName.trim() || !newDocFilePath.trim()) {
+      setError('File name and path are required');
+      return;
+    }
+    try {
+      await api.addCoverageDocument(coverageId, {
+        file_name: newDocFileName,
+        file_path: newDocFilePath,
+        description: newDocDescription || undefined,
+      });
+      setAddingDocument(null);
+      setNewDocFileName('');
+      setNewDocFilePath('');
+      setNewDocDescription('');
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to add document');
+    }
+  };
+
+  const handleDeleteDocument = async (coverageId: number, documentId: number) => {
+    if (!confirm('Delete this document?')) return;
+    try {
+      await api.deleteCoverageDocument(coverageId, documentId);
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to delete document');
+    }
+  };
+
+  const handleViewSnapshotDiff = async (coverageId: number, snapshotId: number) => {
+    try {
+      const diff = await api.getSnapshotDiff(coverageId, snapshotId);
+      setSnapshotDiff(diff);
+      setViewingSnapshotDiff({ coverageId, snapshotId });
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to load snapshot diff');
+    }
+  };
+
+  const handleDeleteSnapshot = async (coverageId: number, snapshotId: number) => {
+    if (!confirm('Delete this snapshot?')) return;
+    try {
+      await api.deleteCoverageSnapshot(coverageId, snapshotId);
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to delete snapshot');
+    }
   };
 
   const formatCurrency = (value: number | null | undefined) => {
@@ -370,6 +482,7 @@ export default function CoveragePage() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ticker</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Updated</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Primary</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Secondary</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
@@ -389,7 +502,28 @@ export default function CoveragePage() {
                       className={`hover:bg-gray-50 cursor-pointer ${expandedTicker === coverage.id ? 'bg-blue-50' : ''}`}
                       onClick={() => setExpandedTicker(expandedTicker === coverage.id ? null : coverage.id)}
                     >
-                      <td className="px-4 py-3 font-medium text-gray-900">{coverage.ticker}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        <div className="flex items-center gap-2">
+                          {coverage.has_alert && (
+                            <span className="text-orange-500" title={coverage.alert || 'Action required'}>
+                              ⚠️
+                            </span>
+                          )}
+                          {coverage.ticker}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleToggleModelUpdated(coverage.id, coverage.model_updated); }}
+                          className={`px-2 py-1 rounded text-xs font-medium ${
+                            coverage.model_updated
+                              ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                              : 'bg-red-100 text-red-800 hover:bg-red-200'
+                          }`}
+                        >
+                          {coverage.model_updated ? 'Updated' : 'Not Updated'}
+                        </button>
+                      </td>
                       <td className="px-4 py-3 text-gray-600">{coverage.primary_analyst?.name || '-'}</td>
                       <td className="px-4 py-3 text-gray-600">{coverage.secondary_analyst?.name || '-'}</td>
                       <td className="px-4 py-3 text-right text-gray-900">
@@ -452,9 +586,9 @@ export default function CoveragePage() {
                       </td>
                     </tr>
                     {/* Expanded Detail Row */}
-                    {expandedTicker === coverage.id && coverage.model_data && (
+                    {expandedTicker === coverage.id && (
                       <tr>
-                        <td colSpan={11} className="px-4 py-4 bg-gray-50">
+                        <td colSpan={12} className="px-4 py-4 bg-gray-50">
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             {/* Valuation Summary */}
                             <div className="bg-white p-4 rounded border">
@@ -571,6 +705,108 @@ export default function CoveragePage() {
                                 </div>
                               );
                             })}
+
+                            {/* Alert Section */}
+                            {coverage.alert && (
+                              <div className="bg-orange-50 p-4 rounded border border-orange-200 lg:col-span-2">
+                                <h3 className="font-semibold text-orange-900 mb-2 flex items-center gap-2">
+                                  <span>⚠️</span> Action Required
+                                </h3>
+                                <p className="text-orange-800 whitespace-pre-wrap">{coverage.alert}</p>
+                              </div>
+                            )}
+
+                            {/* Thesis Section */}
+                            {coverage.thesis && (
+                              <div className="bg-white p-4 rounded border lg:col-span-2">
+                                <h3 className="font-semibold text-gray-900 mb-2">Investment Thesis</h3>
+                                <p className="text-gray-700 whitespace-pre-wrap">{coverage.thesis}</p>
+                              </div>
+                            )}
+
+                            {/* Bull/Bear Case */}
+                            {(coverage.bull_case || coverage.bear_case) && (
+                              <div className="bg-white p-4 rounded border">
+                                <h3 className="font-semibold text-green-700 mb-2">Bull Case</h3>
+                                <p className="text-gray-700 whitespace-pre-wrap">{coverage.bull_case || 'Not specified'}</p>
+                              </div>
+                            )}
+                            {(coverage.bull_case || coverage.bear_case) && (
+                              <div className="bg-white p-4 rounded border">
+                                <h3 className="font-semibold text-red-700 mb-2">Bear Case</h3>
+                                <p className="text-gray-700 whitespace-pre-wrap">{coverage.bear_case || 'Not specified'}</p>
+                              </div>
+                            )}
+
+                            {/* Documents Section */}
+                            <div className="bg-white p-4 rounded border">
+                              <div className="flex justify-between items-center mb-3">
+                                <h3 className="font-semibold text-gray-900">Documents</h3>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setAddingDocument(coverage.id); }}
+                                  className="text-blue-600 hover:text-blue-800 text-sm"
+                                >
+                                  + Add Document
+                                </button>
+                              </div>
+                              {coverage.documents && coverage.documents.length > 0 ? (
+                                <ul className="space-y-2">
+                                  {coverage.documents.map((doc) => (
+                                    <li key={doc.id} className="flex justify-between items-center text-sm">
+                                      <div>
+                                        <span className="font-medium">{doc.file_name}</span>
+                                        {doc.description && <span className="text-gray-500 ml-2">- {doc.description}</span>}
+                                      </div>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteDocument(coverage.id, doc.id); }}
+                                        className="text-red-500 hover:text-red-700"
+                                      >
+                                        Delete
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-gray-500 text-sm">No documents uploaded</p>
+                              )}
+                            </div>
+
+                            {/* Snapshots/Version History Section */}
+                            <div className="bg-white p-4 rounded border">
+                              <h3 className="font-semibold text-gray-900 mb-3">Model Version History</h3>
+                              {coverage.snapshots && coverage.snapshots.length > 0 ? (
+                                <ul className="space-y-2">
+                                  {coverage.snapshots.slice(0, 5).map((snapshot) => (
+                                    <li key={snapshot.id} className="flex justify-between items-center text-sm border-b pb-2">
+                                      <div>
+                                        <span className="text-gray-600">
+                                          {new Date(snapshot.created_at).toLocaleDateString()} {new Date(snapshot.created_at).toLocaleTimeString()}
+                                        </span>
+                                        {snapshot.ccm_fair_value && (
+                                          <span className="text-gray-500 ml-2">FV: ${snapshot.ccm_fair_value.toFixed(2)}</span>
+                                        )}
+                                      </div>
+                                      <div className="space-x-2">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleViewSnapshotDiff(coverage.id, snapshot.id); }}
+                                          className="text-blue-600 hover:text-blue-800"
+                                        >
+                                          View Diff
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleDeleteSnapshot(coverage.id, snapshot.id); }}
+                                          className="text-red-500 hover:text-red-700"
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-gray-500 text-sm">No snapshots yet. Refresh model to create a snapshot.</p>
+                              )}
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -579,7 +815,7 @@ export default function CoveragePage() {
                 ))}
                 {coverages.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan={12} className="px-4 py-8 text-center text-gray-500">
                       No tickers in coverage. Add a ticker above to get started.
                     </td>
                   </tr>
@@ -600,7 +836,7 @@ export default function CoveragePage() {
         {/* Edit Modal */}
         {editingCoverage && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-full max-w-lg">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <h2 className="text-xl font-bold mb-4">Edit {editingCoverage.ticker}</h2>
               <div className="space-y-4">
                 <div>
@@ -655,6 +891,48 @@ export default function CoveragePage() {
                     OneDrive share link for opening the model in browser
                   </p>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Investment Thesis</label>
+                  <textarea
+                    value={editThesis}
+                    onChange={(e) => setEditThesis(e.target.value)}
+                    rows={3}
+                    placeholder="Investment thesis..."
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-green-700 mb-1">Bull Case</label>
+                    <textarea
+                      value={editBullCase}
+                      onChange={(e) => setEditBullCase(e.target.value)}
+                      rows={3}
+                      placeholder="Key bull arguments..."
+                      className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-red-700 mb-1">Bear Case</label>
+                    <textarea
+                      value={editBearCase}
+                      onChange={(e) => setEditBearCase(e.target.value)}
+                      rows={3}
+                      placeholder="Key bear arguments..."
+                      className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-red-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-orange-700 mb-1">Alert / Action Item</label>
+                  <textarea
+                    value={editAlert}
+                    onChange={(e) => setEditAlert(e.target.value)}
+                    rows={2}
+                    placeholder="Action items or alerts (will show warning icon if populated)..."
+                    className="w-full px-3 py-2 border border-orange-200 rounded focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
               </div>
               <div className="flex justify-end gap-3 mt-6">
                 <button
@@ -668,6 +946,104 @@ export default function CoveragePage() {
                   className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
                 >
                   Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add Document Modal */}
+        {addingDocument && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+              <h2 className="text-xl font-bold mb-4">Add Document</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">File Name</label>
+                  <input
+                    type="text"
+                    value={newDocFileName}
+                    onChange={(e) => setNewDocFileName(e.target.value)}
+                    placeholder="Earnings Report Q1 2024.pdf"
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">File Path / URL</label>
+                  <input
+                    type="text"
+                    value={newDocFilePath}
+                    onChange={(e) => setNewDocFilePath(e.target.value)}
+                    placeholder="/documents/AAPL/report.pdf or https://..."
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Description (Optional)</label>
+                  <input
+                    type="text"
+                    value={newDocDescription}
+                    onChange={(e) => setNewDocDescription(e.target.value)}
+                    placeholder="Brief description..."
+                    className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => { setAddingDocument(null); setNewDocFileName(''); setNewDocFilePath(''); setNewDocDescription(''); }}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleAddDocument(addingDocument)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  Add Document
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Snapshot Diff Modal */}
+        {viewingSnapshotDiff && snapshotDiff && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+              <h2 className="text-xl font-bold mb-4">Model Changes Since {new Date(snapshotDiff.snapshot_date).toLocaleDateString()}</h2>
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Metric</th>
+                    <th className="px-4 py-2 text-right">Previous</th>
+                    <th className="px-4 py-2 text-right">Current</th>
+                    <th className="px-4 py-2 text-right">Change</th>
+                    <th className="px-4 py-2 text-right">% Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshotDiff.diffs.map((diff: any, index: number) => (
+                    <tr key={index} className={diff.change ? (diff.change > 0 ? 'bg-green-50' : 'bg-red-50') : ''}>
+                      <td className="px-4 py-2 font-medium">{diff.field}</td>
+                      <td className="px-4 py-2 text-right">{diff.old_value?.toFixed(2) ?? '-'}</td>
+                      <td className="px-4 py-2 text-right">{diff.new_value?.toFixed(2) ?? '-'}</td>
+                      <td className={`px-4 py-2 text-right ${diff.change > 0 ? 'text-green-600' : diff.change < 0 ? 'text-red-600' : ''}`}>
+                        {diff.change != null ? (diff.change > 0 ? '+' : '') + diff.change.toFixed(2) : '-'}
+                      </td>
+                      <td className={`px-4 py-2 text-right ${diff.change_pct > 0 ? 'text-green-600' : diff.change_pct < 0 ? 'text-red-600' : ''}`}>
+                        {diff.change_pct != null ? (diff.change_pct > 0 ? '+' : '') + diff.change_pct.toFixed(1) + '%' : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="flex justify-end mt-6">
+                <button
+                  onClick={() => { setViewingSnapshotDiff(null); setSnapshotDiff(null); }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                >
+                  Close
                 </button>
               </div>
             </div>

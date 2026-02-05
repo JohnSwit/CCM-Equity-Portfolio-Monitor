@@ -10,13 +10,14 @@ from datetime import date
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.models import (
-    User, Analyst, ActiveCoverage, CoverageModelData,
+    User, Analyst, ActiveCoverage, CoverageModelData, CoverageDocument, CoverageModelSnapshot,
     Security, PositionsEOD, PricesEOD, Group, GroupMember, ViewType
 )
 from app.models.schemas import (
     AnalystResponse, AnalystCreate,
     ActiveCoverageCreate, ActiveCoverageUpdate, ActiveCoverageResponse,
-    ActiveCoverageListResponse, CoverageModelDataResponse, MetricEstimates, MarginEstimates
+    ActiveCoverageListResponse, CoverageModelDataResponse, MetricEstimates, MarginEstimates,
+    CoverageDocumentResponse, CoverageModelSnapshotResponse, CoverageModelSnapshotDiff
 )
 
 router = APIRouter(prefix="/coverage", tags=["coverage"])
@@ -198,6 +199,16 @@ def _build_coverage_response(
         if cached_data:
             model_data = _build_model_data_response(cached_data, current_price)
 
+    # Get documents
+    documents = db.query(CoverageDocument).filter(
+        CoverageDocument.coverage_id == coverage.id
+    ).order_by(CoverageDocument.uploaded_at.desc()).all()
+
+    # Get snapshots
+    snapshots = db.query(CoverageModelSnapshot).filter(
+        CoverageModelSnapshot.coverage_id == coverage.id
+    ).order_by(CoverageModelSnapshot.created_at.desc()).all()
+
     return {
         "id": coverage.id,
         "ticker": coverage.ticker,
@@ -207,10 +218,18 @@ def _build_coverage_response(
         "model_share_link": coverage.model_share_link,
         "notes": coverage.notes,
         "is_active": coverage.is_active,
+        "model_updated": coverage.model_updated or False,
+        "thesis": coverage.thesis,
+        "bull_case": coverage.bull_case,
+        "bear_case": coverage.bear_case,
+        "alert": coverage.alert,
+        "has_alert": bool(coverage.alert and coverage.alert.strip()),
         "market_value": market_value,
         "weight_pct": weight_pct,
         "current_price": current_price,
         "model_data": model_data,
+        "documents": documents,
+        "snapshots": snapshots,
         "created_at": coverage.created_at,
         "updated_at": coverage.updated_at
     }
@@ -448,6 +467,16 @@ def update_coverage(
         coverage.notes = data.notes
     if data.is_active is not None:
         coverage.is_active = data.is_active
+    if data.model_updated is not None:
+        coverage.model_updated = data.model_updated
+    if data.thesis is not None:
+        coverage.thesis = data.thesis
+    if data.bull_case is not None:
+        coverage.bull_case = data.bull_case
+    if data.bear_case is not None:
+        coverage.bear_case = data.bear_case
+    if data.alert is not None:
+        coverage.alert = data.alert
 
     db.commit()
     db.refresh(coverage)
@@ -477,12 +506,14 @@ def delete_coverage(
 @router.post("/{coverage_id}/refresh-model-data")
 def refresh_model_data(
     coverage_id: int,
+    create_snapshot: bool = True,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Refresh model data from the linked Excel file.
     This endpoint triggers a read of the Excel model's API tab.
+    Creates a snapshot of the previous data for diff comparison.
     """
     coverage = db.query(ActiveCoverage).filter(ActiveCoverage.id == coverage_id).first()
     if not coverage:
@@ -493,15 +524,39 @@ def refresh_model_data(
 
     # Import the Excel parsing service
     from app.services.excel_model_parser import parse_excel_model
+    from datetime import datetime
 
     try:
-        model_data = parse_excel_model(coverage.model_path)
-
-        # Update or create cached data
+        # Get existing data for snapshot
         cached = db.query(CoverageModelData).filter(
             CoverageModelData.coverage_id == coverage_id
         ).first()
 
+        # Create snapshot of existing data before updating
+        if create_snapshot and cached:
+            snapshot = CoverageModelSnapshot(
+                coverage_id=coverage_id,
+                ccm_fair_value=cached.ccm_fair_value,
+                street_price_target=cached.street_price_target,
+                irr_3yr=cached.irr_3yr,
+                revenue_ccm_1yr=cached.revenue_ccm_1yr,
+                revenue_ccm_2yr=cached.revenue_ccm_2yr,
+                revenue_ccm_3yr=cached.revenue_ccm_3yr,
+                ebitda_ccm_1yr=cached.ebitda_ccm_1yr,
+                ebitda_ccm_2yr=cached.ebitda_ccm_2yr,
+                ebitda_ccm_3yr=cached.ebitda_ccm_3yr,
+                fcf_ccm_1yr=cached.fcf_ccm_1yr,
+                fcf_ccm_2yr=cached.fcf_ccm_2yr,
+                fcf_ccm_3yr=cached.fcf_ccm_3yr,
+                eps_ccm_1yr=cached.eps_ccm_1yr,
+                eps_ccm_2yr=cached.eps_ccm_2yr,
+                eps_ccm_3yr=cached.eps_ccm_3yr,
+            )
+            db.add(snapshot)
+
+        model_data = parse_excel_model(coverage.model_path)
+
+        # Update or create cached data
         if not cached:
             cached = CoverageModelData(coverage_id=coverage_id)
             db.add(cached)
@@ -511,13 +566,12 @@ def refresh_model_data(
             if hasattr(cached, key):
                 setattr(cached, key, value)
 
-        from datetime import datetime
         cached.last_refreshed = datetime.utcnow()
 
         db.commit()
         db.refresh(cached)
 
-        return {"status": "success", "message": "Model data refreshed"}
+        return {"status": "success", "message": "Model data refreshed", "snapshot_created": create_snapshot and cached is not None}
 
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Excel model file not found")
@@ -588,3 +642,180 @@ def init_analysts(
 
     db.commit()
     return {"status": "success", "created": created}
+
+
+# ============== Document Endpoints ==============
+
+@router.get("/{coverage_id}/documents", response_model=List[CoverageDocumentResponse])
+def list_documents(
+    coverage_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """List all documents for a coverage item"""
+    coverage = db.query(ActiveCoverage).filter(ActiveCoverage.id == coverage_id).first()
+    if not coverage:
+        raise HTTPException(status_code=404, detail="Coverage not found")
+
+    documents = db.query(CoverageDocument).filter(
+        CoverageDocument.coverage_id == coverage_id
+    ).order_by(CoverageDocument.uploaded_at.desc()).all()
+
+    return documents
+
+
+@router.post("/{coverage_id}/documents", response_model=CoverageDocumentResponse)
+def add_document(
+    coverage_id: int,
+    file_name: str,
+    file_path: str,
+    file_type: Optional[str] = None,
+    file_size: Optional[int] = None,
+    description: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Add a document reference to a coverage item"""
+    coverage = db.query(ActiveCoverage).filter(ActiveCoverage.id == coverage_id).first()
+    if not coverage:
+        raise HTTPException(status_code=404, detail="Coverage not found")
+
+    document = CoverageDocument(
+        coverage_id=coverage_id,
+        file_name=file_name,
+        file_path=file_path,
+        file_type=file_type,
+        file_size=file_size,
+        description=description
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+
+    return document
+
+
+@router.delete("/{coverage_id}/documents/{document_id}")
+def delete_document(
+    coverage_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a document reference"""
+    document = db.query(CoverageDocument).filter(
+        CoverageDocument.id == document_id,
+        CoverageDocument.coverage_id == coverage_id
+    ).first()
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    db.delete(document)
+    db.commit()
+    return {"status": "success"}
+
+
+# ============== Snapshot Endpoints ==============
+
+@router.get("/{coverage_id}/snapshots", response_model=List[CoverageModelSnapshotResponse])
+def list_snapshots(
+    coverage_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """List all model snapshots for a coverage item"""
+    coverage = db.query(ActiveCoverage).filter(ActiveCoverage.id == coverage_id).first()
+    if not coverage:
+        raise HTTPException(status_code=404, detail="Coverage not found")
+
+    snapshots = db.query(CoverageModelSnapshot).filter(
+        CoverageModelSnapshot.coverage_id == coverage_id
+    ).order_by(CoverageModelSnapshot.created_at.desc()).all()
+
+    return snapshots
+
+
+@router.get("/{coverage_id}/snapshots/{snapshot_id}/diff")
+def get_snapshot_diff(
+    coverage_id: int,
+    snapshot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get diff between a snapshot and current model data"""
+    snapshot = db.query(CoverageModelSnapshot).filter(
+        CoverageModelSnapshot.id == snapshot_id,
+        CoverageModelSnapshot.coverage_id == coverage_id
+    ).first()
+
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    current_data = db.query(CoverageModelData).filter(
+        CoverageModelData.coverage_id == coverage_id
+    ).first()
+
+    if not current_data:
+        raise HTTPException(status_code=404, detail="No current model data")
+
+    # Calculate diffs for key metrics
+    def calc_diff(field_name: str, old_val, new_val):
+        change = None
+        change_pct = None
+        if old_val is not None and new_val is not None:
+            change = new_val - old_val
+            if old_val != 0:
+                change_pct = (change / abs(old_val)) * 100
+        return {
+            "field": field_name,
+            "old_value": old_val,
+            "new_value": new_val,
+            "change": change,
+            "change_pct": change_pct
+        }
+
+    diffs = [
+        calc_diff("CCM Fair Value", snapshot.ccm_fair_value, current_data.ccm_fair_value),
+        calc_diff("Street Price Target", snapshot.street_price_target, current_data.street_price_target),
+        calc_diff("3Y IRR", snapshot.irr_3yr, current_data.irr_3yr),
+        calc_diff("Revenue 1Y", snapshot.revenue_ccm_1yr, current_data.revenue_ccm_1yr),
+        calc_diff("Revenue 2Y", snapshot.revenue_ccm_2yr, current_data.revenue_ccm_2yr),
+        calc_diff("Revenue 3Y", snapshot.revenue_ccm_3yr, current_data.revenue_ccm_3yr),
+        calc_diff("EBITDA 1Y", snapshot.ebitda_ccm_1yr, current_data.ebitda_ccm_1yr),
+        calc_diff("EBITDA 2Y", snapshot.ebitda_ccm_2yr, current_data.ebitda_ccm_2yr),
+        calc_diff("EBITDA 3Y", snapshot.ebitda_ccm_3yr, current_data.ebitda_ccm_3yr),
+        calc_diff("FCF 1Y", snapshot.fcf_ccm_1yr, current_data.fcf_ccm_1yr),
+        calc_diff("FCF 2Y", snapshot.fcf_ccm_2yr, current_data.fcf_ccm_2yr),
+        calc_diff("FCF 3Y", snapshot.fcf_ccm_3yr, current_data.fcf_ccm_3yr),
+        calc_diff("EPS 1Y", snapshot.eps_ccm_1yr, current_data.eps_ccm_1yr),
+        calc_diff("EPS 2Y", snapshot.eps_ccm_2yr, current_data.eps_ccm_2yr),
+        calc_diff("EPS 3Y", snapshot.eps_ccm_3yr, current_data.eps_ccm_3yr),
+    ]
+
+    return {
+        "snapshot_id": snapshot_id,
+        "snapshot_date": snapshot.created_at,
+        "diffs": diffs
+    }
+
+
+@router.delete("/{coverage_id}/snapshots/{snapshot_id}")
+def delete_snapshot(
+    coverage_id: int,
+    snapshot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a model snapshot"""
+    snapshot = db.query(CoverageModelSnapshot).filter(
+        CoverageModelSnapshot.id == snapshot_id,
+        CoverageModelSnapshot.coverage_id == coverage_id
+    ).first()
+
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    db.delete(snapshot)
+    db.commit()
+    return {"status": "success"}

@@ -7,7 +7,7 @@ from app.models.models import (
     ImportLog, ManualPrice, TaxLotImportLog,
     FactorProxySeries, FactorModelDefinition, FactorAttributionResult,
     TransactionType, AssetClass, ViewType, GroupType, FactorDataSource,
-    Analyst, ActiveCoverage, CoverageModelData,
+    Analyst, ActiveCoverage, CoverageModelData, CoverageDocument, CoverageModelSnapshot,
     IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument,
     TaxLot, RealizedGain, WashSaleViolation
 )
@@ -37,7 +37,7 @@ __all__ = [
     "TransactionType", "AssetClass", "ViewType", "GroupType", "FactorDataSource",
     "SectorClassification", "BenchmarkConstituent", "FactorReturns",
     # Active Coverage models
-    "Analyst", "ActiveCoverage", "CoverageModelData",
+    "Analyst", "ActiveCoverage", "CoverageModelData", "CoverageDocument", "CoverageModelSnapshot",
     # Idea Pipeline models
     "IdeaPipeline", "IdeaPipelineModelData", "IdeaPipelineDocument",
     # Tax Optimization models

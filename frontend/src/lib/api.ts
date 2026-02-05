@@ -567,6 +567,11 @@ class APIClient {
     model_share_link?: string;
     notes?: string;
     is_active?: boolean;
+    model_updated?: boolean;
+    thesis?: string;
+    bull_case?: string;
+    bear_case?: string;
+    alert?: string;
   }) {
     const response = await this.client.put(`/coverage/${coverageId}`, data);
     return response.data;
@@ -577,13 +582,55 @@ class APIClient {
     return response.data;
   }
 
-  async refreshModelData(coverageId: number) {
-    const response = await this.client.post(`/coverage/${coverageId}/refresh-model-data`);
+  async refreshModelData(coverageId: number, createSnapshot: boolean = true) {
+    const response = await this.client.post(`/coverage/${coverageId}/refresh-model-data`, null, {
+      params: { create_snapshot: createSnapshot },
+    });
     return response.data;
   }
 
   async refreshAllModels() {
     const response = await this.client.post('/coverage/refresh-all-models');
+    return response.data;
+  }
+
+  // Coverage Documents
+  async getCoverageDocuments(coverageId: number) {
+    const response = await this.client.get(`/coverage/${coverageId}/documents`);
+    return response.data;
+  }
+
+  async addCoverageDocument(coverageId: number, data: {
+    file_name: string;
+    file_path: string;
+    file_type?: string;
+    file_size?: number;
+    description?: string;
+  }) {
+    const response = await this.client.post(`/coverage/${coverageId}/documents`, null, {
+      params: data,
+    });
+    return response.data;
+  }
+
+  async deleteCoverageDocument(coverageId: number, documentId: number) {
+    const response = await this.client.delete(`/coverage/${coverageId}/documents/${documentId}`);
+    return response.data;
+  }
+
+  // Coverage Snapshots
+  async getCoverageSnapshots(coverageId: number) {
+    const response = await this.client.get(`/coverage/${coverageId}/snapshots`);
+    return response.data;
+  }
+
+  async getSnapshotDiff(coverageId: number, snapshotId: number) {
+    const response = await this.client.get(`/coverage/${coverageId}/snapshots/${snapshotId}/diff`);
+    return response.data;
+  }
+
+  async deleteCoverageSnapshot(coverageId: number, snapshotId: number) {
+    const response = await this.client.delete(`/coverage/${coverageId}/snapshots/${snapshotId}`);
     return response.data;
   }
 
