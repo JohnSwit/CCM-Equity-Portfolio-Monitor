@@ -280,7 +280,7 @@ def get_accounts_with_lots(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get accounts that have tax lot data."""
+    """Get accounts that have imported tax lot data (not transaction-built)."""
     from app.models.models import TaxLot
     from sqlalchemy import func
 
@@ -292,7 +292,8 @@ def get_accounts_with_lots(
         func.sum(TaxLot.remaining_shares).label("total_shares")
     ).outerjoin(TaxLot, and_(
         TaxLot.account_id == Account.id,
-        TaxLot.is_closed == False
+        TaxLot.is_closed == False,
+        TaxLot.import_log_id.isnot(None)  # Only imported lots
     )).group_by(Account.id).order_by(Account.account_number).all()
 
     return [

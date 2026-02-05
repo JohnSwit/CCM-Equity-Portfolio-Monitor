@@ -207,8 +207,11 @@ class TaxService:
         security_id: Optional[int] = None,
         include_closed: bool = False
     ) -> List[Dict]:
-        """Get tax lots with current values."""
+        """Get tax lots with current values. Only returns imported lots (not transaction-built)."""
         query = self.db.query(TaxLot).join(Security).join(Account)
+
+        # Only include imported tax lots (not transaction-built ones)
+        query = query.filter(TaxLot.import_log_id.isnot(None))
 
         if account_id:
             query = query.filter(TaxLot.account_id == account_id)
@@ -257,8 +260,12 @@ class TaxService:
         account_id: Optional[int] = None,
         tax_year: Optional[int] = None
     ) -> Tuple[List[Dict], Dict]:
-        """Get realized gains with summary."""
+        """Get realized gains with summary. Only returns gains from imported tax lots."""
         query = self.db.query(RealizedGain).join(Security).join(Account)
+
+        # Only include realized gains from imported tax lots
+        query = query.join(TaxLot, RealizedGain.tax_lot_id == TaxLot.id)
+        query = query.filter(TaxLot.import_log_id.isnot(None))
 
         if account_id:
             query = query.filter(RealizedGain.account_id == account_id)

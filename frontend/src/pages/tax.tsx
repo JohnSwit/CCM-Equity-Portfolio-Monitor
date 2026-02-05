@@ -153,9 +153,6 @@ export default function TaxPage() {
   const [tradeImpact, setTradeImpact] = useState<TradeImpact | null>(null);
   const [simulating, setSimulating] = useState(false);
 
-  // Build lots
-  const [building, setBuilding] = useState(false);
-
   // Import state
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -247,20 +244,6 @@ export default function TaxPage() {
       setRealizedGains(data.gains || []);
     } catch (err: any) {
       console.error('Failed to load realized gains:', err);
-    }
-  };
-
-  const handleBuildLots = async () => {
-    try {
-      setBuilding(true);
-      setError(null);
-      const result = await api.buildTaxLots(selectedAccount || undefined);
-      alert(`Built ${result.total_lots_created} tax lots across ${result.accounts_processed} accounts`);
-      await loadInitialData();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to build tax lots');
-    } finally {
-      setBuilding(false);
     }
   };
 
@@ -420,15 +403,6 @@ export default function TaxPage() {
                   <option key={a.id} value={a.id}>{a.account_number}</option>
                 ))}
               </select>
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={handleBuildLots}
-                disabled={building}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-              >
-                {building ? 'Building...' : 'Rebuild Tax Lots'}
-              </button>
             </div>
           </div>
         </div>
