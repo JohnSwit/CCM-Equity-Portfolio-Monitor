@@ -104,12 +104,12 @@ class InceptionParser:
 
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and normalize dataframe"""
-        # Trim whitespace
+        # Trim whitespace (handle NaN values safely)
         for col in df.columns:
             if df[col].dtype == 'object':
-                df[col] = df[col].str.strip()
+                df[col] = df[col].fillna('').astype(str).str.strip()
 
-        # Normalize Symbol to uppercase
+        # Normalize Symbol to uppercase (handle empty strings)
         df['Symbol'] = df['Symbol'].str.upper()
 
         # Parse inception date
@@ -144,9 +144,9 @@ class InceptionParser:
             # Validate required fields
             if pd.isna(row['Inception Date']):
                 row_errors.append('Invalid Inception Date')
-            if not row['Symbol']:
+            if not row['Symbol'] or str(row['Symbol']).strip() == '':
                 row_errors.append('Missing Symbol')
-            if not row['Account Number']:
+            if not row['Account Number'] or str(row['Account Number']).strip() == '':
                 row_errors.append('Missing Account Number')
             if row['Units'] <= 0:
                 row_errors.append('Units must be positive')
@@ -209,6 +209,13 @@ class InceptionParser:
         Creates accounts, securities, inception records, and initial positions.
         """
         try:
+            # Check for empty dataframe
+            if df is None or len(df) == 0:
+                return {
+                    'error': 'No valid positions found in CSV (all rows may have been filtered due to Units <= 0)',
+                    'has_errors': True
+                }
+
             # Create import log
             import_log = ImportLog(
                 file_name='inception_upload',
@@ -223,6 +230,8 @@ class InceptionParser:
 
             # Get unique inception date (should be single date)
             inception_dates = df['Inception Date'].dropna().unique()
+            if len(inception_dates) == 0:
+                raise ValueError("No valid inception dates found in CSV")
             if len(inception_dates) != 1:
                 raise ValueError("All rows must have the same inception date")
 
