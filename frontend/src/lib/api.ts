@@ -361,6 +361,96 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Factor Benchmarking + Attribution
+  async getFactorModels() {
+    const response = await this.client.get('/analytics/factor-models');
+    return response.data;
+  }
+
+  async getFactorBenchmarking(
+    viewType: string,
+    viewId: number,
+    modelCode: string = 'US_CORE',
+    period: string = '1Y',
+    useExcessReturns: boolean = false,
+    useRobust: boolean = false,
+    benchmarkCode?: string
+  ) {
+    const response = await this.client.get('/analytics/factor-benchmarking', {
+      params: {
+        view_type: viewType,
+        view_id: viewId,
+        model_code: modelCode,
+        period,
+        use_excess_returns: useExcessReturns,
+        use_robust: useRobust,
+        benchmark_code: benchmarkCode,
+      },
+    });
+    return response.data;
+  }
+
+  async getFactorRollingAnalysis(
+    viewType: string,
+    viewId: number,
+    modelCode: string = 'US_CORE',
+    period: string = '1Y',
+    windowDays: number = 63,
+    useExcessReturns: boolean = false
+  ) {
+    const response = await this.client.get('/analytics/factor-rolling-analysis', {
+      params: {
+        view_type: viewType,
+        view_id: viewId,
+        model_code: modelCode,
+        period,
+        window_days: windowDays,
+        use_excess_returns: useExcessReturns,
+      },
+    });
+    return response.data;
+  }
+
+  async getFactorContributionOverTime(
+    viewType: string,
+    viewId: number,
+    modelCode: string = 'US_CORE',
+    period: string = '1Y',
+    frequency: string = 'M',
+    useExcessReturns: boolean = false
+  ) {
+    const response = await this.client.get('/analytics/factor-contribution-over-time', {
+      params: {
+        view_type: viewType,
+        view_id: viewId,
+        model_code: modelCode,
+        period,
+        frequency,
+        use_excess_returns: useExcessReturns,
+      },
+    });
+    return response.data;
+  }
+
+  async getAvailableBenchmarks() {
+    const response = await this.client.get('/analytics/available-benchmarks');
+    return response.data;
+  }
+
+  async refreshFactorData(modelCode: string = 'US_CORE', startDate?: string, endDate?: string) {
+    const response = await this.client.post('/analytics/refresh-factor-data', null, {
+      params: { model_code: modelCode, start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  }
+
+  async getFactorDataStatus(modelCode: string = 'US_CORE', period: string = '1Y') {
+    const response = await this.client.get('/analytics/factor-data-status', {
+      params: { model_code: modelCode, period },
+    });
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

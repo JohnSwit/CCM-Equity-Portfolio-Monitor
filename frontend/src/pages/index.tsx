@@ -30,7 +30,6 @@ export default function Dashboard() {
   const [chartData, setChartData] = useState<any[]>([]);
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
-  const [factors, setFactors] = useState<any>(null);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
@@ -80,13 +79,12 @@ export default function Dashboard() {
 
     setLoading(true);
     try {
-      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, factorsData, unpricedData, sectorWeights] = await Promise.all([
+      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
         api.getSummary(selectedView.view_type, selectedView.view_id),
         api.getReturns(selectedView.view_type, selectedView.view_id),
         api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
         api.getHoldings(selectedView.view_type, selectedView.view_id),
         api.getRisk(selectedView.view_type, selectedView.view_id).catch(() => null),
-        api.getFactorExposures(selectedView.view_type, selectedView.view_id).catch(() => null),
         api.getUnpricedInstruments().catch(() => []),
         api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
       ]);
@@ -96,7 +94,6 @@ export default function Dashboard() {
       setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
-      setFactors(factorsData);
       setUnpriced(unpricedData);
       setSectorData(sectorWeights);
     } catch (error) {
@@ -151,7 +148,7 @@ export default function Dashboard() {
     // Find the first date where portfolio has data (minimum requirement)
     const firstPortfolioDate = merged.find((point: any) =>
       point.Portfolio !== undefined && point.Portfolio !== null
-    );
+    ) as { date: string; [key: string]: any } | undefined;
 
     if (!firstPortfolioDate) {
       setChartData([]);
@@ -166,7 +163,7 @@ export default function Dashboard() {
         point.date >= firstPortfolioDate.date &&
         point[s] !== undefined &&
         point[s] !== null
-      );
+      ) as { [key: string]: any } | undefined;
       baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
     });
 
@@ -252,6 +249,50 @@ export default function Dashboard() {
     // Convert index value to percentage return
     // e.g., 1.05 becomes +5.00%
     return ((value - 1) * 100).toFixed(2) + '%';
+  };
+
+  const formatCurrencyWithDecimals = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const formatGainPercent = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-';
+    const pct = (value * 100).toFixed(2);
+    return (value >= 0 ? '+' : '') + pct + '%';
+  };
+
+  const formatGainCurrency = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '-';
+    const formatted = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(Math.abs(value));
+    return (value >= 0 ? '+' : '-') + formatted;
+  };
+
+  const formatSharesDisplay = (value: number) => {
+    if (value >= 1000) {
+      return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(value);
+    }
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const getGainColorClass = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'text-gray-500';
+    return value >= 0 ? 'text-green-600' : 'text-red-600';
   };
 
   const viewOptions = views.map((v) => ({
@@ -644,34 +685,59 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
 
-            {/* Holdings */}
+            {/* Portfolio Overview */}
             {holdings && (
               <div className="card">
-                <h3 className="text-lg font-semibold mb-4">Top Holdings</h3>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th>Name</th>
-                      <th className="text-right">Shares</th>
-                      <th className="text-right">Price</th>
-                      <th className="text-right">Market Value</th>
-                      <th className="text-right">Weight</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holdings.holdings.slice(0, 10).map((h: any) => (
-                      <tr key={h.symbol}>
-                        <td className="font-semibold">{h.symbol}</td>
-                        <td>{h.asset_name}</td>
-                        <td className="text-right">{h.shares.toFixed(2)}</td>
-                        <td className="text-right">{formatCurrency(h.price)}</td>
-                        <td className="text-right">{formatCurrency(h.market_value)}</td>
-                        <td className="text-right">{formatPercent(h.weight)}</td>
+                <h3 className="text-lg font-semibold mb-4">Portfolio Overview</h3>
+                <div className="overflow-x-auto">
+                  <table className="table w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-2 px-3">Ticker</th>
+                        <th className="text-right py-2 px-3">Allocation</th>
+                        <th className="text-right py-2 px-3">Last</th>
+                        <th className="text-right py-2 px-3">Avg Cost</th>
+                        <th className="text-right py-2 px-3">1D Gain %</th>
+                        <th className="text-right py-2 px-3">Unr. Gain %</th>
+                        <th className="text-right py-2 px-3">1D Gain</th>
+                        <th className="text-right py-2 px-3">Unr. Gain</th>
+                        <th className="text-right py-2 px-3">Market Value</th>
+                        <th className="text-right py-2 px-3">Shares</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {holdings.holdings.map((h: any) => (
+                        <tr key={h.symbol} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-2 px-3">
+                            <div className="font-semibold">{h.symbol}</div>
+                            <div className="text-xs text-gray-500 truncate max-w-[150px]" title={h.asset_name}>
+                              {h.asset_name}
+                            </div>
+                          </td>
+                          <td className="text-right py-2 px-3">{formatPercent(h.weight)}</td>
+                          <td className="text-right py-2 px-3">{formatCurrencyWithDecimals(h.price)}</td>
+                          <td className="text-right py-2 px-3">
+                            {h.avg_cost != null ? formatCurrencyWithDecimals(h.avg_cost) : '-'}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.gain_1d_pct)}`}>
+                            {formatGainPercent(h.gain_1d_pct)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.unr_gain_pct)}`}>
+                            {formatGainPercent(h.unr_gain_pct)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.gain_1d)}`}>
+                            {formatGainCurrency(h.gain_1d)}
+                          </td>
+                          <td className={`text-right py-2 px-3 ${getGainColorClass(h.unr_gain)}`}>
+                            {formatGainCurrency(h.unr_gain)}
+                          </td>
+                          <td className="text-right py-2 px-3">{formatCurrency(h.market_value)}</td>
+                          <td className="text-right py-2 px-3">{formatSharesDisplay(h.shares)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -702,37 +768,6 @@ export default function Dashboard() {
                     <div className="text-sm text-gray-600">VaR 95% (1D)</div>
                     <div className="text-lg font-semibold">
                       {risk.var_95_1d_hist ? formatPercent(risk.var_95_1d_hist) : 'N/A'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Factor Exposures */}
-            {factors && (
-              <div className="card">
-                <h3 className="text-lg font-semibold mb-4">Factor Exposures (STYLE7)</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {factors.exposures.map((exp: any) => (
-                    <div key={exp.factor_name} className="border-l-4 border-indigo-500 pl-4">
-                      <div className="text-sm text-gray-600">{exp.factor_name}</div>
-                      <div className="text-lg font-semibold">{exp.beta.toFixed(3)}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 pt-4 border-t">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="text-sm text-gray-600">Alpha (Annualized)</div>
-                      <div className="text-lg font-semibold">
-                        {factors.alpha ? formatPercent(factors.alpha) : 'N/A'}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-sm text-gray-600">R-Squared</div>
-                      <div className="text-lg font-semibold">
-                        {factors.r_squared ? factors.r_squared.toFixed(3) : 'N/A'}
-                      </div>
                     </div>
                   </div>
                 </div>
