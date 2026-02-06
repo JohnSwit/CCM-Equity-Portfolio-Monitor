@@ -9,7 +9,8 @@ from app.models.models import (
     TransactionType, AssetClass, ViewType, GroupType, FactorDataSource,
     Analyst, ActiveCoverage, CoverageModelData, CoverageDocument, CoverageModelSnapshot,
     IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument,
-    TaxLot, RealizedGain, WashSaleViolation
+    TaxLot, RealizedGain, WashSaleViolation,
+    AccountInception, InceptionPosition
 )
 
 from app.models.sector_models import (
@@ -42,6 +43,8 @@ __all__ = [
     "IdeaPipeline", "IdeaPipelineModelData", "IdeaPipelineDocument",
     # Tax Optimization models
     "TaxLot", "RealizedGain", "WashSaleViolation",
+    # Inception models
+    "AccountInception", "InceptionPosition",
     # Update tracking models
     "TickerProviderCoverage", "DataUpdateState", "ComputationDependency",
     "UpdateJobRun", "DataProviderStatus", "ComputationStatus",
