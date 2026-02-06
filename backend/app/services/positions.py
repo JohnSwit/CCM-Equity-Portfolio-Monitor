@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
 from app.models import (
     Transaction, PositionsEOD, PricesEOD, Security,
-    TransactionType, Account
+    TransactionType, Account, AccountInception, InceptionPosition
 )
 import logging
 
@@ -33,37 +33,74 @@ class PositionsEngine:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None
     ) -> int:
-        """Build daily positions for an account"""
+        """
+        Build daily positions for an account.
+
+        If the account has inception data, uses inception positions as the starting
+        point and only processes transactions after the inception date.
+        """
         if not end_date:
             end_date = date.today()
 
-        if not start_date:
-            # Get first transaction date for this account
+        # Check for inception data
+        inception = self.db.query(AccountInception).filter(
+            AccountInception.account_id == account_id
+        ).first()
+
+        inception_positions = {}  # security_id -> shares at inception
+        effective_start_date = start_date
+
+        if inception:
+            # Load inception positions as starting point
+            for pos in inception.positions:
+                inception_positions[pos.security_id] = pos.shares
+
+            # Start from the day after inception for transactions
+            # (inception date already has positions set)
+            if not start_date or start_date < inception.inception_date:
+                effective_start_date = inception.inception_date + timedelta(days=1)
+
+            logger.info(f"Account {account_id} has inception data from {inception.inception_date} with {len(inception_positions)} positions")
+
+        if not effective_start_date:
+            # No inception - get first transaction date
             first_txn = self.db.query(Transaction).filter(
                 Transaction.account_id == account_id
             ).order_by(Transaction.trade_date).first()
 
             if not first_txn:
+                # No transactions and no inception - nothing to build
+                if inception:
+                    # But we have inception, so ensure inception positions exist
+                    return self._ensure_inception_positions_eod(account_id, inception)
                 return 0
 
-            start_date = first_txn.trade_date
+            effective_start_date = first_txn.trade_date
 
-        # Get all transactions for this account
+        # Get all transactions for this account from start date
         transactions = self.db.query(Transaction).filter(
             and_(
                 Transaction.account_id == account_id,
                 Transaction.trade_date.isnot(None),
-                Transaction.trade_date >= start_date,
+                Transaction.trade_date >= effective_start_date,
                 Transaction.trade_date <= end_date,
                 Transaction.security_id.isnot(None)
             )
         ).order_by(Transaction.trade_date, Transaction.id).all()
 
-        if not transactions:
+        # If no transactions but we have inception, ensure positions exist
+        if not transactions and inception:
+            return self._ensure_inception_positions_eod(account_id, inception)
+
+        if not transactions and not inception:
             return 0
 
         # Group by security and build cumulative positions
         security_positions = {}
+
+        # Initialize with inception positions (these are carried forward)
+        for security_id, shares in inception_positions.items():
+            security_positions[security_id] = []
 
         for txn in transactions:
             security_id = txn.security_id
@@ -77,27 +114,52 @@ class PositionsEngine:
                 'delta': delta
             })
 
+        # Determine calendar start date
+        calendar_start = effective_start_date
+        if inception:
+            # Include inception date in calendar
+            calendar_start = inception.inception_date
+
         # Get trading calendar from prices
-        trading_dates = self._get_trading_calendar(start_date, end_date)
+        trading_dates = self._get_trading_calendar(calendar_start, end_date)
 
         # Build EOD positions for each security
         positions_created = 0
 
         for security_id, txn_list in security_positions.items():
-            # Convert to DataFrame
-            df = pd.DataFrame(txn_list)
-            df = df.groupby('date')['delta'].sum().reset_index()
-            df = df.sort_values('date')
+            # Get starting shares (from inception if available)
+            starting_shares = inception_positions.get(security_id, 0.0)
 
-            # Compute cumulative shares
-            df['shares'] = df['delta'].cumsum()
+            if txn_list:
+                # Convert to DataFrame
+                df = pd.DataFrame(txn_list)
+                df = df.groupby('date')['delta'].sum().reset_index()
+                df = df.sort_values('date')
 
-            # Create date index covering all trading dates
-            date_index = pd.DataFrame({'date': trading_dates})
-            df = date_index.merge(df[['date', 'shares']], on='date', how='left')
+                # Compute cumulative shares starting from inception
+                df['shares'] = starting_shares + df['delta'].cumsum()
 
-            # Forward fill shares
-            df['shares'] = df['shares'].ffill().fillna(0)
+                # Create date index covering all trading dates
+                date_index = pd.DataFrame({'date': trading_dates})
+                df = date_index.merge(df[['date', 'shares']], on='date', how='left')
+
+                # Set inception date shares if we have inception
+                if inception and trading_dates and inception.inception_date in trading_dates:
+                    inception_idx = df[df['date'] == inception.inception_date].index
+                    if len(inception_idx) > 0:
+                        df.loc[inception_idx[0], 'shares'] = starting_shares
+
+                # Forward fill shares from inception value
+                df['shares'] = df['shares'].ffill()
+
+                # Fill any remaining NaN before inception date with 0
+                df['shares'] = df['shares'].fillna(0 if not starting_shares else starting_shares)
+
+            else:
+                # No transactions for this security, just inception position
+                date_index = pd.DataFrame({'date': trading_dates})
+                date_index['shares'] = starting_shares
+                df = date_index
 
             # Store positions
             for _, row in df.iterrows():
@@ -128,6 +190,32 @@ class PositionsEngine:
         self.db.commit()
         logger.info(f"Created {positions_created} positions for account {account_id}")
         return positions_created
+
+    def _ensure_inception_positions_eod(self, account_id: int, inception: AccountInception) -> int:
+        """Ensure PositionsEOD records exist for inception positions"""
+        created = 0
+        for pos in inception.positions:
+            existing = self.db.query(PositionsEOD).filter(
+                and_(
+                    PositionsEOD.account_id == account_id,
+                    PositionsEOD.security_id == pos.security_id,
+                    PositionsEOD.date == inception.inception_date
+                )
+            ).first()
+
+            if not existing:
+                position = PositionsEOD(
+                    account_id=account_id,
+                    security_id=pos.security_id,
+                    date=inception.inception_date,
+                    shares=pos.shares
+                )
+                self.db.add(position)
+                created += 1
+
+        if created > 0:
+            self.db.commit()
+        return created
 
     def build_positions_for_all_accounts(self) -> Dict[str, int]:
         """Build positions for all accounts"""

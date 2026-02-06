@@ -30,6 +30,9 @@ class Account(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Relationship to inception snapshot
+    inception = relationship("AccountInception", back_populates="account", uselist=False)
+
 
 class AssetClass(str, enum.Enum):
     EQUITY = "EQUITY"
@@ -868,3 +871,54 @@ class WashSaleViolation(Base):
     loss_transaction = relationship("Transaction", foreign_keys=[loss_sale_transaction_id])
     replacement_transaction = relationship("Transaction", foreign_keys=[replacement_transaction_id])
     adjusted_lot = relationship("TaxLot")
+
+
+# ==================== HISTORICAL INCEPTION MODELS ====================
+
+class AccountInception(Base):
+    """
+    Stores the starting portfolio snapshot for an account at a specific date.
+    This allows calculating returns from a historical inception date rather
+    than from the first transaction.
+    """
+    __tablename__ = "account_inceptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    inception_date = Column(Date, nullable=False)
+    total_value = Column(Float)  # Total portfolio value at inception (calculated from positions)
+    notes = Column(Text)  # Optional notes about the inception
+    import_log_id = Column(Integer, ForeignKey("import_logs.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("Account", back_populates="inception")
+    positions = relationship("InceptionPosition", back_populates="inception", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('account_id', name='uq_inception_account'),
+    )
+
+
+class InceptionPosition(Base):
+    """
+    Individual security positions at the inception date.
+    These serve as the starting point for position calculations.
+    """
+    __tablename__ = "inception_positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    inception_id = Column(Integer, ForeignKey("account_inceptions.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+    shares = Column(Float, nullable=False)
+    price = Column(Float)  # Price at inception date
+    market_value = Column(Float)  # Market value at inception (shares * price)
+    cost_basis = Column(Float)  # Optional: for informational purposes (tax lots separate)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    inception = relationship("AccountInception", back_populates="positions")
+    security = relationship("Security")
+
+    __table_args__ = (
+        UniqueConstraint('inception_id', 'security_id', name='uq_inception_position_security'),
+    )

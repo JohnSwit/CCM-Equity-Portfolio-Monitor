@@ -876,6 +876,31 @@ class APIClient {
     });
     return response.data;
   }
+
+  // Inception Positions
+  async importInceptionPositions(file: File, mode: 'preview' | 'commit') {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/imports/inception?mode=${mode}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getInceptionData() {
+    const response = await this.client.get('/imports/inception');
+    return response.data;
+  }
+
+  async getAccountInception(accountId: number) {
+    const response = await this.client.get(`/imports/inception/${accountId}`);
+    return response.data;
+  }
+
+  async deleteAccountInception(accountId: number) {
+    const response = await this.client.delete(`/imports/inception/${accountId}`);
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

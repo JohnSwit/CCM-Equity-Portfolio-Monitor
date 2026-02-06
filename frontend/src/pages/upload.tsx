@@ -34,9 +34,18 @@ interface BatchSummary {
   skipped: number;
 }
 
+interface InceptionAccount {
+  account_id: number;
+  account_number: string;
+  display_name: string;
+  inception_date: string;
+  total_value: number;
+  position_count: number;
+}
+
 export default function Upload() {
   // Tab state
-  const [activeTab, setActiveTab] = useState<'simple' | 'bulk'>('simple');
+  const [activeTab, setActiveTab] = useState<'simple' | 'bulk' | 'inception'>('simple');
 
   // Simple Import state
   const [file, setFile] = useState<File | null>(null);
@@ -60,9 +69,17 @@ export default function Upload() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Inception Import state
+  const [inceptionFile, setInceptionFile] = useState<File | null>(null);
+  const [inceptionPreview, setInceptionPreview] = useState<any>(null);
+  const [inceptionImporting, setInceptionImporting] = useState(false);
+  const [inceptionResult, setInceptionResult] = useState<any>(null);
+  const [inceptionAccounts, setInceptionAccounts] = useState<InceptionAccount[]>([]);
+
   useEffect(() => {
     loadImportHistory();
     loadBulkJobs();
+    loadInceptionData();
   }, []);
 
   // Auto-refresh for active bulk jobs
@@ -255,6 +272,70 @@ export default function Upload() {
     }
   };
 
+  // Inception Import functions
+  const loadInceptionData = async () => {
+    try {
+      const data = await api.getInceptionData();
+      setInceptionAccounts(data.accounts || []);
+    } catch (error) {
+      console.error('Failed to load inception data:', error);
+    }
+  };
+
+  const handleInceptionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setInceptionFile(selectedFile);
+      setInceptionPreview(null);
+      setInceptionResult(null);
+    }
+  };
+
+  const handleInceptionPreview = async () => {
+    if (!inceptionFile) return;
+
+    setInceptionImporting(true);
+    try {
+      const data = await api.importInceptionPositions(inceptionFile, 'preview');
+      setInceptionPreview(data);
+    } catch (error: any) {
+      alert('Preview failed: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setInceptionImporting(false);
+    }
+  };
+
+  const handleInceptionImport = async () => {
+    if (!inceptionFile) return;
+
+    if (!confirm('Are you sure you want to import these inception positions? This will replace any existing inception data for the affected accounts.')) return;
+
+    setInceptionImporting(true);
+    try {
+      const data = await api.importInceptionPositions(inceptionFile, 'commit');
+      setInceptionResult(data);
+      setInceptionFile(null);
+      setInceptionPreview(null);
+      await loadInceptionData();
+    } catch (error: any) {
+      alert('Import failed: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setInceptionImporting(false);
+    }
+  };
+
+  const handleDeleteInception = async (accountId: number, accountNumber: string) => {
+    if (!confirm(`Delete inception data for account ${accountNumber}? This will remove the historical starting point for this account.`)) return;
+
+    try {
+      const result = await api.deleteAccountInception(accountId);
+      alert(result.message);
+      await loadInceptionData();
+    } catch (error: any) {
+      alert('Delete failed: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
   const formatNumber = (n: number | null | undefined) => {
     if (n == null) return '-';
     return n.toLocaleString();
@@ -263,6 +344,11 @@ export default function Upload() {
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '-';
     return new Date(dateStr).toLocaleString();
+  };
+
+  const formatCurrency = (n: number | null | undefined) => {
+    if (n == null) return '-';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
   };
 
   const getStatusColor = (status: string) => {
@@ -310,6 +396,16 @@ export default function Upload() {
               }`}
             >
               Bulk Import
+            </button>
+            <button
+              onClick={() => setActiveTab('inception')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'inception'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Historical Inception
             </button>
           </nav>
         </div>
@@ -857,6 +953,271 @@ export default function Upload() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Historical Inception Tab */}
+        {activeTab === 'inception' && (
+          <div className="space-y-6">
+            {/* Info Banner */}
+            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded">
+              <h3 className="font-semibold mb-1">Historical Portfolio Inception</h3>
+              <p className="text-sm">
+                Upload a CSV file with portfolio positions at a historical starting date (e.g., 12/31/2020).
+                This establishes a baseline for computing returns and analytics from that point forward.
+                Transaction imports will then build on top of this inception data.
+              </p>
+            </div>
+
+            {/* Upload Form */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-4">Upload Inception Positions</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Expected CSV columns: Account Number, Account Display Name, Class, Asset Name, Symbol, Units, Price, Market Value, Inception Date
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <input
+                    type="file"
+                    accept=".csv,.tsv"
+                    onChange={handleInceptionFileChange}
+                    className="input"
+                  />
+                  {inceptionFile && (
+                    <div className="mt-2 text-sm text-gray-600">
+                      Selected: {inceptionFile.name} ({(inceptionFile.size / 1024).toFixed(1)} KB)
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex space-x-4">
+                  <button
+                    onClick={handleInceptionPreview}
+                    disabled={!inceptionFile || inceptionImporting}
+                    className="btn btn-secondary"
+                  >
+                    {inceptionImporting ? 'Previewing...' : 'Preview'}
+                  </button>
+                  <button
+                    onClick={handleInceptionImport}
+                    disabled={!inceptionFile || inceptionImporting}
+                    className="btn btn-primary"
+                  >
+                    {inceptionImporting ? 'Importing...' : 'Import'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Preview */}
+            {inceptionPreview && (
+              <div className="card">
+                <h2 className="text-lg font-semibold mb-4">
+                  Preview ({inceptionPreview.total_rows} positions)
+                </h2>
+
+                {inceptionPreview.has_errors && (
+                  <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4">
+                    Warning: Some rows have errors
+                  </div>
+                )}
+
+                {inceptionPreview.multiple_dates_warning && (
+                  <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                    Error: Multiple inception dates detected. All positions must have the same inception date.
+                  </div>
+                )}
+
+                {inceptionPreview.inception_date && (
+                  <div className="mb-4 p-3 bg-green-50 rounded">
+                    <span className="font-semibold">Inception Date: </span>
+                    <span className="text-green-800">{inceptionPreview.inception_date}</span>
+                  </div>
+                )}
+
+                {/* Accounts Summary */}
+                {inceptionPreview.accounts_summary && inceptionPreview.accounts_summary.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="font-semibold mb-2">Accounts Summary</h3>
+                    <div className="overflow-x-auto">
+                      <table className="table text-sm">
+                        <thead>
+                          <tr>
+                            <th>Account Number</th>
+                            <th>Display Name</th>
+                            <th className="text-right">Positions</th>
+                            <th className="text-right">Total Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inceptionPreview.accounts_summary.map((acct: any) => (
+                            <tr key={acct.account_number}>
+                              <td className="font-mono">{acct.account_number}</td>
+                              <td>{acct.display_name}</td>
+                              <td className="text-right">{acct.position_count}</td>
+                              <td className="text-right">{formatCurrency(acct.total_value)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preview Rows */}
+                <div className="overflow-x-auto">
+                  <table className="table text-sm">
+                    <thead>
+                      <tr>
+                        <th>Row</th>
+                        <th>Account</th>
+                        <th>Symbol</th>
+                        <th>Asset Name</th>
+                        <th className="text-right">Units</th>
+                        <th className="text-right">Price</th>
+                        <th className="text-right">Market Value</th>
+                        <th>Errors</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inceptionPreview.preview_rows?.map((row: any) => (
+                        <tr key={row.row_num} className={row.errors?.length > 0 ? 'bg-red-50' : ''}>
+                          <td>{row.row_num}</td>
+                          <td>{row.data['Account Number']}</td>
+                          <td className="font-mono">{row.data['Symbol']}</td>
+                          <td>{row.data['Asset Name']}</td>
+                          <td className="text-right">{formatNumber(row.data['Units'])}</td>
+                          <td className="text-right">{formatCurrency(row.data['Price'])}</td>
+                          <td className="text-right">{formatCurrency(row.data['Market Value'])}</td>
+                          <td>
+                            {row.errors?.length > 0 && (
+                              <span className="text-red-600 text-xs">{row.errors.join(', ')}</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Import Result */}
+            {inceptionResult && (
+              <div className="card">
+                <h2 className="text-lg font-semibold mb-4">Import Complete</h2>
+                <div className="space-y-2">
+                  <div className="p-3 bg-green-50 rounded">
+                    <span className="font-semibold text-green-800">{inceptionResult.message}</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                    <div className="text-center p-3 bg-gray-50 rounded">
+                      <div className="text-2xl font-bold text-blue-600">{inceptionResult.accounts_created + inceptionResult.accounts_updated}</div>
+                      <div className="text-xs text-gray-500">Accounts</div>
+                    </div>
+                    <div className="text-center p-3 bg-gray-50 rounded">
+                      <div className="text-2xl font-bold text-green-600">{inceptionResult.positions_created}</div>
+                      <div className="text-xs text-gray-500">Positions</div>
+                    </div>
+                    <div className="text-center p-3 bg-gray-50 rounded">
+                      <div className="text-2xl font-bold">{inceptionResult.securities_created}</div>
+                      <div className="text-xs text-gray-500">New Securities</div>
+                    </div>
+                    <div className="text-center p-3 bg-gray-50 rounded">
+                      <div className="text-2xl font-bold">{formatCurrency(inceptionResult.total_value)}</div>
+                      <div className="text-xs text-gray-500">Total Value</div>
+                    </div>
+                  </div>
+
+                  {inceptionResult.errors && inceptionResult.errors.length > 0 && (
+                    <div className="mt-4">
+                      <h3 className="font-semibold mb-2 text-red-700">Errors:</h3>
+                      <div className="space-y-1 text-sm max-h-40 overflow-y-auto bg-red-50 p-3 rounded">
+                        {inceptionResult.errors.map((err: string, idx: number) => (
+                          <div key={idx} className="text-red-600">{err}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Existing Inception Data */}
+            <div className="card">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-semibold">Accounts with Inception Data</h2>
+                <button
+                  onClick={loadInceptionData}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  Refresh
+                </button>
+              </div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Account Number</th>
+                    <th>Display Name</th>
+                    <th>Inception Date</th>
+                    <th className="text-right">Positions</th>
+                    <th className="text-right">Total Value</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inceptionAccounts.map((acct) => (
+                    <tr key={acct.account_id}>
+                      <td className="font-mono">{acct.account_number}</td>
+                      <td>{acct.display_name}</td>
+                      <td>{acct.inception_date}</td>
+                      <td className="text-right">{acct.position_count}</td>
+                      <td className="text-right">{formatCurrency(acct.total_value)}</td>
+                      <td>
+                        <button
+                          onClick={() => handleDeleteInception(acct.account_id, acct.account_number)}
+                          className="text-red-600 hover:text-red-800 text-sm font-medium"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {inceptionAccounts.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  No accounts have inception data. Upload an inception CSV to establish historical starting points.
+                </div>
+              )}
+            </div>
+
+            {/* Instructions */}
+            <div className="card bg-gray-50">
+              <h2 className="text-lg font-semibold mb-4">CSV Format Requirements</h2>
+              <div className="text-sm text-gray-700 space-y-2">
+                <p><strong>Required Columns:</strong></p>
+                <ul className="list-disc list-inside ml-4 space-y-1">
+                  <li><code className="bg-gray-200 px-1 rounded">Account Number</code> - Account identifier</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Account Display Name</code> - Human-readable account name</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Class</code> - Asset class (Equity, ETF, Option, etc.)</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Asset Name</code> - Full security name</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Symbol</code> - Ticker symbol</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Units</code> - Number of shares</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Price</code> - Price per share at inception</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Market Value</code> - Total position value</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Inception Date</code> - The inception date (e.g., 12/31/2020)</li>
+                </ul>
+                <p className="mt-4"><strong>Notes:</strong></p>
+                <ul className="list-disc list-inside ml-4 space-y-1">
+                  <li>All positions must have the same inception date</li>
+                  <li>Only positions with Units {'>'} 0 will be imported</li>
+                  <li>Importing will replace any existing inception data for affected accounts</li>
+                  <li>After importing inception data, upload transactions from after the inception date</li>
+                </ul>
               </div>
             </div>
           </div>
