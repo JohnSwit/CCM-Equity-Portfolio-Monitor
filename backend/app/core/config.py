@@ -8,8 +8,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
-    # Market data
-    ENABLE_YFINANCE_FALLBACK: bool = True
+    # Market data - Tiingo API
+    TIINGO_API_KEY: str = ""
+    ENABLE_YFINANCE_FALLBACK: bool = True  # Legacy fallback if Tiingo fails
 
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000"

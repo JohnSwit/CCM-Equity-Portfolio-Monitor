@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import User, Transaction, Account, Security, ImportLog
-from app.workers.jobs import recompute_analytics_job, clear_analytics_for_account
+from app.workers.jobs import clear_analytics_for_account
 import logging
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -126,7 +126,8 @@ async def delete_transaction(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Delete a single transaction and recompute analytics.
+    Delete a single transaction and clear associated analytics.
+    Does NOT recompute analytics - use the analytics endpoints to rebuild if needed.
     """
     transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not transaction:
@@ -142,14 +143,8 @@ async def delete_transaction(
     db.delete(transaction)
     db.commit()
 
-    # Clear analytics for the affected account
+    # Clear analytics for the affected account (this commits automatically)
     clear_analytics_for_account(db, account_id)
-
-    # Recompute analytics
-    try:
-        await recompute_analytics_job(db)
-    except Exception as e:
-        logger.error(f"Failed to recompute analytics after transaction deletion: {e}")
 
     return {
         'deleted': True,
@@ -157,7 +152,7 @@ async def delete_transaction(
         'account_number': account_number,
         'symbol': symbol,
         'trade_date': trade_date,
-        'message': f'Deleted transaction for {symbol} in account {account_number}. Analytics have been recomputed.'
+        'message': f'Deleted transaction for {symbol} in account {account_number}. Analytics cleared for account.'
     }
 
 
@@ -168,7 +163,8 @@ async def delete_all_account_transactions(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Delete all transactions for a specific account and recompute analytics.
+    Delete all transactions for a specific account and clear associated analytics.
+    Does NOT recompute analytics - use the analytics endpoints to rebuild if needed.
     WARNING: This will delete ALL transactions for this account.
     """
     account = db.query(Account).filter(Account.id == account_id).first()
@@ -191,14 +187,8 @@ async def delete_all_account_transactions(
     db.query(Transaction).filter(Transaction.account_id == account_id).delete()
     db.commit()
 
-    # Clear analytics for the affected account
+    # Clear analytics for the affected account (this commits automatically)
     clear_analytics_for_account(db, account_id)
-
-    # Recompute analytics
-    try:
-        await recompute_analytics_job(db)
-    except Exception as e:
-        logger.error(f"Failed to recompute analytics after account transactions deletion: {e}")
 
     return {
         'deleted': True,
@@ -206,7 +196,7 @@ async def delete_all_account_transactions(
         'account_number': account.account_number,
         'account_name': account.display_name,
         'transactions_deleted': txn_count,
-        'message': f'Deleted {txn_count} transactions for account {account.account_number}. Analytics have been recomputed.'
+        'message': f'Deleted {txn_count} transactions for account {account.account_number}. Analytics cleared for account.'
     }
 
 
@@ -217,7 +207,8 @@ async def delete_transactions_bulk(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Delete multiple transactions at once and recompute analytics.
+    Delete multiple transactions at once and clear associated analytics.
+    Does NOT recompute analytics - use the analytics endpoints to rebuild if needed.
     """
     transaction_ids = request.transaction_ids
     if not transaction_ids:
@@ -241,18 +232,13 @@ async def delete_transactions_bulk(
     deleted_count = db.query(Transaction).filter(Transaction.id.in_(transaction_ids)).delete(synchronize_session=False)
     db.commit()
 
-    # Clear analytics for all affected accounts
+    # Clear analytics for all affected accounts (each call commits automatically)
     for account_id in affected_account_ids:
         clear_analytics_for_account(db, account_id)
-
-    # Recompute analytics
-    try:
-        await recompute_analytics_job(db)
-    except Exception as e:
-        logger.error(f"Failed to recompute analytics after bulk deletion: {e}")
 
     return {
         'deleted': True,
         'transactions_deleted': deleted_count,
-        'message': f'Deleted {deleted_count} transactions. Analytics have been recomputed.'
+        'accounts_affected': len(affected_account_ids),
+        'message': f'Deleted {deleted_count} transactions. Analytics cleared for {len(affected_account_ids)} accounts.'
     }

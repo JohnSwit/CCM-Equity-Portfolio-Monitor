@@ -214,9 +214,45 @@ def get_holdings(
                 symbol = holding['symbol']
                 if symbol not in all_holdings:
                     all_holdings[symbol] = holding.copy()
+                    # Track total cost for weighted average across accounts
+                    if holding['avg_cost'] is not None:
+                        all_holdings[symbol]['_total_cost'] = holding['avg_cost'] * holding['shares']
+                        all_holdings[symbol]['_total_cost_shares'] = holding['shares']
+                    else:
+                        all_holdings[symbol]['_total_cost'] = 0
+                        all_holdings[symbol]['_total_cost_shares'] = 0
                 else:
                     all_holdings[symbol]['shares'] += holding['shares']
                     all_holdings[symbol]['market_value'] += holding['market_value']
+                    # Aggregate 1D gains
+                    if holding['gain_1d'] is not None:
+                        if all_holdings[symbol]['gain_1d'] is not None:
+                            all_holdings[symbol]['gain_1d'] += holding['gain_1d']
+                        else:
+                            all_holdings[symbol]['gain_1d'] = holding['gain_1d']
+                    # Aggregate unrealized gains
+                    if holding['unr_gain'] is not None:
+                        if all_holdings[symbol]['unr_gain'] is not None:
+                            all_holdings[symbol]['unr_gain'] += holding['unr_gain']
+                        else:
+                            all_holdings[symbol]['unr_gain'] = holding['unr_gain']
+                    # Track cost basis for weighted average
+                    if holding['avg_cost'] is not None:
+                        all_holdings[symbol]['_total_cost'] += holding['avg_cost'] * holding['shares']
+                        all_holdings[symbol]['_total_cost_shares'] += holding['shares']
+
+        # Recalculate avg_cost and percentage gains for aggregated holdings
+        for symbol, h in all_holdings.items():
+            if h['_total_cost_shares'] > 0:
+                h['avg_cost'] = h['_total_cost'] / h['_total_cost_shares']
+                if h['price'] is not None and h['avg_cost'] > 0:
+                    h['unr_gain_pct'] = (h['price'] - h['avg_cost']) / h['avg_cost']
+            # Recalculate 1D gain pct based on aggregated values
+            if h.get('gain_1d') is not None and h['market_value'] > 0:
+                # Estimate based on market value change
+                prev_value = h['market_value'] - h['gain_1d']
+                if prev_value > 0:
+                    h['gain_1d_pct'] = h['gain_1d'] / prev_value
 
         holdings_data = list(all_holdings.values())
 
@@ -233,7 +269,12 @@ def get_holdings(
                 shares=h['shares'],
                 price=h['price'],
                 market_value=h['market_value'],
-                weight=weight
+                weight=weight,
+                avg_cost=h.get('avg_cost'),
+                gain_1d_pct=h.get('gain_1d_pct'),
+                gain_1d=h.get('gain_1d'),
+                unr_gain_pct=h.get('unr_gain_pct'),
+                unr_gain=h.get('unr_gain')
             ))
 
     return HoldingsResponse(
@@ -392,3 +433,380 @@ def get_unpriced_instruments(
         )
         for u in unpriced
     ]
+
+
+# ============================================================================
+# Factor Benchmarking + Attribution Endpoints
+# ============================================================================
+
+@router.get("/factor-models")
+def get_factor_models(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get available factor models"""
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    return service.get_available_models()
+
+
+@router.get("/factor-benchmarking")
+def get_factor_benchmarking(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),  # 1M, 3M, 6M, YTD, 1Y, ALL
+    use_excess_returns: bool = Query(False),
+    use_robust: bool = Query(False),
+    benchmark_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get factor benchmarking and attribution analysis.
+
+    Returns:
+    - Factor betas (exposures) with confidence intervals
+    - Alpha (daily and annualized) with CI and Information Ratio
+    - R-squared and adjusted R-squared
+    - Diagnostics (VIF, correlations, residual tests)
+    - Return attribution by factor
+    - Optional benchmark-relative attribution
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == 'ALL':
+        # Get earliest portfolio data
+        earliest = db.query(PortfolioValueEOD.date).filter(
+            and_(
+                PortfolioValueEOD.view_type == db_vt,
+                PortfolioValueEOD.view_id == view_id
+            )
+        ).order_by(PortfolioValueEOD.date).first()
+        start_date = earliest[0] if earliest else end_date - timedelta(days=365)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Check if we need to refresh factor data
+    # For now, always try to get latest data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        # Log but continue - we might have cached data
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+        # Rollback the session to clear any pending errors
+        db.rollback()
+
+    # Check factor data status first
+    data_status = service.check_factor_data_status(model_code, start_date, end_date)
+
+    # Compute attribution with new parameters
+    result = service.compute_attribution(
+        db_vt, view_id, model_code, start_date, end_date,
+        use_excess_returns=use_excess_returns,
+        use_robust=use_robust,
+        benchmark_code=benchmark_code
+    )
+
+    if not result:
+        # Provide detailed error message
+        if not data_status['available']:
+            detail = data_status.get('message', 'Factor data unavailable')
+            missing_symbols = [
+                s for s, info in data_status.get('symbols', {}).items()
+                if not info.get('has_data', False)
+            ]
+            if missing_symbols:
+                detail += f" Missing data for: {', '.join(missing_symbols[:5])}"
+                if len(missing_symbols) > 5:
+                    detail += f" and {len(missing_symbols) - 5} more."
+            raise HTTPException(
+                status_code=503,  # Service Unavailable
+                detail=detail
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not compute factor analysis. Portfolio may have insufficient return data (need at least 30 trading days)."
+            )
+
+    # Add data status info to result for transparency
+    result['data_status'] = {
+        'symbols_with_data': data_status['symbols_with_data'],
+        'symbols_total': data_status['symbols_total'],
+        'min_coverage_pct': data_status['min_coverage_pct'],
+        'status_message': data_status['message']
+    }
+
+    return result
+
+
+@router.post("/refresh-factor-data")
+def refresh_factor_data(
+    model_code: str = Query("US_CORE"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Refresh factor proxy data from external sources.
+    Only fetches missing dates.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=365 * 2)  # Default 2 years
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    try:
+        results = service.refresh_factor_data(model_code, start_date, end_date)
+        return {
+            "status": "success",
+            "model_code": model_code,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "rows_fetched": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/factor-rolling-analysis")
+def get_factor_rolling_analysis(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    window_days: int = Query(63),  # 30, 63, 126, 252
+    use_excess_returns: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get rolling factor analysis (betas, alpha, R-squared over time).
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period (need extra for rolling window)
+    if period == '1M':
+        start_date = end_date - timedelta(days=30 + window_days)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90 + window_days)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180 + window_days)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1) - timedelta(days=window_days)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365 + window_days)
+    else:
+        start_date = end_date - timedelta(days=365 + window_days)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Refresh factor data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+        db.rollback()
+
+    result = service.compute_rolling_analysis(
+        db_vt, view_id, model_code, start_date, end_date,
+        window_days=window_days,
+        use_excess_returns=use_excess_returns
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not compute rolling analysis. Ensure sufficient data is available."
+        )
+
+    return result
+
+
+@router.get("/factor-contribution-over-time")
+def get_factor_contribution_over_time(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    frequency: str = Query("M"),  # M=monthly, Q=quarterly
+    use_excess_returns: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get factor contributions over time (monthly or quarterly breakdown).
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == '2Y':
+        start_date = end_date - timedelta(days=365 * 2)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Refresh factor data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+        db.rollback()
+
+    result = service.compute_contribution_over_time(
+        db_vt, view_id, model_code, start_date, end_date,
+        frequency=frequency,
+        use_excess_returns=use_excess_returns
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not compute contribution analysis. Ensure sufficient data is available."
+        )
+
+    return result
+
+
+@router.get("/available-benchmarks")
+def get_available_benchmarks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get list of available benchmarks for comparison.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+
+    service = FactorBenchmarkingService(db)
+    return service.get_available_benchmarks()
+
+
+@router.get("/factor-data-status")
+def get_factor_data_status(
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check factor data availability and status.
+    Useful for diagnosing why factor analysis may not be working.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    end_date = date.today()
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == '2Y':
+        start_date = end_date - timedelta(days=365 * 2)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    return service.check_factor_data_status(model_code, start_date, end_date)

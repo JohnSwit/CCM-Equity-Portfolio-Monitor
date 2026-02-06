@@ -193,3 +193,57 @@ async def get_missing_classifications(
             for sec in unclassified
         ]
     }
+
+
+@router.get("/benchmark-weights/{benchmark_code}")
+async def get_benchmark_weights(
+    benchmark_code: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Debug endpoint: Get raw benchmark weights by sector to verify data.
+    """
+    from sqlalchemy import func
+
+    # Get latest date
+    latest_date = db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
+        BenchmarkConstituent.benchmark_code == benchmark_code
+    ).scalar()
+
+    if not latest_date:
+        return {"error": f"No data for {benchmark_code}"}
+
+    # Get all constituents
+    constituents = db.query(BenchmarkConstituent).filter(
+        BenchmarkConstituent.benchmark_code == benchmark_code,
+        BenchmarkConstituent.as_of_date == latest_date
+    ).all()
+
+    # Aggregate by sector
+    sector_weights = {}
+    sample_weights = []
+    total_weight = 0.0
+
+    for c in constituents:
+        sector = c.sector or "Unclassified"
+        weight = float(c.weight)
+        sector_weights[sector] = sector_weights.get(sector, 0) + weight
+        total_weight += weight
+
+        # Sample first 10 for debugging
+        if len(sample_weights) < 10:
+            sample_weights.append({
+                "symbol": c.symbol,
+                "weight": weight,
+                "sector": c.sector
+            })
+
+    return {
+        "benchmark_code": benchmark_code,
+        "as_of_date": latest_date.isoformat(),
+        "constituent_count": len(constituents),
+        "total_weight": total_weight,
+        "total_weight_should_be": "~1.0 (or ~100 if stored as percentage)",
+        "sector_weights": sector_weights,
+        "sample_constituents": sample_weights
+    }
