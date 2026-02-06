@@ -88,12 +88,12 @@ class PositionsEngine:
             )
         ).order_by(Transaction.trade_date, Transaction.id).all()
 
-        # If no transactions but we have inception, ensure positions exist
-        if not transactions and inception:
-            return self._ensure_inception_positions_eod(account_id, inception)
-
+        # If no transactions and no inception, nothing to build
         if not transactions and not inception:
             return 0
+
+        # Note: Even if no transactions, we continue if we have inception data
+        # The inception positions will be forward-filled to all trading dates
 
         # Group by security and build cumulative positions
         security_positions = {}
@@ -122,6 +122,14 @@ class PositionsEngine:
 
         # Get trading calendar from prices
         trading_dates = self._get_trading_calendar(calendar_start, end_date)
+
+        # Ensure we have at least some trading dates
+        if not trading_dates:
+            logger.warning(f"No trading dates found for account {account_id} from {calendar_start} to {end_date}")
+            # Fallback: use end_date at minimum so positions exist for today
+            trading_dates = [end_date]
+
+        logger.info(f"Building positions for account {account_id}: {len(inception_positions)} inception securities, {len(trading_dates)} trading dates")
 
         # Build EOD positions for each security
         positions_created = 0
@@ -192,29 +200,44 @@ class PositionsEngine:
         return positions_created
 
     def _ensure_inception_positions_eod(self, account_id: int, inception: AccountInception) -> int:
-        """Ensure PositionsEOD records exist for inception positions"""
+        """
+        Ensure PositionsEOD records exist for inception positions.
+        Creates positions for ALL trading dates from inception to today.
+        """
+        end_date = date.today()
+        trading_dates = self._get_trading_calendar(inception.inception_date, end_date)
+
+        if not trading_dates:
+            # Fallback: at minimum create for inception date and today
+            trading_dates = [inception.inception_date, end_date]
+
         created = 0
         for pos in inception.positions:
-            existing = self.db.query(PositionsEOD).filter(
-                and_(
-                    PositionsEOD.account_id == account_id,
-                    PositionsEOD.security_id == pos.security_id,
-                    PositionsEOD.date == inception.inception_date
-                )
-            ).first()
+            if pos.shares <= 0:
+                continue
 
-            if not existing:
-                position = PositionsEOD(
-                    account_id=account_id,
-                    security_id=pos.security_id,
-                    date=inception.inception_date,
-                    shares=pos.shares
-                )
-                self.db.add(position)
-                created += 1
+            for trade_date in trading_dates:
+                existing = self.db.query(PositionsEOD).filter(
+                    and_(
+                        PositionsEOD.account_id == account_id,
+                        PositionsEOD.security_id == pos.security_id,
+                        PositionsEOD.date == trade_date
+                    )
+                ).first()
+
+                if not existing:
+                    position = PositionsEOD(
+                        account_id=account_id,
+                        security_id=pos.security_id,
+                        date=trade_date,
+                        shares=pos.shares
+                    )
+                    self.db.add(position)
+                    created += 1
 
         if created > 0:
             self.db.commit()
+            logger.info(f"Created {created} positions for account {account_id} from inception data")
         return created
 
     def build_positions_for_all_accounts(self) -> Dict[str, int]:
