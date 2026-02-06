@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import Layout from '../components/Layout';
 import { api } from '../lib/api';
 
@@ -424,70 +424,89 @@ export default function NewFundsPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-900">New Funds Allocation</h1>
+        {/* Page Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-900">New Funds Allocation</h1>
+          <p className="text-sm text-zinc-500 mt-1">
+            Allocate new investments across industries and generate Schwab trade files
+          </p>
         </div>
 
+        {/* Error/Success Messages */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-            {error}
+          <div className="alert alert-danger flex justify-between items-center">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-600 hover:text-red-800 font-medium">
+              Dismiss
+            </button>
           </div>
         )}
 
         {successMessage && (
-          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
-            {successMessage}
+          <div className="alert alert-success flex justify-between items-center">
+            <span>{successMessage}</span>
+            <button onClick={() => setSuccessMessage(null)} className="text-emerald-600 hover:text-emerald-800 font-medium">
+              Dismiss
+            </button>
           </div>
         )}
 
         {/* Setup Section */}
         <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Setup</h2>
+          <div className="card-header">
+            <h2 className="card-title">Setup</h2>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Industry Weights CSV Upload */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                1. Upload Industry Weights CSV
-              </label>
+              <label className="label">1. Upload Industry Weights CSV</label>
               <input
                 type="file"
                 accept=".csv"
                 onChange={handleFileUpload}
-                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                className="block w-full text-sm text-zinc-500
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-medium
+                  file:bg-blue-50 file:text-blue-700
+                  hover:file:bg-blue-100
+                  file:cursor-pointer cursor-pointer"
               />
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1.5 text-xs text-zinc-500">
                 CSV: Industry, Weight
               </p>
             </div>
 
             {/* Portfolio CSV Upload */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                2. Upload Portfolio CSV (Optional)
-              </label>
+              <label className="label">2. Upload Portfolio CSV (Optional)</label>
               <input
                 type="file"
                 accept=".csv"
                 onChange={handlePortfolioUpload}
-                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+                className="block w-full text-sm text-zinc-500
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-medium
+                  file:bg-emerald-50 file:text-emerald-700
+                  hover:file:bg-emerald-100
+                  file:cursor-pointer cursor-pointer"
               />
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1.5 text-xs text-zinc-500">
                 CSV: Ticker, Industry, % Allocation
               </p>
             </div>
 
             {/* Account Selector */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                3. Select Account
-              </label>
+              <label className="label">3. Select Account</label>
               <select
                 value={selectedAccount?.id || ''}
                 onChange={(e) => {
                   const account = accounts.find(a => a.id === parseInt(e.target.value));
                   setSelectedAccount(account || null);
                 }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="select"
               >
                 <option value="">Select account...</option>
                 {accounts.map(account => (
@@ -500,17 +519,15 @@ export default function NewFundsPage() {
 
             {/* Total Amount */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                4. Total Amount to Allocate
-              </label>
+              <label className="label">4. Total Amount to Allocate</label>
               <div className="relative">
-                <span className="absolute left-3 top-2 text-gray-500">$</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">$</span>
                 <input
                   type="text"
                   value={totalAmount ? totalAmount.toLocaleString() : ''}
                   onChange={(e) => handleTotalAmountChange(e.target.value)}
                   placeholder="1,000,000"
-                  className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  className="input pl-8"
                 />
               </div>
             </div>
@@ -520,22 +537,30 @@ export default function NewFundsPage() {
         {/* Summary Cards */}
         {totalAmount > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="card bg-blue-50">
-              <div className="text-sm text-blue-600">Total to Allocate</div>
-              <div className="text-2xl font-bold text-blue-900">{formatCurrency(totalAmount)}</div>
+            <div className="card bg-blue-50 border-blue-200">
+              <div className="metric-card metric-card-blue">
+                <div className="metric-label">Total to Allocate</div>
+                <div className="metric-value-lg text-blue-900">{formatCurrency(totalAmount)}</div>
+              </div>
             </div>
-            <div className="card bg-green-50">
-              <div className="text-sm text-green-600">Allocated</div>
-              <div className="text-2xl font-bold text-green-900">{formatCurrency(totalAllocated)}</div>
+            <div className="card bg-emerald-50 border-emerald-200">
+              <div className="metric-card metric-card-green">
+                <div className="metric-label">Allocated</div>
+                <div className="metric-value-lg text-emerald-900">{formatCurrency(totalAllocated)}</div>
+              </div>
             </div>
-            <div className="card bg-yellow-50">
-              <div className="text-sm text-yellow-600">Remaining</div>
-              <div className="text-2xl font-bold text-yellow-900">{formatCurrency(remainingToAllocate)}</div>
+            <div className="card bg-amber-50 border-amber-200">
+              <div className="metric-card metric-card-orange">
+                <div className="metric-label">Remaining</div>
+                <div className="metric-value-lg text-amber-900">{formatCurrency(remainingToAllocate)}</div>
+              </div>
             </div>
-            <div className="card bg-purple-50">
-              <div className="text-sm text-purple-600">% Allocated</div>
-              <div className="text-2xl font-bold text-purple-900">
-                {totalAmount > 0 ? ((totalAllocated / totalAmount) * 100).toFixed(1) : 0}%
+            <div className="card bg-violet-50 border-violet-200">
+              <div className="metric-card metric-card-purple">
+                <div className="metric-label">% Allocated</div>
+                <div className="metric-value-lg text-violet-900">
+                  {totalAmount > 0 ? ((totalAllocated / totalAmount) * 100).toFixed(1) : 0}%
+                </div>
               </div>
             </div>
           </div>
@@ -543,88 +568,92 @@ export default function NewFundsPage() {
 
         {/* Industry Allocation Table */}
         {industries.length > 0 && (
-          <div className="card">
-            <h2 className="text-lg font-semibold mb-4">Industry Allocation</h2>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
+          <div className="card p-0 overflow-hidden">
+            <div className="px-6 py-4 border-b border-zinc-100">
+              <h2 className="text-base font-semibold text-zinc-900">Industry Allocation</h2>
+            </div>
+            <div className="table-container mx-0">
+              <table className="table">
+                <thead>
                   <tr>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase" title="Include in allocation">Incl.</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Industry</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">S&P Weight</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">CCM Weight</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Adjust (bps)</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Pro-Forma</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Active</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">$ Allocation</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Remaining</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    <th className="text-center w-16" title="Include in allocation">Incl.</th>
+                    <th>Industry</th>
+                    <th className="text-right">S&P Weight</th>
+                    <th className="text-right">CCM Weight</th>
+                    <th className="text-center">Adjust (bps)</th>
+                    <th className="text-right">Pro-Forma</th>
+                    <th className="text-right">Active</th>
+                    <th className="text-right">$ Allocation</th>
+                    <th className="text-right">Remaining</th>
+                    <th className="text-center">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="tabular-nums">
                   {industries.map((industry) => {
                     const industryAllocations = getIndustryAllocations(industry.industry);
                     const industryRemaining = getIndustryRemaining(industry);
                     const isExpanded = expandedIndustry === industry.industry;
 
                     return (
-                      <>
-                        <tr key={industry.industry} className={`hover:bg-gray-50 ${industry.excluded ? 'bg-gray-100 opacity-60' : ''}`}>
-                          <td className="px-4 py-3 text-center">
+                      <Fragment key={industry.industry}>
+                        <tr className={`transition-colors ${industry.excluded ? 'bg-zinc-100/50 opacity-60' : ''}`}>
+                          <td className="text-center">
                             <input
                               type="checkbox"
                               checked={!industry.excluded}
                               onChange={() => handleExclusionToggle(industry.industry)}
-                              className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                              className="h-4 w-4 text-blue-600 border-zinc-300 rounded focus:ring-blue-500"
                               title={industry.excluded ? 'Include in allocation' : 'Exclude from allocation'}
                             />
                           </td>
-                          <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                          <td>
                             <button
                               onClick={() => setExpandedIndustry(isExpanded ? null : industry.industry)}
-                              className="flex items-center"
+                              className="flex items-center gap-2 font-medium text-zinc-900"
                             >
-                              <span className="mr-2">{isExpanded ? '▼' : '▶'}</span>
+                              <svg className={`h-4 w-4 text-zinc-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                              </svg>
                               {industry.industry}
                             </button>
                           </td>
-                          <td className="px-4 py-3 text-sm text-right text-gray-600">
+                          <td className="text-right text-zinc-600">
                             {formatPct(industry.sp500_weight)}
                           </td>
-                          <td className="px-4 py-3 text-sm text-right text-gray-600">
+                          <td className="text-right text-zinc-600">
                             {formatPct(industry.ccm_weight)}
                           </td>
-                          <td className="px-4 py-3 text-center">
+                          <td className="text-center">
                             <input
                               type="number"
                               value={industry.adjustment_bps}
                               onChange={(e) => handleAdjustmentChange(industry.industry, parseInt(e.target.value) || 0)}
                               disabled={industry.excluded}
-                              className={`w-20 px-2 py-1 text-sm text-center border border-gray-300 rounded ${industry.excluded ? 'bg-gray-200 cursor-not-allowed' : ''}`}
+                              className={`w-20 px-2 py-1 text-sm text-center border border-zinc-300 rounded-lg disabled:bg-zinc-100 disabled:cursor-not-allowed`}
                             />
                           </td>
-                          <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
+                          <td className="text-right font-medium text-zinc-900">
                             {formatPct(industry.proforma_weight)}
                           </td>
-                          <td className={`px-4 py-3 text-sm text-right font-medium ${
-                            industry.active_weight > 0 ? 'text-green-600' :
-                            industry.active_weight < 0 ? 'text-red-600' : 'text-gray-600'
+                          <td className={`text-right font-medium ${
+                            industry.active_weight > 0 ? 'value-positive' :
+                            industry.active_weight < 0 ? 'value-negative' : 'text-zinc-600'
                           }`}>
                             {industry.active_weight > 0 ? '+' : ''}{formatPct(industry.active_weight)}
                           </td>
-                          <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
+                          <td className="text-right font-medium text-zinc-900">
                             {formatCurrency(industry.dollar_allocation)}
                           </td>
-                          <td className={`px-4 py-3 text-sm text-right font-medium ${
-                            industryRemaining < 1 ? 'text-green-600' : 'text-yellow-600'
+                          <td className={`text-right font-medium ${
+                            industryRemaining < 1 ? 'value-positive' : 'text-amber-600'
                           }`}>
                             {formatCurrency(industryRemaining)}
                           </td>
-                          <td className="px-4 py-3 text-center">
+                          <td className="text-center">
                             <button
                               onClick={() => addTickerToIndustry(industry.industry)}
                               disabled={industry.excluded}
-                              className={`text-sm ${industry.excluded ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
+                              className="btn btn-ghost btn-xs text-blue-600 disabled:text-zinc-400 disabled:cursor-not-allowed"
                             >
                               + Add Ticker
                             </button>
@@ -634,67 +663,70 @@ export default function NewFundsPage() {
                         {/* Expanded ticker allocations */}
                         {isExpanded && (
                           <tr>
-                            <td colSpan={10} className="px-4 py-3 bg-gray-50">
-                              <div className="ml-6">
+                            <td colSpan={10} className="p-0 bg-zinc-50/50">
+                              <div className="px-6 py-4 pl-12">
                                 {industryAllocations.length === 0 ? (
-                                  <p className="text-sm text-gray-500 italic">
+                                  <p className="text-sm text-zinc-500 italic">
                                     No tickers allocated. Click "Add Ticker" to begin.
                                   </p>
                                 ) : (
-                                  <table className="min-w-full">
+                                  <table className="w-full text-sm">
                                     <thead>
-                                      <tr className="text-xs text-gray-500">
-                                        <th className="px-2 py-1 text-left">Ticker</th>
-                                        <th className="px-2 py-1 text-left">Name</th>
-                                        <th className="px-2 py-1 text-right">% of Industry</th>
-                                        <th className="px-2 py-1 text-right">$ Amount</th>
-                                        <th className="px-2 py-1 text-right">Price</th>
-                                        <th className="px-2 py-1 text-right">Shares</th>
-                                        <th className="px-2 py-1"></th>
+                                      <tr className="text-xs text-zinc-500 uppercase tracking-wider">
+                                        <th className="px-2 py-2 text-left font-medium">Ticker</th>
+                                        <th className="px-2 py-2 text-left font-medium">Name</th>
+                                        <th className="px-2 py-2 text-right font-medium">% of Industry</th>
+                                        <th className="px-2 py-2 text-right font-medium">$ Amount</th>
+                                        <th className="px-2 py-2 text-right font-medium">Price</th>
+                                        <th className="px-2 py-2 text-right font-medium">Shares</th>
+                                        <th className="px-2 py-2"></th>
                                       </tr>
                                     </thead>
-                                    <tbody>
+                                    <tbody className="tabular-nums">
                                       {industryAllocations.map((alloc) => (
-                                        <tr key={alloc.id} className="text-sm">
-                                          <td className="px-2 py-1">
+                                        <tr key={alloc.id} className="border-t border-zinc-100">
+                                          <td className="px-2 py-2">
                                             <input
                                               type="text"
                                               value={alloc.ticker}
                                               onChange={(e) => updateTickerAllocation(alloc.id, 'ticker', e.target.value.toUpperCase())}
                                               onBlur={(e) => updateTickerAllocation(alloc.id, 'ticker', e.target.value.toUpperCase())}
                                               placeholder="AAPL"
-                                              className="w-20 px-2 py-1 border border-gray-300 rounded text-sm"
+                                              className="w-20 px-2 py-1 border border-zinc-300 rounded text-sm"
                                             />
                                           </td>
-                                          <td className="px-2 py-1 text-gray-600">
+                                          <td className="px-2 py-2 text-zinc-600">
                                             {alloc.security_name || '-'}
                                           </td>
-                                          <td className="px-2 py-1 text-right">
-                                            <input
-                                              type="number"
-                                              value={alloc.pct_of_industry || ''}
-                                              onChange={(e) => updateTickerAllocation(alloc.id, 'pct_of_industry', e.target.value)}
-                                              placeholder="100"
-                                              min="0"
-                                              max="100"
-                                              className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-right"
-                                            />%
+                                          <td className="px-2 py-2 text-right">
+                                            <div className="flex items-center justify-end">
+                                              <input
+                                                type="number"
+                                                value={alloc.pct_of_industry || ''}
+                                                onChange={(e) => updateTickerAllocation(alloc.id, 'pct_of_industry', e.target.value)}
+                                                placeholder="100"
+                                                min="0"
+                                                max="100"
+                                                className="w-20 px-2 py-1 border border-zinc-300 rounded text-sm text-right"
+                                              />
+                                              <span className="ml-1">%</span>
+                                            </div>
                                           </td>
-                                          <td className="px-2 py-1 text-right font-medium">
+                                          <td className="px-2 py-2 text-right font-medium">
                                             {formatCurrency(alloc.dollar_amount)}
                                           </td>
-                                          <td className="px-2 py-1 text-right text-gray-600">
+                                          <td className="px-2 py-2 text-right text-zinc-600">
                                             {alloc.price > 0 ? `$${alloc.price.toFixed(2)}` : '-'}
                                           </td>
-                                          <td className="px-2 py-1 text-right font-medium text-blue-600">
+                                          <td className="px-2 py-2 text-right font-medium text-blue-600">
                                             {alloc.shares > 0 ? alloc.shares.toLocaleString() : '-'}
                                           </td>
-                                          <td className="px-2 py-1">
+                                          <td className="px-2 py-2 text-center">
                                             <button
                                               onClick={() => removeTickerAllocation(alloc.id)}
-                                              className="text-red-500 hover:text-red-700"
+                                              className="text-red-500 hover:text-red-700 font-medium"
                                             >
-                                              ✕
+                                              Remove
                                             </button>
                                           </td>
                                         </tr>
@@ -706,7 +738,7 @@ export default function NewFundsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -720,31 +752,39 @@ export default function NewFundsPage() {
           <div className="card">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-medium">Ready to Execute</h3>
-                <p className="text-sm text-gray-500">
-                  {tickerAllocations.filter(a => a.ticker && a.shares > 0).length} tickers with {' '}
-                  {tickerAllocations.filter(a => a.shares > 0).reduce((sum, a) => sum + a.shares, 0).toLocaleString()} total shares
+                <h3 className="font-semibold text-zinc-900">Ready to Execute</h3>
+                <p className="text-sm text-zinc-500">
+                  {tickerAllocations.filter(a => a.ticker && a.shares > 0).length} tickers with{' '}
+                  <span className="font-medium tabular-nums">
+                    {tickerAllocations.filter(a => a.shares > 0).reduce((sum, a) => sum + a.shares, 0).toLocaleString()}
+                  </span> total shares
                 </p>
               </div>
               <button
                 onClick={handleExecute}
                 disabled={loading || !selectedAccount}
-                className={`px-6 py-3 rounded-lg font-semibold text-white ${
-                  loading || !selectedAccount
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-green-600 hover:bg-green-700'
-                }`}
+                className="btn btn-primary"
               >
-                {loading ? 'Generating...' : 'Execute - Download Schwab CSV'}
+                {loading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Generating...
+                  </>
+                ) : 'Download Schwab CSV'}
               </button>
             </div>
           </div>
         )}
 
         {/* Help Section */}
-        <div className="card bg-gray-50">
-          <h3 className="font-medium mb-2">Instructions</h3>
-          <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
+        <div className="card bg-zinc-50 border-zinc-200">
+          <div className="card-header">
+            <h3 className="card-title">Instructions</h3>
+          </div>
+          <ol className="list-decimal list-inside text-sm text-zinc-600 space-y-1.5">
             <li>Upload a CSV file with S&P 500 industry weights (columns: Industry, Weight)</li>
             <li><strong>Optional:</strong> Upload a portfolio CSV to auto-populate tickers (columns: Ticker, Industry, % Allocation)</li>
             <li>Select the account to allocate new funds to</li>
@@ -752,30 +792,31 @@ export default function NewFundsPage() {
             <li><strong>Optional:</strong> Uncheck industries to exclude them (zero allocation) - remaining weights auto-normalize</li>
             <li>Optionally adjust CCM weights using basis point adjustments</li>
             <li>Click on an industry row to expand and add/edit tickers manually</li>
-            <li>Click "Execute" to generate a Schwab-compatible CSV for bulk upload</li>
+            <li>Click "Download Schwab CSV" to generate a Schwab-compatible CSV for bulk upload</li>
           </ol>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-3 bg-blue-50 rounded">
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
               <p className="text-sm text-blue-800">
-                <strong>Industry Weights CSV:</strong><br/>
-                Industry, Weight<br/>
-                Information Technology, 28.5<br/>
-                Health Care, 13.5
+                <strong>Industry Weights CSV:</strong><br />
+                <code className="text-xs">Industry, Weight</code><br />
+                <code className="text-xs">Information Technology, 28.5</code><br />
+                <code className="text-xs">Health Care, 13.5</code>
               </p>
             </div>
-            <div className="p-3 bg-green-50 rounded">
-              <p className="text-sm text-green-800">
-                <strong>Portfolio CSV:</strong><br/>
-                Ticker, Industry, Allocation<br/>
-                AAPL, Information Technology, 50<br/>
-                MSFT, Information Technology, 50
+            <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+              <p className="text-sm text-emerald-800">
+                <strong>Portfolio CSV:</strong><br />
+                <code className="text-xs">Ticker, Industry, Allocation</code><br />
+                <code className="text-xs">AAPL, Information Technology, 50</code><br />
+                <code className="text-xs">MSFT, Information Technology, 50</code>
               </p>
             </div>
-          </div>
-          <div className="mt-4 p-3 bg-purple-50 rounded">
-            <p className="text-sm text-purple-800">
-              <strong>Schwab Output CSV:</strong> Account Number, B (Buy), Shares, Ticker, M (Market)
-            </p>
+            <div className="p-3 bg-violet-50 rounded-lg border border-violet-200">
+              <p className="text-sm text-violet-800">
+                <strong>Schwab Output CSV:</strong><br />
+                <code className="text-xs">Account Number, B (Buy), Shares, Ticker, M (Market)</code>
+              </p>
+            </div>
           </div>
         </div>
       </div>

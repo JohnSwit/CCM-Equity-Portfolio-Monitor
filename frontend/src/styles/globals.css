@@ -3,49 +3,437 @@
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-rgb: 255, 255, 255;
+  /* Primary palette - refined blue */
+  --primary-50: #eff6ff;
+  --primary-100: #dbeafe;
+  --primary-500: #3b82f6;
+  --primary-600: #2563eb;
+  --primary-700: #1d4ed8;
+
+  /* Neutral palette - warmer grays */
+  --gray-50: #fafafa;
+  --gray-100: #f4f4f5;
+  --gray-200: #e4e4e7;
+  --gray-300: #d4d4d8;
+  --gray-400: #a1a1aa;
+  --gray-500: #71717a;
+  --gray-600: #52525b;
+  --gray-700: #3f3f46;
+  --gray-800: #27272a;
+  --gray-900: #18181b;
+
+  /* Semantic colors */
+  --success: #10b981;
+  --success-light: #d1fae5;
+  --danger: #ef4444;
+  --danger-light: #fee2e2;
+  --warning: #f59e0b;
+  --warning-light: #fef3c7;
+
+  /* Spacing scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Monaco', monospace;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  /* Border radius */
+  --radius-sm: 0.375rem;
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: rgb(var(--background-rgb));
+@layer base {
+  * {
+    @apply border-zinc-200;
+  }
+
+  body {
+    @apply bg-zinc-50 text-zinc-900 antialiased;
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  /* Refined heading styles */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight text-zinc-900;
+  }
+
+  h1 { @apply text-2xl; }
+  h2 { @apply text-xl; }
+  h3 { @apply text-lg; }
+
+  /* Monospace numbers for better alignment */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 @layer components {
+  /* Modern button styles */
   .btn {
-    @apply px-4 py-2 rounded-md font-medium transition-colors;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-150;
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-primary {
-    @apply bg-blue-600 text-white hover:bg-blue-700;
+    @apply bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800;
+    @apply shadow-sm hover:shadow;
   }
 
   .btn-secondary {
-    @apply bg-gray-200 text-gray-800 hover:bg-gray-300;
+    @apply bg-white text-zinc-700 border border-zinc-300 hover:bg-zinc-50 hover:border-zinc-400;
+    @apply shadow-sm;
   }
 
   .btn-danger {
-    @apply bg-red-600 text-white hover:bg-red-700;
+    @apply bg-red-600 text-white hover:bg-red-700 active:bg-red-800;
   }
 
+  .btn-ghost {
+    @apply text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .btn-xs {
+    @apply px-2 py-1 text-xs rounded-md;
+  }
+
+  /* Clean card design */
   .card {
-    @apply bg-white rounded-lg shadow-md p-6;
+    @apply bg-white rounded-xl border border-zinc-200/80 p-6;
+    box-shadow: var(--shadow-sm);
   }
 
+  .card-header {
+    @apply flex items-center justify-between pb-4 mb-4 border-b border-zinc-100;
+  }
+
+  .card-title {
+    @apply text-base font-semibold text-zinc-900;
+  }
+
+  .card-subtitle {
+    @apply text-sm text-zinc-500 mt-0.5;
+  }
+
+  /* Form inputs */
   .input {
-    @apply border border-gray-300 rounded-md px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500;
+    @apply w-full px-3 py-2 text-sm bg-white border border-zinc-300 rounded-lg;
+    @apply placeholder:text-zinc-400;
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500;
+    @apply transition-colors duration-150;
+  }
+
+  .input-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+
+  .select {
+    @apply w-full px-3 py-2 text-sm bg-white border border-zinc-300 rounded-lg;
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500;
+    @apply transition-colors duration-150 cursor-pointer;
+  }
+
+  .label {
+    @apply block text-xs font-medium text-zinc-600 mb-1.5;
+  }
+
+  /* Clean table design */
+  .table-container {
+    @apply overflow-x-auto -mx-6;
   }
 
   .table {
-    @apply w-full border-collapse;
+    @apply w-full text-sm;
+  }
+
+  .table thead {
+    @apply bg-zinc-50/80 border-y border-zinc-100;
   }
 
   .table th {
-    @apply bg-gray-100 px-4 py-2 text-left font-semibold text-sm;
+    @apply px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wider;
+  }
+
+  .table th.text-right {
+    @apply text-right;
+  }
+
+  .table th.text-center {
+    @apply text-center;
   }
 
   .table td {
-    @apply px-4 py-2 border-t;
+    @apply px-4 py-3 text-zinc-700 border-b border-zinc-100;
+  }
+
+  .table tbody tr:hover {
+    @apply bg-zinc-50/50;
+  }
+
+  .table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  /* KPI / Metric cards */
+  .metric-card {
+    @apply relative pl-4 py-1;
+  }
+
+  .metric-card::before {
+    content: '';
+    @apply absolute left-0 top-0 bottom-0 w-1 rounded-full;
+  }
+
+  .metric-card-blue::before { @apply bg-blue-500; }
+  .metric-card-green::before { @apply bg-emerald-500; }
+  .metric-card-purple::before { @apply bg-violet-500; }
+  .metric-card-orange::before { @apply bg-orange-500; }
+  .metric-card-teal::before { @apply bg-teal-500; }
+  .metric-card-red::before { @apply bg-red-500; }
+
+  .metric-label {
+    @apply text-xs font-medium text-zinc-500 uppercase tracking-wide;
+  }
+
+  .metric-value {
+    @apply text-lg font-semibold text-zinc-900 tabular-nums;
+  }
+
+  .metric-value-lg {
+    @apply text-2xl font-bold text-zinc-900 tabular-nums;
+  }
+
+  .metric-value-sm {
+    @apply text-base font-semibold text-zinc-900 tabular-nums;
+  }
+
+  /* Status badges */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20;
+  }
+
+  .badge-danger {
+    @apply bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20;
+  }
+
+  .badge-warning {
+    @apply bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20;
+  }
+
+  .badge-neutral {
+    @apply bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-500/20;
+  }
+
+  .badge-blue {
+    @apply bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20;
+  }
+
+  /* Value colors for gains/losses */
+  .value-positive {
+    @apply text-emerald-600 font-medium;
+  }
+
+  .value-negative {
+    @apply text-red-600 font-medium;
+  }
+
+  .value-neutral {
+    @apply text-zinc-500;
+  }
+
+  /* Pill tabs */
+  .pill-tabs {
+    @apply inline-flex gap-1 p-1 bg-zinc-100 rounded-lg;
+  }
+
+  .pill-tab {
+    @apply px-3 py-1.5 text-sm font-medium rounded-md transition-all duration-150;
+    @apply text-zinc-600 hover:text-zinc-900;
+  }
+
+  .pill-tab-active {
+    @apply bg-white text-zinc-900 shadow-sm;
+  }
+
+  /* Section dividers */
+  .section-header {
+    @apply flex items-center justify-between mb-4;
+  }
+
+  .section-title {
+    @apply text-base font-semibold text-zinc-900;
+  }
+
+  .section-subtitle {
+    @apply text-sm text-zinc-500;
+  }
+
+  /* Loading states */
+  .skeleton {
+    @apply animate-pulse bg-zinc-200 rounded;
+  }
+
+  .loading-spinner {
+    @apply animate-spin h-5 w-5 text-blue-600;
+  }
+
+  /* Alert boxes */
+  .alert {
+    @apply p-4 rounded-lg text-sm;
+  }
+
+  .alert-info {
+    @apply bg-blue-50 text-blue-800 border border-blue-200;
+  }
+
+  .alert-success {
+    @apply bg-emerald-50 text-emerald-800 border border-emerald-200;
+  }
+
+  .alert-warning {
+    @apply bg-amber-50 text-amber-800 border border-amber-200;
+  }
+
+  .alert-danger {
+    @apply bg-red-50 text-red-800 border border-red-200;
+  }
+
+  /* Modal backdrop */
+  .modal-backdrop {
+    @apply fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50;
+  }
+
+  .modal {
+    @apply bg-white rounded-xl shadow-xl max-h-[90vh] overflow-hidden;
+  }
+
+  .modal-header {
+    @apply px-6 py-4 border-b border-zinc-100;
+  }
+
+  .modal-body {
+    @apply px-6 py-4 overflow-y-auto;
+  }
+
+  .modal-footer {
+    @apply px-6 py-4 border-t border-zinc-100 flex justify-end gap-3;
+  }
+
+  /* Dropdown menus */
+  .dropdown-menu {
+    @apply absolute mt-2 bg-white rounded-lg shadow-lg border border-zinc-200 py-1 z-50 min-w-[12rem];
+  }
+
+  .dropdown-item {
+    @apply block w-full px-4 py-2 text-sm text-left text-zinc-700 hover:bg-zinc-50 transition-colors;
+  }
+
+  .dropdown-item-active {
+    @apply bg-blue-50 text-blue-700;
+  }
+
+  /* Empty states */
+  .empty-state {
+    @apply py-12 text-center;
+  }
+
+  .empty-state-icon {
+    @apply mx-auto h-12 w-12 text-zinc-400;
+  }
+
+  .empty-state-title {
+    @apply mt-4 text-sm font-medium text-zinc-900;
+  }
+
+  .empty-state-description {
+    @apply mt-1 text-sm text-zinc-500;
+  }
+
+  /* Tooltips */
+  [data-tooltip] {
+    @apply relative;
+  }
+
+  [data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    @apply absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1;
+    @apply text-xs text-white bg-zinc-800 rounded whitespace-nowrap;
+  }
+
+  /* Progress bar */
+  .progress-bar {
+    @apply h-2 bg-zinc-200 rounded-full overflow-hidden;
+  }
+
+  .progress-bar-fill {
+    @apply h-full rounded-full transition-all duration-300;
+  }
+
+  /* Divider */
+  .divider {
+    @apply border-t border-zinc-200 my-4;
+  }
+
+  .divider-light {
+    @apply border-t border-zinc-100 my-3;
+  }
+}
+
+/* Custom scrollbar */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #d4d4d8 transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #d4d4d8;
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: #a1a1aa;
+  }
+
+  /* Focus visible utilities */
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2;
+  }
+
+  /* Transition utilities */
+  .transition-base {
+    @apply transition-all duration-150 ease-in-out;
   }
 }

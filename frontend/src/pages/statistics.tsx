@@ -4,6 +4,29 @@ import { api } from '@/lib/api';
 import { format, subDays, subMonths, startOfYear } from 'date-fns';
 import Select from 'react-select';
 
+// Custom styles for react-select to match the design system
+const selectStyles = {
+  control: (base: any, state: any) => ({
+    ...base,
+    minHeight: '38px',
+    borderColor: state.isFocused ? '#3b82f6' : '#d4d4d8',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(59, 130, 246, 0.2)' : 'none',
+    '&:hover': { borderColor: '#a1a1aa' },
+    borderRadius: '0.5rem',
+    fontSize: '0.875rem',
+  }),
+  option: (base: any, state: any) => ({
+    ...base,
+    backgroundColor: state.isSelected ? '#3b82f6' : state.isFocused ? '#f4f4f5' : 'white',
+    color: state.isSelected ? 'white' : '#27272a',
+    fontSize: '0.875rem',
+    '&:active': { backgroundColor: '#2563eb' },
+  }),
+  placeholder: (base: any) => ({ ...base, color: '#a1a1aa', fontSize: '0.875rem' }),
+  singleValue: (base: any) => ({ ...base, color: '#27272a', fontSize: '0.875rem' }),
+  menu: (base: any) => ({ ...base, borderRadius: '0.5rem', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }),
+};
+
 // Time period options
 type TimePeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
 type BrinsonPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
@@ -363,35 +386,40 @@ export default function PortfolioStatisticsPage() {
       <div className="space-y-6">
         {/* Header */}
         <div className="card">
-          <h1 className="text-2xl font-bold mb-4">Portfolio Statistics & Analytics</h1>
+          <div className="card-header">
+            <div>
+              <h1 className="card-title text-xl">Portfolio Statistics & Analytics</h1>
+              <p className="card-subtitle">Risk metrics, attribution analysis, and factor exposures</p>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Portfolio View</label>
+              <label className="label">Portfolio View</label>
               <Select
                 options={viewOptions}
                 value={viewOptions.find((o) => o.value === selectedView)}
                 onChange={(option) => setSelectedView(option?.value)}
                 placeholder="Select view..."
-                className="w-full"
+                styles={selectStyles}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Benchmark</label>
+              <label className="label">Benchmark</label>
               <select
                 value={benchmark}
                 onChange={(e) => setBenchmark(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                className="select"
               >
                 <option value="SP500">S&P 500</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Analysis Window (Days)</label>
+              <label className="label">Analysis Window (Days)</label>
               <select
                 value={window}
                 onChange={(e) => setWindow(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                className="select"
               >
                 <option value="63">3 Months (~63 days)</option>
                 <option value="126">6 Months (~126 days)</option>
@@ -405,55 +433,68 @@ export default function PortfolioStatisticsPage() {
         {/* Data Status */}
         {dataStatus && (
           <div className="card">
-            <h2 className="text-xl font-bold mb-4">Data Status & Management</h2>
+            <div className="card-header">
+              <h2 className="card-title">Data Status & Management</h2>
+            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Classifications Status */}
-              <div className="border rounded p-4">
-                <h3 className="font-semibold text-gray-700 mb-2">Security Classifications</h3>
+              <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/50">
+                <h3 className="text-sm font-semibold text-zinc-700 mb-3">Security Classifications</h3>
                 <div className="space-y-2 text-sm">
-                  <div>
-                    <span className="text-gray-600">Coverage:</span>{' '}
-                    <span className="font-medium">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Coverage:</span>
+                    <span className="font-medium text-zinc-800 tabular-nums">
                       {dataStatus.classifications.classified_securities} / {dataStatus.classifications.total_securities} ({dataStatus.classifications.coverage_percent}%)
                     </span>
                   </div>
                   {dataStatus.classifications.last_updated && (
-                    <div>
-                      <span className="text-gray-600">Last Updated:</span>{' '}
-                      <span className="font-medium text-xs">{new Date(dataStatus.classifications.last_updated).toLocaleString()}</span>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-500">Last Updated:</span>
+                      <span className="font-medium text-xs text-zinc-700">{new Date(dataStatus.classifications.last_updated).toLocaleString()}</span>
                     </div>
                   )}
                   <div>
-                    <span className="text-gray-600">Sources:</span>{' '}
-                    <div className="text-xs mt-1">
+                    <span className="text-zinc-500">Sources:</span>
+                    <div className="text-xs mt-1 space-y-0.5">
                       {Object.entries(dataStatus.classifications.sources || {}).map(([source, count]: [string, any]) => (
-                        <div key={source}>{source}: {count}</div>
+                        <div key={source} className="flex justify-between">
+                          <span className="text-zinc-600">{source}:</span>
+                          <span className="font-medium tabular-nums">{count}</span>
+                        </div>
                       ))}
                     </div>
                   </div>
                   <button
                     onClick={handleRefreshClassifications}
                     disabled={refreshingData === 'classifications'}
-                    className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
+                    className="btn btn-primary w-full mt-3"
                   >
-                    {refreshingData === 'classifications' ? 'Refreshing...' : 'Refresh Classifications'}
+                    {refreshingData === 'classifications' ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Refreshing...
+                      </>
+                    ) : 'Refresh Classifications'}
                   </button>
                 </div>
               </div>
 
               {/* Benchmark Status */}
-              <div className="border rounded p-4">
-                <h3 className="font-semibold text-gray-700 mb-2">S&P 500 Benchmark</h3>
+              <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/50">
+                <h3 className="text-sm font-semibold text-zinc-700 mb-3">S&P 500 Benchmark</h3>
                 <div className="space-y-2 text-sm">
                   {Object.entries(dataStatus.benchmarks || {}).map(([code, data]: [string, any]) => (
-                    <div key={code} className="border-b pb-2 last:border-b-0">
-                      <div className="font-medium">{code}</div>
-                      <div className="text-xs text-gray-600">
+                    <div key={code} className="border-b border-zinc-200 pb-2 last:border-b-0">
+                      <div className="font-medium text-zinc-800">{code}</div>
+                      <div className="text-xs text-zinc-500">
                         {data.constituent_count} constituents
                       </div>
                       {data.as_of_date && (
-                        <div className="text-xs text-gray-600">
+                        <div className="text-xs text-zinc-500">
                           As of: {data.as_of_date}
                         </div>
                       )}
@@ -462,76 +503,94 @@ export default function PortfolioStatisticsPage() {
                   <button
                     onClick={handleRefreshBenchmarks}
                     disabled={refreshingData === 'benchmarks'}
-                    className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-400"
+                    className="btn btn-primary w-full mt-3"
                   >
-                    {refreshingData === 'benchmarks' ? 'Refreshing...' : 'Refresh S&P 500'}
+                    {refreshingData === 'benchmarks' ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Refreshing...
+                      </>
+                    ) : 'Refresh S&P 500'}
                   </button>
                 </div>
               </div>
-
             </div>
 
             {/* Data Readiness Indicators */}
-            <div className="mt-6 p-4 bg-gray-50 rounded">
-              <h3 className="font-semibold text-gray-700 mb-2">Feature Readiness</h3>
-              <div className="flex gap-4">
+            <div className="mt-6 p-4 bg-zinc-50 rounded-lg border border-zinc-100">
+              <h3 className="text-sm font-semibold text-zinc-700 mb-3">Feature Readiness</h3>
+              <div className="flex flex-wrap gap-4">
                 <div className="flex items-center gap-2">
-                  <span className={`w-3 h-3 rounded-full ${dataStatus.data_readiness.brinson_attribution_ready ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                  <span className="text-sm">Brinson Attribution</span>
+                  <span className={`w-2.5 h-2.5 rounded-full ${dataStatus.data_readiness.brinson_attribution_ready ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                  <span className="text-sm text-zinc-700">Brinson Attribution</span>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {loading && <div className="text-center py-8">Loading statistics...</div>}
+        {loading && (
+          <div className="card">
+            <div className="flex items-center justify-center py-12 gap-3">
+              <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span className="text-zinc-500">Loading statistics...</span>
+            </div>
+          </div>
+        )}
 
         {!loading && selectedView && (
           <>
             {/* Volatility & Risk Metrics */}
             {volatilityData && !volatilityData.error && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Risk & Volatility Metrics</h2>
+                <div className="card-header">
+                  <h2 className="card-title">Risk & Volatility Metrics</h2>
+                  <span className="text-xs text-zinc-500">vs {volatilityData.benchmark} | {volatilityData.window_days} days</span>
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="border-l-4 border-red-500 pl-4">
-                    <div className="text-sm text-gray-600">Annualized Volatility</div>
-                    <div className="text-2xl font-bold">{formatPercent(volatilityData.annualized_volatility)}</div>
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">Annualized Volatility</div>
+                    <div className="metric-value-lg">{formatPercent(volatilityData.annualized_volatility)}</div>
                   </div>
-                  <div className="border-l-4 border-orange-500 pl-4">
-                    <div className="text-sm text-gray-600">Tracking Error</div>
-                    <div className="text-2xl font-bold">{formatPercent(volatilityData.tracking_error)}</div>
+                  <div className="metric-card metric-card-orange">
+                    <div className="metric-label">Tracking Error</div>
+                    <div className="metric-value-lg">{formatPercent(volatilityData.tracking_error)}</div>
                   </div>
-                  <div className="border-l-4 border-blue-500 pl-4">
-                    <div className="text-sm text-gray-600">Information Ratio</div>
-                    <div className="text-2xl font-bold">{formatNumber(volatilityData.information_ratio)}</div>
+                  <div className="metric-card metric-card-blue">
+                    <div className="metric-label">Information Ratio</div>
+                    <div className="metric-value-lg">{formatNumber(volatilityData.information_ratio)}</div>
                   </div>
-                  <div className="border-l-4 border-purple-500 pl-4">
-                    <div className="text-sm text-gray-600">Sortino Ratio</div>
-                    <div className="text-2xl font-bold">{formatNumber(volatilityData.sortino_ratio)}</div>
-                  </div>
-                </div>
-
-                <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
-                    <div className="text-sm text-gray-600">Downside Deviation</div>
-                    <div className="text-lg font-semibold">{formatPercent(volatilityData.downside_deviation)}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-600">Mean Return (Ann.)</div>
-                    <div className="text-lg font-semibold">{formatPercent(volatilityData.mean_return)}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-600">Skewness</div>
-                    <div className="text-lg font-semibold">{formatNumber(volatilityData.skewness)}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-600">Kurtosis</div>
-                    <div className="text-lg font-semibold">{formatNumber(volatilityData.kurtosis)}</div>
+                  <div className="metric-card metric-card-purple">
+                    <div className="metric-label">Sortino Ratio</div>
+                    <div className="metric-value-lg">{formatNumber(volatilityData.sortino_ratio)}</div>
                   </div>
                 </div>
 
-                <div className="mt-4 text-xs text-gray-500">
-                  vs {volatilityData.benchmark} | Window: {volatilityData.window_days} days
+                <div className="divider"></div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Downside Deviation</div>
+                    <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.downside_deviation)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Mean Return (Ann.)</div>
+                    <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.mean_return)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Skewness</div>
+                    <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatNumber(volatilityData.skewness)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Kurtosis</div>
+                    <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatNumber(volatilityData.kurtosis)}</div>
+                  </div>
                 </div>
               </div>
             )}
@@ -539,66 +598,75 @@ export default function PortfolioStatisticsPage() {
             {/* Drawdown Analysis */}
             {drawdownData && !drawdownData.error && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Drawdown Analysis</h2>
+                <div className="card-header">
+                  <h2 className="card-title">Drawdown Analysis</h2>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                  <div className="border-l-4 border-red-600 pl-4">
-                    <div className="text-sm text-gray-600">Max Drawdown</div>
-                    <div className="text-2xl font-bold text-red-600">{formatPercent(drawdownData.max_drawdown)}</div>
-                    <div className="text-xs text-gray-500 mt-1">
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">Max Drawdown</div>
+                    <div className="metric-value-lg text-red-600">{formatPercent(drawdownData.max_drawdown)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">
                       {drawdownData.max_drawdown_date && format(new Date(drawdownData.max_drawdown_date), 'MMM d, yyyy')}
                     </div>
                   </div>
-                  <div className="border-l-4 border-orange-500 pl-4">
-                    <div className="text-sm text-gray-600">Current Drawdown</div>
-                    <div className="text-2xl font-bold">{formatPercent(drawdownData.current_drawdown)}</div>
+                  <div className="metric-card metric-card-orange">
+                    <div className="metric-label">Current Drawdown</div>
+                    <div className="metric-value-lg">{formatPercent(drawdownData.current_drawdown)}</div>
                   </div>
-                  <div className="border-l-4 border-yellow-500 pl-4">
-                    <div className="text-sm text-gray-600">Ulcer Index</div>
-                    <div className="text-2xl font-bold">{formatNumber(drawdownData.ulcer_index)}</div>
-                    <div className="text-xs text-gray-500 mt-1">RMS of drawdowns</div>
+                  <div className="metric-card metric-card-teal">
+                    <div className="metric-label">Ulcer Index</div>
+                    <div className="metric-value-lg">{formatNumber(drawdownData.ulcer_index)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">RMS of drawdowns</div>
                   </div>
                 </div>
 
                 {drawdownData.days_to_recovery && (
-                  <div className="mb-4 p-3 bg-blue-50 rounded">
-                    <div className="text-sm font-medium text-blue-800">
-                      Recovery from max drawdown took {drawdownData.days_to_recovery} days
-                      {drawdownData.recovery_date && ` (recovered on ${format(new Date(drawdownData.recovery_date), 'MMM d, yyyy')})`}
+                  <div className="alert alert-info mb-4">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-sm">
+                        Recovery from max drawdown took <span className="font-semibold">{drawdownData.days_to_recovery} days</span>
+                        {drawdownData.recovery_date && ` (recovered on ${format(new Date(drawdownData.recovery_date), 'MMM d, yyyy')})`}
+                      </span>
                     </div>
                   </div>
                 )}
 
                 {drawdownData.drawdown_periods && drawdownData.drawdown_periods.length > 0 && (
                   <div>
-                    <h3 className="text-sm font-semibold mb-2">Top Drawdown Periods</h3>
-                    <table className="table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Start Date</th>
-                          <th>End Date</th>
-                          <th>Max Drawdown</th>
-                          <th>Duration (Days)</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {drawdownData.drawdown_periods.slice(0, 5).map((period: any, idx: number) => (
-                          <tr key={idx}>
-                            <td>{format(new Date(period.start_date), 'MMM d, yyyy')}</td>
-                            <td>{format(new Date(period.end_date), 'MMM d, yyyy')}</td>
-                            <td className="font-semibold text-red-600">{formatPercent(period.max_drawdown)}</td>
-                            <td>{period.days}</td>
-                            <td>
-                              {period.ongoing ? (
-                                <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs">Ongoing</span>
-                              ) : (
-                                <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Recovered</span>
-                              )}
-                            </td>
+                    <h3 className="text-sm font-semibold text-zinc-700 mb-3">Top Drawdown Periods</h3>
+                    <div className="table-container">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Start Date</th>
+                            <th>End Date</th>
+                            <th className="text-right">Max Drawdown</th>
+                            <th className="text-right">Duration (Days)</th>
+                            <th>Status</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {drawdownData.drawdown_periods.slice(0, 5).map((period: any, idx: number) => (
+                            <tr key={idx}>
+                              <td>{format(new Date(period.start_date), 'MMM d, yyyy')}</td>
+                              <td>{format(new Date(period.end_date), 'MMM d, yyyy')}</td>
+                              <td className="text-right font-semibold text-red-600 tabular-nums">{formatPercent(period.max_drawdown)}</td>
+                              <td className="text-right tabular-nums">{period.days}</td>
+                              <td>
+                                {period.ongoing ? (
+                                  <span className="badge badge-warning">Ongoing</span>
+                                ) : (
+                                  <span className="badge badge-success">Recovered</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -607,31 +675,31 @@ export default function PortfolioStatisticsPage() {
             {/* VaR & CVaR */}
             {varData && !varData.error && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Tail Risk (VaR & CVaR)</h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="border-l-4 border-red-500 pl-4">
-                    <div className="text-sm text-gray-600">VaR 95%</div>
-                    <div className="text-2xl font-bold">{formatPercent(varData.var_95)}</div>
-                    <div className="text-xs text-gray-500 mt-1">1-day, 95% confidence</div>
-                  </div>
-                  <div className="border-l-4 border-red-600 pl-4">
-                    <div className="text-sm text-gray-600">CVaR 95%</div>
-                    <div className="text-2xl font-bold">{formatPercent(varData.cvar_95)}</div>
-                    <div className="text-xs text-gray-500 mt-1">Expected shortfall</div>
-                  </div>
-                  <div className="border-l-4 border-red-700 pl-4">
-                    <div className="text-sm text-gray-600">VaR 99%</div>
-                    <div className="text-2xl font-bold">{formatPercent(varData.var_99)}</div>
-                    <div className="text-xs text-gray-500 mt-1">1-day, 99% confidence</div>
-                  </div>
-                  <div className="border-l-4 border-red-800 pl-4">
-                    <div className="text-sm text-gray-600">CVaR 99%</div>
-                    <div className="text-2xl font-bold">{formatPercent(varData.cvar_99)}</div>
-                    <div className="text-xs text-gray-500 mt-1">Expected shortfall</div>
-                  </div>
+                <div className="card-header">
+                  <h2 className="card-title">Tail Risk (VaR & CVaR)</h2>
+                  <span className="text-xs text-zinc-500">Historical simulation | {window} days</span>
                 </div>
-                <div className="mt-4 text-xs text-gray-500">
-                  Historical simulation method | Window: {window} days
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">VaR 95%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.var_95)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">1-day, 95% confidence</div>
+                  </div>
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">CVaR 95%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.cvar_95)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
+                  </div>
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">VaR 99%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.var_99)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">1-day, 99% confidence</div>
+                  </div>
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">CVaR 99%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.cvar_99)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
+                  </div>
                 </div>
               </div>
             )}
@@ -639,70 +707,85 @@ export default function PortfolioStatisticsPage() {
             {/* Contribution to Returns */}
             {(contributionData || contributionLoading) && (
               <div className="card">
-                <div className="flex justify-between items-start mb-4">
-                  <h2 className="text-xl font-bold">Contribution to Returns</h2>
-                  <div className="flex gap-1">
+                <div className="card-header">
+                  <h2 className="card-title">Contribution to Returns</h2>
+                  <div className="pill-tabs">
                     {(['1M', '3M', 'YTD', '1Y', 'ALL'] as TimePeriod[]).map((period) => (
                       <button
                         key={period}
                         onClick={() => setContributionPeriod(period)}
-                        className={`px-3 py-1 text-sm rounded ${
-                          contributionPeriod === period
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
+                        className={`pill-tab ${contributionPeriod === period ? 'pill-tab-active' : ''}`}
                       >
-                        {period === 'ALL' ? 'All Time' : period}
+                        {period === 'ALL' ? 'All' : period}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 {contributionLoading ? (
-                  <div className="text-center py-4 text-gray-500">Loading contribution data...</div>
+                  <div className="flex items-center justify-center py-8 gap-3">
+                    <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span className="text-zinc-500">Loading contribution data...</span>
+                  </div>
                 ) : contributionData && !contributionData.error && contributionData.contributions && contributionData.contributions.length > 0 ? (
                   <>
-                    <div className="mb-4 p-3 bg-blue-50 rounded">
-                      <div className="text-sm">
-                        <span className="font-semibold">Total Return:</span> {formatPercent(contributionData.total_return)}
-                        <span className="ml-4 text-gray-600">
-                          Period: {contributionData.period_start && format(new Date(contributionData.period_start), 'MMM d, yyyy')} -
+                    <div className="alert alert-info mb-4">
+                      <div className="flex flex-wrap gap-4 text-sm">
+                        <span>
+                          <span className="font-semibold">Total Return:</span>{' '}
+                          <span className={`font-bold ${contributionData.total_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {formatPercent(contributionData.total_return)}
+                          </span>
+                        </span>
+                        <span className="text-zinc-600">
+                          {contributionData.period_start && format(new Date(contributionData.period_start), 'MMM d, yyyy')} -{' '}
                           {contributionData.period_end && format(new Date(contributionData.period_end), 'MMM d, yyyy')}
                         </span>
                       </div>
                     </div>
 
-                    <table className="table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Name</th>
-                          <th className="text-right">Avg Weight</th>
-                          <th className="text-right">Contribution</th>
-                          <th className="text-right">% of Total Return</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {contributionData.contributions.map((contrib: any, idx: number) => (
-                          <tr key={idx}>
-                            <td className="font-semibold">{contrib.symbol}</td>
-                            <td className="max-w-xs truncate">{contrib.asset_name}</td>
-                            <td className="text-right">{formatPercent(contrib.avg_weight)}</td>
-                            <td className={`text-right font-semibold ${contrib.contribution >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {formatPercent(contrib.contribution)}
-                            </td>
-                            <td className="text-right">{formatNumber(contrib.contribution_pct, 1)}%</td>
+                    <div className="table-container">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Symbol</th>
+                            <th>Name</th>
+                            <th className="text-right">Avg Weight</th>
+                            <th className="text-right">Contribution</th>
+                            <th className="text-right">% of Total</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {contributionData.contributions.map((contrib: any, idx: number) => (
+                            <tr key={idx}>
+                              <td className="font-semibold text-zinc-900">{contrib.symbol}</td>
+                              <td className="max-w-xs truncate text-zinc-600">{contrib.asset_name}</td>
+                              <td className="text-right tabular-nums">{formatPercent(contrib.avg_weight)}</td>
+                              <td className={`text-right font-semibold tabular-nums ${contrib.contribution >= 0 ? 'value-positive' : 'value-negative'}`}>
+                                {formatPercent(contrib.contribution)}
+                              </td>
+                              <td className="text-right tabular-nums">{formatNumber(contrib.contribution_pct, 1)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </>
                 ) : contributionData?.error ? (
-                  <div className="p-4 bg-red-50 rounded border border-red-200">
-                    <p className="text-sm text-red-800">{contributionData.error}</p>
+                  <div className="alert alert-danger">
+                    <p className="text-sm">{contributionData.error}</p>
                   </div>
                 ) : (
-                  <div className="text-center py-4 text-gray-500">No contribution data available for this period.</div>
+                  <div className="empty-state">
+                    <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    <p className="empty-state-title">No contribution data available</p>
+                    <p className="empty-state-description">Try selecting a different time period.</p>
+                  </div>
                 )}
               </div>
             )}
@@ -712,49 +795,53 @@ export default function PortfolioStatisticsPage() {
             {/* Turnover Analysis */}
             {turnoverData && !turnoverData.error && turnoverData.overall && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Trading & Turnover</h2>
+                <div className="card-header">
+                  <h2 className="card-title">Trading & Turnover</h2>
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                  <div className="border-l-4 border-blue-500 pl-4">
-                    <div className="text-sm text-gray-600">Annualized Gross Turnover</div>
-                    <div className="text-2xl font-bold">{formatPercent(turnoverData.overall.annualized_gross_turnover)}</div>
+                  <div className="metric-card metric-card-blue">
+                    <div className="metric-label">Annualized Gross</div>
+                    <div className="metric-value-lg">{formatPercent(turnoverData.overall.annualized_gross_turnover)}</div>
                   </div>
-                  <div className="border-l-4 border-green-500 pl-4">
-                    <div className="text-sm text-gray-600">Annualized Net Turnover</div>
-                    <div className="text-2xl font-bold">{formatPercent(turnoverData.overall.annualized_net_turnover)}</div>
+                  <div className="metric-card metric-card-green">
+                    <div className="metric-label">Annualized Net</div>
+                    <div className="metric-value-lg">{formatPercent(turnoverData.overall.annualized_net_turnover)}</div>
                   </div>
-                  <div className="border-l-4 border-purple-500 pl-4">
-                    <div className="text-sm text-gray-600">Total Trades</div>
-                    <div className="text-2xl font-bold">{turnoverData.overall.trade_count}</div>
+                  <div className="metric-card metric-card-purple">
+                    <div className="metric-label">Total Trades</div>
+                    <div className="metric-value-lg">{turnoverData.overall.trade_count}</div>
                   </div>
-                  <div className="border-l-4 border-orange-500 pl-4">
-                    <div className="text-sm text-gray-600">Avg Portfolio Value</div>
-                    <div className="text-2xl font-bold">${(turnoverData.overall.avg_portfolio_value / 1000000).toFixed(1)}M</div>
+                  <div className="metric-card metric-card-orange">
+                    <div className="metric-label">Avg Portfolio Value</div>
+                    <div className="metric-value-lg">${(turnoverData.overall.avg_portfolio_value / 1000000).toFixed(1)}M</div>
                   </div>
                 </div>
 
                 {turnoverData.by_period && turnoverData.by_period.length > 0 && (
                   <div>
-                    <h3 className="text-sm font-semibold mb-2">Turnover by Period</h3>
-                    <table className="table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Period</th>
-                          <th className="text-right">Gross Turnover</th>
-                          <th className="text-right">Net Turnover</th>
-                          <th className="text-right">Trades</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {turnoverData.by_period.slice(0, 12).map((period: any, idx: number) => (
-                          <tr key={idx}>
-                            <td>{period.period}</td>
-                            <td className="text-right font-semibold">{formatPercent(period.gross_turnover)}</td>
-                            <td className="text-right">{formatPercent(period.net_turnover)}</td>
-                            <td className="text-right">{period.trade_count}</td>
+                    <h3 className="text-sm font-semibold text-zinc-700 mb-3">Turnover by Period</h3>
+                    <div className="table-container">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Period</th>
+                            <th className="text-right">Gross Turnover</th>
+                            <th className="text-right">Net Turnover</th>
+                            <th className="text-right">Trades</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {turnoverData.by_period.slice(0, 12).map((period: any, idx: number) => (
+                            <tr key={idx}>
+                              <td className="font-medium">{period.period}</td>
+                              <td className="text-right font-semibold tabular-nums">{formatPercent(period.gross_turnover)}</td>
+                              <td className="text-right tabular-nums">{formatPercent(period.net_turnover)}</td>
+                              <td className="text-right tabular-nums">{period.trade_count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -763,39 +850,43 @@ export default function PortfolioStatisticsPage() {
             {/* Sector Comparison */}
             {sectorComparisonData && !sectorComparisonData.error && sectorComparisonData.comparison && (
               <div className="card">
-                <h2 className="text-xl font-bold mb-4">Sector Analysis vs {sectorComparisonData.benchmark}</h2>
-                <table className="table text-sm">
-                  <thead>
-                    <tr>
-                      <th>Sector</th>
-                      <th className="text-right">Portfolio Weight</th>
-                      <th className="text-right">Benchmark Weight</th>
-                      <th className="text-right">Active Weight</th>
-                      <th>Position</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sectorComparisonData.comparison.map((sector: any, idx: number) => (
-                      <tr key={idx}>
-                        <td className="font-semibold">{sector.sector}</td>
-                        <td className="text-right">{formatPercent(sector.portfolio_weight)}</td>
-                        <td className="text-right text-gray-600">{formatPercent(sector.benchmark_weight)}</td>
-                        <td className={`text-right font-semibold ${sector.active_weight >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {sector.active_weight >= 0 ? '+' : ''}{formatPercent(sector.active_weight)}
-                        </td>
-                        <td>
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            sector.over_under === 'Overweight' ? 'bg-green-100 text-green-800' :
-                            sector.over_under === 'Underweight' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {sector.over_under}
-                          </span>
-                        </td>
+                <div className="card-header">
+                  <h2 className="card-title">Sector Analysis vs {sectorComparisonData.benchmark}</h2>
+                </div>
+                <div className="table-container">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Sector</th>
+                        <th className="text-right">Portfolio Wt</th>
+                        <th className="text-right">Benchmark Wt</th>
+                        <th className="text-right">Active Wt</th>
+                        <th>Position</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {sectorComparisonData.comparison.map((sector: any, idx: number) => (
+                        <tr key={idx}>
+                          <td className="font-semibold text-zinc-900">{sector.sector}</td>
+                          <td className="text-right tabular-nums">{formatPercent(sector.portfolio_weight)}</td>
+                          <td className="text-right tabular-nums text-zinc-500">{formatPercent(sector.benchmark_weight)}</td>
+                          <td className={`text-right font-semibold tabular-nums ${sector.active_weight >= 0 ? 'value-positive' : 'value-negative'}`}>
+                            {sector.active_weight >= 0 ? '+' : ''}{formatPercent(sector.active_weight)}
+                          </td>
+                          <td>
+                            <span className={`badge ${
+                              sector.over_under === 'Overweight' ? 'badge-success' :
+                              sector.over_under === 'Underweight' ? 'badge-danger' :
+                              'badge-neutral'
+                            }`}>
+                              {sector.over_under}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -803,46 +894,48 @@ export default function PortfolioStatisticsPage() {
             {brinsonData && (
               <div className="card">
                 {/* Header with Time Toggle */}
-                <div className="flex justify-between items-start mb-4">
-                  <h2 className="text-xl font-bold">Brinson Attribution Analysis</h2>
-                  <div className="flex gap-1">
+                <div className="card-header">
+                  <h2 className="card-title">Brinson Attribution Analysis</h2>
+                  <div className="pill-tabs">
                     {(['1M', '3M', 'YTD', '1Y', 'ALL'] as BrinsonPeriod[]).map((period) => (
                       <button
                         key={period}
                         onClick={() => setBrinsonPeriod(period)}
-                        className={`px-3 py-1 text-sm rounded ${
-                          brinsonPeriod === period
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
+                        className={`pill-tab ${brinsonPeriod === period ? 'pill-tab-active' : ''}`}
                       >
-                        {period === 'ALL' ? 'All Time' : period}
+                        {period === 'ALL' ? 'All' : period}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 {brinsonLoading ? (
-                  <div className="text-center py-4 text-gray-500">Loading attribution data...</div>
+                  <div className="flex items-center justify-center py-8 gap-3">
+                    <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span className="text-zinc-500">Loading attribution data...</span>
+                  </div>
                 ) : brinsonData.error ? (
-                  <div className="p-4 bg-red-50 rounded border border-red-200">
-                    <p className="text-sm font-semibold text-red-800 mb-2">{brinsonData.error}</p>
+                  <div className="alert alert-danger">
+                    <p className="text-sm font-semibold mb-2">{brinsonData.error}</p>
                     {brinsonData.missing_data && (
-                      <p className="text-xs text-red-700 mt-1">
+                      <p className="text-xs mt-1">
                         Missing Data: <span className="font-mono">{brinsonData.missing_data}</span>
                       </p>
                     )}
                     {brinsonData.action_required && (
                       <div className="mt-3 p-2 bg-white rounded border border-red-300">
-                        <p className="text-xs text-gray-700 font-medium">Action Required:</p>
-                        <p className="text-xs text-gray-600 font-mono mt-1">{brinsonData.action_required}</p>
+                        <p className="text-xs font-medium text-zinc-700">Action Required:</p>
+                        <p className="text-xs font-mono mt-1 text-zinc-600">{brinsonData.action_required}</p>
                       </div>
                     )}
                   </div>
                 ) : brinsonData.note ? (
-                  <div className="p-4 bg-yellow-50 rounded border border-yellow-200">
-                    <p className="text-sm text-yellow-800">{brinsonData.note}</p>
-                    <p className="text-xs text-yellow-700 mt-2">
+                  <div className="alert alert-warning">
+                    <p className="text-sm">{brinsonData.note}</p>
+                    <p className="text-xs mt-2 opacity-75">
                       Full Brinson attribution requires sector-level return tracking over time. This feature is available
                       once sector classifications and historical sector returns are configured.
                     </p>
@@ -850,29 +943,29 @@ export default function PortfolioStatisticsPage() {
                 ) : (
                   <>
                     {/* Period Returns + Active Return Headline */}
-                    <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+                    <div className="mb-6 p-5 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200/80">
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
                         {/* Portfolio Return */}
                         <div className="text-center md:text-left">
-                          <div className="text-xs text-gray-500 uppercase tracking-wide">Portfolio Return</div>
-                          <div className={`text-2xl font-bold ${(brinsonData.portfolio_return || 0) >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
+                          <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Portfolio Return</div>
+                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.portfolio_return || 0) >= 0 ? 'text-zinc-800' : 'text-red-600'}`}>
                             {(brinsonData.portfolio_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.portfolio_return)}
                           </div>
                         </div>
                         {/* Active Return (center, larger) */}
                         <div className="text-center">
-                          <div className="text-sm text-gray-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
-                          <div className={`text-4xl font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className="text-sm text-zinc-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
+                          <div className={`text-4xl font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
-                          <div className="text-xs text-gray-500 mt-2">
+                          <div className="text-xs text-zinc-500 mt-2">
                             {brinsonData.start_date && format(new Date(brinsonData.start_date), 'MMM d, yyyy')} - {brinsonData.end_date && format(new Date(brinsonData.end_date), 'MMM d, yyyy')}
                           </div>
                         </div>
                         {/* Benchmark Return */}
                         <div className="text-center md:text-right">
-                          <div className="text-xs text-gray-500 uppercase tracking-wide">{brinsonData.benchmark || 'Benchmark'} Return</div>
-                          <div className={`text-2xl font-bold ${(brinsonData.benchmark_return || 0) >= 0 ? 'text-gray-600' : 'text-red-600'}`}>
+                          <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">{brinsonData.benchmark || 'Benchmark'} Return</div>
+                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.benchmark_return || 0) >= 0 ? 'text-zinc-600' : 'text-red-600'}`}>
                             {(brinsonData.benchmark_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.benchmark_return)}
                           </div>
                         </div>
@@ -881,33 +974,33 @@ export default function PortfolioStatisticsPage() {
 
                     {/* Three Drivers */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                      <div className="border-l-4 border-blue-500 pl-4">
-                        <div className="text-sm text-gray-600">Allocation Effect</div>
-                        <div className={`text-2xl font-bold ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className="metric-card metric-card-blue">
+                        <div className="metric-label">Allocation Effect</div>
+                        <div className={`metric-value-lg ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                           {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">Sector weighting decisions</div>
+                        <div className="text-xs text-zinc-500 mt-1">Sector weighting decisions</div>
                       </div>
-                      <div className="border-l-4 border-green-500 pl-4">
-                        <div className="text-sm text-gray-600">Selection Effect</div>
-                        <div className={`text-2xl font-bold ${(brinsonData.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className="metric-card metric-card-green">
+                        <div className="metric-label">Selection Effect</div>
+                        <div className={`metric-value-lg ${(brinsonData.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                           {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">Security selection within sectors</div>
+                        <div className="text-xs text-zinc-500 mt-1">Security selection within sectors</div>
                       </div>
-                      <div className="border-l-4 border-purple-500 pl-4">
-                        <div className="text-sm text-gray-600">Interaction Effect</div>
-                        <div className={`text-2xl font-bold ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className="metric-card metric-card-purple">
+                        <div className="metric-label">Interaction Effect</div>
+                        <div className={`metric-value-lg ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                           {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.interaction_effect)}
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">Combined allocation & selection</div>
+                        <div className="text-xs text-zinc-500 mt-1">Combined allocation & selection</div>
                       </div>
                     </div>
 
                     {/* Waterfall Chart */}
-                    <div className="mb-6">
-                      <h3 className="text-sm font-semibold mb-3">Attribution Waterfall</h3>
-                      <div className="space-y-2">
+                    <div className="mb-6 p-4 bg-zinc-50 rounded-lg">
+                      <h3 className="text-sm font-semibold text-zinc-700 mb-4">Attribution Waterfall</h3>
+                      <div className="space-y-3">
                         {[
                           { label: 'Allocation', value: brinsonData.allocation_effect, color: 'blue' },
                           { label: 'Selection', value: brinsonData.selection_effect, color: 'green' },
@@ -929,32 +1022,32 @@ export default function PortfolioStatisticsPage() {
 
                           return (
                             <div key={label} className="flex items-center gap-3">
-                              <div className="w-24 text-sm text-gray-700">{label}</div>
-                              <div className="flex-1 h-6 bg-gray-100 rounded relative">
-                                <div className="absolute inset-y-0 left-1/2 w-px bg-gray-300"></div>
+                              <div className="w-24 text-sm text-zinc-600 font-medium">{label}</div>
+                              <div className="flex-1 h-7 bg-zinc-200 rounded-md relative overflow-hidden">
+                                <div className="absolute inset-y-0 left-1/2 w-px bg-zinc-300"></div>
                                 <div
-                                  className={`absolute top-0 h-full rounded ${
+                                  className={`absolute top-0 h-full rounded-md transition-all ${
                                     isPositive ? 'left-1/2' : 'right-1/2'
                                   }`}
                                   style={{
                                     width: `${barWidth / 2}%`,
                                     backgroundColor: isPositive
-                                      ? (color === 'blue' ? '#3b82f6' : color === 'green' ? '#22c55e' : color === 'purple' ? '#a855f7' : '#9ca3af')
-                                      : (color === 'blue' ? '#93c5fd' : color === 'green' ? '#86efac' : color === 'purple' ? '#d8b4fe' : '#d1d5db'),
+                                      ? (color === 'blue' ? '#3b82f6' : color === 'green' ? '#10b981' : color === 'purple' ? '#8b5cf6' : '#a1a1aa')
+                                      : (color === 'blue' ? '#93c5fd' : color === 'green' ? '#6ee7b7' : color === 'purple' ? '#c4b5fd' : '#d4d4d8'),
                                   }}
                                 ></div>
                               </div>
-                              <div className={`w-24 text-right text-sm font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                              <div className={`w-24 text-right text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
                                 {isPositive ? '+' : ''}{formatBps(value)}
                               </div>
                             </div>
                           );
                         })}
                         {/* Total row */}
-                        <div className="flex items-center gap-3 pt-2 border-t mt-2">
-                          <div className="w-24 text-sm font-semibold text-gray-900">Total Active</div>
+                        <div className="flex items-center gap-3 pt-3 border-t border-zinc-200 mt-3">
+                          <div className="w-24 text-sm font-bold text-zinc-900">Total Active</div>
                           <div className="flex-1"></div>
-                          <div className={`w-24 text-right text-sm font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className={`w-24 text-right text-sm font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
                         </div>
@@ -964,14 +1057,19 @@ export default function PortfolioStatisticsPage() {
                     {/* Top Drivers Panels */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                       {/* Top Contributors */}
-                      <div className="border rounded-lg p-4 bg-green-50">
-                        <h3 className="text-sm font-semibold text-green-800 mb-3">Top 5 Contributors</h3>
+                      <div className="border border-emerald-200 rounded-xl p-4 bg-emerald-50/50">
+                        <h3 className="text-sm font-semibold text-emerald-800 mb-3 flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                          </svg>
+                          Top 5 Contributors
+                        </h3>
                         {brinsonData.top_contributors && brinsonData.top_contributors.length > 0 ? (
                           <div className="space-y-2">
                             {brinsonData.top_contributors.map((sector: any, idx: number) => {
                               const isExpanded = expandedDrivers.has(`contrib-${sector.sector}`);
                               return (
-                                <div key={idx} className="bg-white rounded border border-green-200">
+                                <div key={idx} className="bg-white rounded-lg border border-emerald-200 overflow-hidden">
                                   <button
                                     onClick={() => {
                                       const newSet = new Set(expandedDrivers);
@@ -979,47 +1077,47 @@ export default function PortfolioStatisticsPage() {
                                       else newSet.add(`contrib-${sector.sector}`);
                                       setExpandedDrivers(newSet);
                                     }}
-                                    className="w-full flex items-center justify-between p-2 hover:bg-green-50"
+                                    className="w-full flex items-center justify-between p-3 hover:bg-emerald-50 transition-colors"
                                   >
-                                    <span className="text-sm font-medium text-gray-800">{sector.sector}</span>
-                                    <span className="text-sm font-bold text-green-600">+{formatBps(sector.total_effect)}</span>
+                                    <span className="text-sm font-medium text-zinc-800">{sector.sector}</span>
+                                    <span className="text-sm font-bold text-emerald-600 tabular-nums">+{formatBps(sector.total_effect)}</span>
                                   </button>
                                   {isExpanded && (
-                                    <div className="px-3 pb-2 pt-1 border-t text-xs text-gray-600 space-y-1">
+                                    <div className="px-3 pb-3 pt-2 border-t border-emerald-100 text-xs text-zinc-600 space-y-1.5 bg-zinc-50/50">
                                       <div className="flex justify-between">
                                         <span>Portfolio Weight:</span>
-                                        <span className="font-medium">{formatPercent(sector.portfolio_weight)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.portfolio_weight)}</span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Benchmark Weight:</span>
-                                        <span className="font-medium">{formatPercent(sector.benchmark_weight)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.benchmark_weight)}</span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Active Weight:</span>
-                                        <span className={`font-medium ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                           {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
                                         </span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Portfolio Return:</span>
-                                        <span className="font-medium">{formatPercent(sector.portfolio_return)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.portfolio_return)}</span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Benchmark Return:</span>
-                                        <span className="font-medium">{formatPercent(sector.benchmark_return)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.benchmark_return)}</span>
                                       </div>
-                                      <div className="border-t pt-1 mt-1">
+                                      <div className="border-t border-zinc-200 pt-1.5 mt-1.5">
                                         <div className="flex justify-between">
                                           <span>Allocation:</span>
-                                          <span className={`font-medium ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>{formatBps(sector.allocation_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>{formatBps(sector.allocation_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Selection:</span>
-                                          <span className={`font-medium ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>{formatBps(sector.selection_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Interaction:</span>
-                                          <span className={`font-medium ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>{formatBps(sector.interaction_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>{formatBps(sector.interaction_effect)}</span>
                                         </div>
                                       </div>
                                     </div>
@@ -1029,19 +1127,24 @@ export default function PortfolioStatisticsPage() {
                             })}
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-500 italic">No positive contributors</p>
+                          <p className="text-sm text-zinc-500 italic">No positive contributors</p>
                         )}
                       </div>
 
                       {/* Top Detractors */}
-                      <div className="border rounded-lg p-4 bg-red-50">
-                        <h3 className="text-sm font-semibold text-red-800 mb-3">Top 5 Detractors</h3>
+                      <div className="border border-red-200 rounded-xl p-4 bg-red-50/50">
+                        <h3 className="text-sm font-semibold text-red-800 mb-3 flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                          </svg>
+                          Top 5 Detractors
+                        </h3>
                         {brinsonData.top_detractors && brinsonData.top_detractors.length > 0 ? (
                           <div className="space-y-2">
                             {brinsonData.top_detractors.map((sector: any, idx: number) => {
                               const isExpanded = expandedDrivers.has(`detract-${sector.sector}`);
                               return (
-                                <div key={idx} className="bg-white rounded border border-red-200">
+                                <div key={idx} className="bg-white rounded-lg border border-red-200 overflow-hidden">
                                   <button
                                     onClick={() => {
                                       const newSet = new Set(expandedDrivers);
@@ -1049,47 +1152,47 @@ export default function PortfolioStatisticsPage() {
                                       else newSet.add(`detract-${sector.sector}`);
                                       setExpandedDrivers(newSet);
                                     }}
-                                    className="w-full flex items-center justify-between p-2 hover:bg-red-50"
+                                    className="w-full flex items-center justify-between p-3 hover:bg-red-50 transition-colors"
                                   >
-                                    <span className="text-sm font-medium text-gray-800">{sector.sector}</span>
-                                    <span className="text-sm font-bold text-red-600">{formatBps(sector.total_effect)}</span>
+                                    <span className="text-sm font-medium text-zinc-800">{sector.sector}</span>
+                                    <span className="text-sm font-bold text-red-600 tabular-nums">{formatBps(sector.total_effect)}</span>
                                   </button>
                                   {isExpanded && (
-                                    <div className="px-3 pb-2 pt-1 border-t text-xs text-gray-600 space-y-1">
+                                    <div className="px-3 pb-3 pt-2 border-t border-red-100 text-xs text-zinc-600 space-y-1.5 bg-zinc-50/50">
                                       <div className="flex justify-between">
                                         <span>Portfolio Weight:</span>
-                                        <span className="font-medium">{formatPercent(sector.portfolio_weight)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.portfolio_weight)}</span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Benchmark Weight:</span>
-                                        <span className="font-medium">{formatPercent(sector.benchmark_weight)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.benchmark_weight)}</span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Active Weight:</span>
-                                        <span className={`font-medium ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                           {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
                                         </span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Portfolio Return:</span>
-                                        <span className="font-medium">{formatPercent(sector.portfolio_return)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.portfolio_return)}</span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Benchmark Return:</span>
-                                        <span className="font-medium">{formatPercent(sector.benchmark_return)}</span>
+                                        <span className="font-medium tabular-nums">{formatPercent(sector.benchmark_return)}</span>
                                       </div>
-                                      <div className="border-t pt-1 mt-1">
+                                      <div className="border-t border-zinc-200 pt-1.5 mt-1.5">
                                         <div className="flex justify-between">
                                           <span>Allocation:</span>
-                                          <span className={`font-medium ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>{formatBps(sector.allocation_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>{formatBps(sector.allocation_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Selection:</span>
-                                          <span className={`font-medium ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>{formatBps(sector.selection_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Interaction:</span>
-                                          <span className={`font-medium ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>{formatBps(sector.interaction_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>{formatBps(sector.interaction_effect)}</span>
                                         </div>
                                       </div>
                                     </div>
@@ -1099,7 +1202,7 @@ export default function PortfolioStatisticsPage() {
                             })}
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-500 italic">No negative detractors</p>
+                          <p className="text-sm text-zinc-500 italic">No negative detractors</p>
                         )}
                       </div>
                     </div>
@@ -1107,70 +1210,70 @@ export default function PortfolioStatisticsPage() {
                     {/* Sector Drill-Down Table */}
                     {brinsonData.by_sector && brinsonData.by_sector.length > 0 && (
                       <div>
-                        <h3 className="text-sm font-semibold mb-3">Attribution by Sector</h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead className="bg-gray-50">
+                        <h3 className="text-sm font-semibold text-zinc-700 mb-3">Attribution by Sector</h3>
+                        <div className="table-container">
+                          <table className="table">
+                            <thead>
                               <tr>
-                                <th className="text-left py-2 px-2">Sector</th>
-                                <th className="text-right py-2 px-2">Port Wt</th>
-                                <th className="text-right py-2 px-2">Bench Wt</th>
-                                <th className="text-right py-2 px-2">Active Wt</th>
-                                <th className="text-right py-2 px-2">Port Ret</th>
-                                <th className="text-right py-2 px-2">Bench Ret</th>
-                                <th className="text-right py-2 px-2" title="Allocation Effect (pp)">Alloc (pp)</th>
-                                <th className="text-right py-2 px-2" title="Selection Effect (pp)">Select (pp)</th>
-                                <th className="text-right py-2 px-2" title="Interaction Effect (pp)">Inter (pp)</th>
-                                <th className="text-right py-2 px-2 font-semibold" title="Total Effect (pp)">Total (pp)</th>
+                                <th>Sector</th>
+                                <th className="text-right">Port Wt</th>
+                                <th className="text-right">Bench Wt</th>
+                                <th className="text-right">Active Wt</th>
+                                <th className="text-right">Port Ret</th>
+                                <th className="text-right">Bench Ret</th>
+                                <th className="text-right" title="Allocation Effect (pp)">Alloc</th>
+                                <th className="text-right" title="Selection Effect (pp)">Select</th>
+                                <th className="text-right" title="Interaction Effect (pp)">Inter</th>
+                                <th className="text-right" title="Total Effect (pp)">Total</th>
                               </tr>
                             </thead>
                             <tbody>
                               {brinsonData.by_sector.map((sector: any, idx: number) => {
                                 const activeWeight = (sector.portfolio_weight || 0) - (sector.benchmark_weight || 0);
                                 return (
-                                  <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
-                                    <td className="py-2 px-2 font-medium">{sector.sector}</td>
-                                    <td className="py-2 px-2 text-right">{formatPercent(sector.portfolio_weight)}</td>
-                                    <td className="py-2 px-2 text-right text-gray-600">{formatPercent(sector.benchmark_weight)}</td>
-                                    <td className={`py-2 px-2 text-right ${activeWeight >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <tr key={idx}>
+                                    <td className="font-medium text-zinc-900">{sector.sector}</td>
+                                    <td className="text-right tabular-nums">{formatPercent(sector.portfolio_weight)}</td>
+                                    <td className="text-right tabular-nums text-zinc-500">{formatPercent(sector.benchmark_weight)}</td>
+                                    <td className={`text-right tabular-nums ${activeWeight >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {activeWeight >= 0 ? '+' : ''}{formatPercent(activeWeight)}
                                     </td>
-                                    <td className="py-2 px-2 text-right">{formatPercent(sector.portfolio_return)}</td>
-                                    <td className="py-2 px-2 text-right text-gray-600">{formatPercent(sector.benchmark_return)}</td>
-                                    <td className={`py-2 px-2 text-right ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
+                                    <td className="text-right tabular-nums">{formatPercent(sector.portfolio_return)}</td>
+                                    <td className="text-right tabular-nums text-zinc-500">{formatPercent(sector.benchmark_return)}</td>
+                                    <td className={`text-right tabular-nums ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
                                       {(sector.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.allocation_effect)}
                                     </td>
-                                    <td className={`py-2 px-2 text-right ${(sector.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>
+                                    <td className={`text-right tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>
                                       {(sector.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.selection_effect)}
                                     </td>
-                                    <td className={`py-2 px-2 text-right ${(sector.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>
+                                    <td className={`text-right tabular-nums ${(sector.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>
                                       {(sector.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.interaction_effect)}
                                     </td>
-                                    <td className={`py-2 px-2 text-right font-semibold ${(sector.total_effect || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                    <td className={`text-right tabular-nums font-semibold ${(sector.total_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {(sector.total_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.total_effect)}
                                     </td>
                                   </tr>
                                 );
                               })}
                             </tbody>
-                            <tfoot className="bg-gray-100 font-semibold">
+                            <tfoot className="bg-zinc-50 font-semibold">
                               <tr>
-                                <td className="py-2 px-2">Total</td>
-                                <td className="py-2 px-2 text-right">100%</td>
-                                <td className="py-2 px-2 text-right">100%</td>
-                                <td className="py-2 px-2 text-right">-</td>
-                                <td className="py-2 px-2 text-right">-</td>
-                                <td className="py-2 px-2 text-right">-</td>
-                                <td className={`py-2 px-2 text-right ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
+                                <td className="font-bold">Total</td>
+                                <td className="text-right tabular-nums">100%</td>
+                                <td className="text-right tabular-nums">100%</td>
+                                <td className="text-right">-</td>
+                                <td className="text-right">-</td>
+                                <td className="text-right">-</td>
+                                <td className={`text-right tabular-nums ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
                                   {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                                 </td>
-                                <td className={`py-2 px-2 text-right ${(brinsonData.selection_effect || 0) >= 0 ? 'text-green-600' : 'text-green-400'}`}>
+                                <td className={`text-right tabular-nums ${(brinsonData.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>
                                   {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                                 </td>
-                                <td className={`py-2 px-2 text-right ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-purple-600' : 'text-purple-400'}`}>
+                                <td className={`text-right tabular-nums ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>
                                   {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.interaction_effect)}
                                 </td>
-                                <td className={`py-2 px-2 text-right ${(brinsonData.total_active_return || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                <td className={`text-right tabular-nums font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                   {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                                 </td>
                               </tr>
@@ -1181,7 +1284,7 @@ export default function PortfolioStatisticsPage() {
                     )}
 
                     {/* Context Footer */}
-                    <div className="mt-4 text-xs text-gray-500 flex justify-between">
+                    <div className="mt-4 pt-4 border-t border-zinc-100 text-xs text-zinc-500 flex justify-between">
                       <span>Benchmark: {brinsonData.benchmark || 'SP500'}</span>
                       <span>Benchmark data as of: {brinsonData.benchmark_data_date || 'N/A'}</span>
                     </div>
@@ -1193,40 +1296,33 @@ export default function PortfolioStatisticsPage() {
             {/* Factor Benchmarking + Attribution (uses free data sources: Stooq, yfinance) */}
             <div className="card">
               {/* Header with Controls */}
-              <div className="flex flex-wrap justify-between items-start gap-4 mb-4">
-                <h2 className="text-xl font-bold">Factor Benchmarking + Attribution</h2>
-                <div className="flex flex-wrap gap-2 items-center">
-                  {/* Period Toggle */}
-                  <div className="flex gap-1">
-                    {(['1M', '3M', '6M', 'YTD', '1Y', 'ALL'] as FactorBenchPeriod[]).map((period) => (
-                      <button
-                        key={period}
-                        onClick={() => setFactorBenchPeriod(period)}
-                        className={`px-3 py-1 text-sm rounded ${
-                          factorBenchPeriod === period
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
-                      >
-                        {period === 'ALL' ? 'All' : period}
-                      </button>
-                    ))}
-                  </div>
+              <div className="card-header">
+                <h2 className="card-title">Factor Benchmarking + Attribution</h2>
+                <div className="pill-tabs">
+                  {(['1M', '3M', '6M', 'YTD', '1Y', 'ALL'] as FactorBenchPeriod[]).map((period) => (
+                    <button
+                      key={period}
+                      onClick={() => setFactorBenchPeriod(period)}
+                      className={`pill-tab ${factorBenchPeriod === period ? 'pill-tab-active' : ''}`}
+                    >
+                      {period === 'ALL' ? 'All' : period}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {/* Settings Row */}
-              <div className="flex flex-wrap gap-4 mb-4 p-3 bg-gray-50 rounded-lg">
+              <div className="flex flex-wrap gap-4 mb-6 p-4 bg-zinc-50 rounded-lg border border-zinc-100">
                 {/* Excess Returns Toggle */}
                 <label className="flex items-center gap-2 cursor-pointer" title="Subtract risk-free rate from returns before regression">
                   <input
                     type="checkbox"
                     checked={useExcessReturns}
                     onChange={(e) => setUseExcessReturns(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-300"
+                    className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="text-sm text-gray-700">Excess Returns</span>
-                  <span className="text-xs text-gray-400" title="Uses 5% annual risk-free rate">(?)</span>
+                  <span className="text-sm text-zinc-700">Excess Returns</span>
+                  <span className="text-xs text-zinc-400 cursor-help" title="Uses 5% annual risk-free rate">(?)</span>
                 </label>
 
                 {/* Robust Mode Toggle */}
@@ -1235,18 +1331,18 @@ export default function PortfolioStatisticsPage() {
                     type="checkbox"
                     checked={useRobustMode}
                     onChange={(e) => setUseRobustMode(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-300"
+                    className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="text-sm text-gray-700">Robust Mode</span>
+                  <span className="text-sm text-zinc-700">Robust Mode</span>
                 </label>
 
                 {/* Benchmark Selector */}
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-700">vs Benchmark:</span>
+                  <span className="text-sm text-zinc-600">vs Benchmark:</span>
                   <select
                     value={selectedBenchmark || ''}
                     onChange={(e) => setSelectedBenchmark(e.target.value || null)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1"
+                    className="select text-sm w-auto"
                   >
                     <option value="">None</option>
                     {availableBenchmarks.map((bm) => (
@@ -1261,14 +1357,20 @@ export default function PortfolioStatisticsPage() {
                     type="checkbox"
                     checked={showDiagnostics}
                     onChange={(e) => setShowDiagnostics(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-300"
+                    className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="text-sm text-gray-700">Show Diagnostics</span>
+                  <span className="text-sm text-zinc-700">Show Diagnostics</span>
                 </label>
               </div>
 
               {factorBenchLoading ? (
-                <div className="py-8 text-center text-gray-500">Loading factor analysis...</div>
+                <div className="flex items-center justify-center py-12 gap-3">
+                  <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span className="text-zinc-500">Loading factor analysis...</span>
+                </div>
               ) : factorBenchmarking ? (
                 <>
                   {/* Warnings Banner */}
@@ -1277,11 +1379,7 @@ export default function PortfolioStatisticsPage() {
                       {factorBenchmarking.warnings.map((warning: any, idx: number) => (
                         <div
                           key={idx}
-                          className={`p-3 rounded-lg text-sm ${
-                            warning.severity === 'error'
-                              ? 'bg-red-50 border border-red-200 text-red-800'
-                              : 'bg-yellow-50 border border-yellow-200 text-yellow-800'
-                          }`}
+                          className={`${warning.severity === 'error' ? 'alert alert-danger' : 'alert alert-warning'}`}
                         >
                           <span className="font-medium">
                             {warning.severity === 'error' ? '!' : 'Note:'}
@@ -1294,57 +1392,58 @@ export default function PortfolioStatisticsPage() {
 
                   {/* Summary Stats */}
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">
+                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">
                         {useExcessReturns ? 'Excess Return' : 'Total Return'}
                       </div>
-                      <div className={`text-xl font-bold ${factorBenchmarking.total_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                         {factorBenchmarking.total_return_pct?.toFixed(2)}%
                       </div>
                     </div>
-                    <div className="bg-gray-50 rounded-lg p-3" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
-                      <div className="text-sm text-gray-600">Alpha (Ann.)</div>
-                      <div className={`text-xl font-bold ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
+                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Alpha (Ann.)</div>
+                      <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                         {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
                       </div>
-                      <div className="text-xs text-gray-400">
+                      <div className="text-xs text-zinc-400 mt-1">
                         IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
                       </div>
                     </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Adj. R-Squared</div>
-                      <div className="text-xl font-bold text-gray-800">
+                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Adj. R-Squared</div>
+                      <div className="text-xl font-bold text-zinc-800 tabular-nums">
                         {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
                       </div>
-                      <div className="text-xs text-gray-400">
+                      <div className="text-xs text-zinc-400 mt-1">
                         (R²: {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%)
                       </div>
                     </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Residual Vol (Ann.)</div>
-                      <div className="text-xl font-bold text-gray-800">
+                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Residual Vol</div>
+                      <div className="text-xl font-bold text-zinc-800 tabular-nums">
                         {factorBenchmarking.regression?.residual_std_ann?.toFixed(2)}%
                       </div>
+                      <div className="text-xs text-zinc-400 mt-1">annualized</div>
                     </div>
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-sm text-gray-600">Factor Explained</div>
-                      <div className="text-xl font-bold text-indigo-600">
+                    <div className="bg-indigo-50 rounded-lg p-4 border border-indigo-100">
+                      <div className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Factor Explained</div>
+                      <div className="text-xl font-bold text-indigo-600 tabular-nums">
                         {factorBenchmarking.factor_explained?.toFixed(2)}%
                       </div>
-                      <div className="text-xs text-gray-400">
+                      <div className="text-xs text-indigo-400 mt-1">
                         ({factorBenchmarking.factor_explained_pct?.toFixed(0)}% of return)
                       </div>
                     </div>
                   </div>
 
                   {/* Table Controls */}
-                  <div className="flex flex-wrap gap-4 mb-3">
+                  <div className="flex flex-wrap gap-4 mb-4 items-center">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-600">Sort by:</span>
+                      <span className="text-sm text-zinc-600">Sort by:</span>
                       <select
                         value={factorSortBy}
                         onChange={(e) => setFactorSortBy(e.target.value)}
-                        className="text-sm border border-gray-300 rounded px-2 py-1"
+                        className="select text-sm w-auto"
                       >
                         <option value="contribution">Contribution</option>
                         <option value="beta">Beta</option>
@@ -1357,26 +1456,26 @@ export default function PortfolioStatisticsPage() {
                         type="checkbox"
                         checked={hideInsignificant}
                         onChange={(e) => setHideInsignificant(e.target.checked)}
-                        className="w-4 h-4 rounded border-gray-300"
+                        className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                       />
-                      <span className="text-sm text-gray-600">Hide insignificant (p &gt; 0.10)</span>
+                      <span className="text-sm text-zinc-600">Hide insignificant (p &gt; 0.10)</span>
                     </label>
                   </div>
 
                   {/* Factor Exposures and Attribution Table */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50">
+                  <div className="table-container">
+                    <table className="table">
+                      <thead>
                         <tr>
-                          <th className="text-left py-2 px-3">Factor</th>
-                          <th className="text-right py-2 px-3" title="Factor exposure coefficient">Beta</th>
-                          <th className="text-right py-2 px-3" title="95% confidence interval">Beta CI</th>
-                          <th className="text-right py-2 px-3">Factor Return</th>
-                          <th className="text-right py-2 px-3" title="Beta × Factor Return">Contribution</th>
-                          <th className="text-right py-2 px-3" title="% of total return explained by this factor">% of Total</th>
-                          <th className="text-right py-2 px-3">t-Stat</th>
-                          <th className="text-right py-2 px-3" title="Variance Inflation Factor - warn if > 5">VIF</th>
-                          <th className="text-right py-2 px-3" title="*p<0.10, **p<0.05, ***p<0.01">Sig.</th>
+                          <th>Factor</th>
+                          <th className="text-right" title="Factor exposure coefficient">Beta</th>
+                          <th className="text-right" title="95% confidence interval">Beta CI</th>
+                          <th className="text-right">Factor Ret</th>
+                          <th className="text-right" title="Beta × Factor Return">Contrib</th>
+                          <th className="text-right" title="% of total return explained by this factor">% Total</th>
+                          <th className="text-right">t-Stat</th>
+                          <th className="text-right" title="Variance Inflation Factor - warn if > 5">VIF</th>
+                          <th className="text-right" title="*p<0.10, **p<0.05, ***p<0.01">Sig</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1391,66 +1490,66 @@ export default function PortfolioStatisticsPage() {
                             return fa.name.localeCompare(fb.name);
                           })
                           .map(([key, factor]: [string, any]) => (
-                          <tr key={key} className="border-b border-gray-100 hover:bg-gray-50">
-                            <td className="py-2 px-3 font-medium">{factor.name}</td>
-                            <td className="text-right py-2 px-3">{factor.beta?.toFixed(3)}</td>
-                            <td className="text-right py-2 px-3 text-xs text-gray-500">
+                          <tr key={key}>
+                            <td className="font-medium text-zinc-900">{factor.name}</td>
+                            <td className="text-right tabular-nums">{factor.beta?.toFixed(3)}</td>
+                            <td className="text-right text-xs text-zinc-500 tabular-nums">
                               [{factor.beta_ci?.lower?.toFixed(2)}, {factor.beta_ci?.upper?.toFixed(2)}]
                             </td>
-                            <td className={`text-right py-2 px-3 ${(factor.factor_return || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            <td className={`text-right tabular-nums ${(factor.factor_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                               {factor.factor_return?.toFixed(2)}%
                             </td>
-                            <td className={`text-right py-2 px-3 font-medium ${(factor.contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            <td className={`text-right font-semibold tabular-nums ${(factor.contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                               {factor.contribution?.toFixed(2)}%
                             </td>
-                            <td className="text-right py-2 px-3">
+                            <td className="text-right tabular-nums">
                               {factor.contribution_pct?.toFixed(1)}%
                             </td>
-                            <td className="text-right py-2 px-3">{factor.t_stat?.toFixed(2)}</td>
-                            <td className={`text-right py-2 px-3 ${factor.vif > 10 ? 'text-red-600 font-bold' : factor.vif > 5 ? 'text-yellow-600' : ''}`}>
+                            <td className="text-right tabular-nums">{factor.t_stat?.toFixed(2)}</td>
+                            <td className={`text-right tabular-nums ${factor.vif > 10 ? 'text-red-600 font-bold' : factor.vif > 5 ? 'text-amber-600' : ''}`}>
                               {factor.vif?.toFixed(1)}
                             </td>
-                            <td className="text-right py-2 px-3">
+                            <td className="text-right">
                               {factor.p_value < 0.01 ? (
-                                <span className="text-green-600 font-semibold">***</span>
+                                <span className="badge badge-success">***</span>
                               ) : factor.p_value < 0.05 ? (
-                                <span className="text-green-600">**</span>
+                                <span className="badge badge-success">**</span>
                               ) : factor.p_value < 0.10 ? (
-                                <span className="text-yellow-600">*</span>
+                                <span className="badge badge-warning">*</span>
                               ) : (
-                                <span className="text-gray-400">-</span>
+                                <span className="text-zinc-400">-</span>
                               )}
                             </td>
                           </tr>
                         ))}
                         {/* Alpha row */}
-                        <tr className="border-b border-gray-100 bg-indigo-50">
-                          <td className="py-2 px-3 font-medium">Alpha (Skill)</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className="text-right py-2 px-3 text-xs text-gray-500">
+                        <tr className="bg-indigo-50/50">
+                          <td className="font-semibold text-indigo-900">Alpha (Skill)</td>
+                          <td className="text-right">-</td>
+                          <td className="text-right text-xs text-zinc-500 tabular-nums">
                             [{factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, {factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]
                           </td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className={`text-right py-2 px-3 font-medium ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <td className="text-right">-</td>
+                          <td className={`text-right font-semibold tabular-nums ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.alpha_contribution?.toFixed(2)}%
                           </td>
-                          <td className="text-right py-2 px-3">
+                          <td className="text-right tabular-nums">
                             {factorBenchmarking.alpha_contribution_pct?.toFixed(1)}%
                           </td>
-                          <td colSpan={3} className="text-right py-2 px-3 text-xs text-gray-500">
+                          <td colSpan={3} className="text-right text-xs text-zinc-500">
                             IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
                           </td>
                         </tr>
                         {/* Residual row */}
-                        <tr className="border-b border-gray-100 bg-gray-50">
-                          <td className="py-2 px-3 font-medium">Residual (Unexplained)</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className="text-right py-2 px-3">-</td>
-                          <td className={`text-right py-2 px-3 font-medium ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        <tr className="bg-zinc-50">
+                          <td className="font-semibold text-zinc-600">Residual (Unexplained)</td>
+                          <td className="text-right">-</td>
+                          <td className="text-right">-</td>
+                          <td className="text-right">-</td>
+                          <td className={`text-right font-semibold tabular-nums ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.residual_contribution?.toFixed(2)}%
                           </td>
-                          <td className="text-right py-2 px-3">
+                          <td className="text-right tabular-nums">
                             {factorBenchmarking.residual_contribution_pct?.toFixed(1)}%
                           </td>
                           <td colSpan={3}></td>
@@ -1461,33 +1560,33 @@ export default function PortfolioStatisticsPage() {
 
                   {/* Benchmark-Relative Attribution */}
                   {factorBenchmarking.benchmark_attribution && (
-                    <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                      <h3 className="font-semibold text-blue-900 mb-3">
+                    <div className="mt-6 p-5 bg-blue-50 rounded-xl border border-blue-200/80">
+                      <h3 className="font-semibold text-blue-900 mb-4">
                         Active Attribution vs {factorBenchmarking.benchmark_attribution.benchmark_name}
                       </h3>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                         <div>
-                          <div className="text-sm text-blue-700">Portfolio Return</div>
-                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Portfolio Return</div>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                             {factorBenchmarking.benchmark_attribution.portfolio_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
-                          <div className="text-sm text-blue-700">Benchmark Return</div>
-                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Benchmark Return</div>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                             {factorBenchmarking.benchmark_attribution.benchmark_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
-                          <div className="text-sm text-blue-700">Active Return</div>
-                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Return</div>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                             {factorBenchmarking.benchmark_attribution.active_return >= 0 ? '+' : ''}
                             {factorBenchmarking.benchmark_attribution.active_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
-                          <div className="text-sm text-blue-700">Active Alpha</div>
-                          <div className={`text-lg font-bold ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Alpha</div>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                             {factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? '+' : ''}
                             {factorBenchmarking.benchmark_attribution.active_alpha?.toFixed(2)}%
                           </div>
@@ -1495,13 +1594,13 @@ export default function PortfolioStatisticsPage() {
                       </div>
 
                       {/* Active Factor Tilts */}
-                      <div className="mt-3">
-                        <div className="text-sm font-medium text-blue-800 mb-2">Active Factor Contributions:</div>
+                      <div className="mt-4 pt-4 border-t border-blue-200/60">
+                        <div className="text-sm font-medium text-blue-800 mb-3">Active Factor Contributions:</div>
                         <div className="flex flex-wrap gap-2">
                           {Object.entries(factorBenchmarking.benchmark_attribution.active_factor_contributions || {}).map(([factor, contrib]: [string, any]) => (
-                            <div key={factor} className={`px-2 py-1 rounded text-xs ${contrib >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                            <span key={factor} className={`badge ${contrib >= 0 ? 'badge-success' : 'badge-danger'}`}>
                               {factor}: {contrib >= 0 ? '+' : ''}{contrib?.toFixed(2)}%
-                            </div>
+                            </span>
                           ))}
                         </div>
                       </div>
@@ -1510,25 +1609,25 @@ export default function PortfolioStatisticsPage() {
 
                   {/* Diagnostics Panel */}
                   {showDiagnostics && factorBenchmarking.diagnostics && (
-                    <div className="mt-6 border-t pt-4">
-                      <h3 className="font-semibold text-gray-700 mb-4">Regression Diagnostics</h3>
+                    <div className="mt-6 pt-6 border-t border-zinc-200">
+                      <h3 className="font-semibold text-zinc-800 mb-4">Regression Diagnostics</h3>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {/* VIF Summary */}
-                        <div className="bg-gray-50 rounded-lg p-4">
-                          <h4 className="text-sm font-medium text-gray-700 mb-2">Multicollinearity (VIF)</h4>
-                          <div className="space-y-1">
+                        <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                          <h4 className="text-sm font-semibold text-zinc-700 mb-3">Multicollinearity (VIF)</h4>
+                          <div className="space-y-2">
                             {Object.entries(factorBenchmarking.diagnostics.vif || {}).map(([factor, vif]: [string, any]) => (
                               <div key={factor} className="flex justify-between text-sm">
-                                <span>{factor}</span>
-                                <span className={`font-medium ${vif > 10 ? 'text-red-600' : vif > 5 ? 'text-yellow-600' : 'text-green-600'}`}>
+                                <span className="text-zinc-600">{factor}</span>
+                                <span className={`font-medium tabular-nums ${vif > 10 ? 'text-red-600' : vif > 5 ? 'text-amber-600' : 'text-emerald-600'}`}>
                                   {vif?.toFixed(2)}
                                   {vif > 10 ? ' (Severe!)' : vif > 5 ? ' (Warning)' : ''}
                                 </span>
                               </div>
                             ))}
                           </div>
-                          <div className="mt-2 text-xs text-gray-500">
+                          <div className="mt-3 pt-2 border-t border-zinc-200 text-xs text-zinc-500">
                             Max VIF: {factorBenchmarking.diagnostics.max_vif?.toFixed(2)} |
                             {factorBenchmarking.diagnostics.multicollinearity_severe
                               ? ' Severe multicollinearity detected!'
@@ -1539,34 +1638,34 @@ export default function PortfolioStatisticsPage() {
                         </div>
 
                         {/* Residual Diagnostics */}
-                        <div className="bg-gray-50 rounded-lg p-4">
-                          <h4 className="text-sm font-medium text-gray-700 mb-2">Residual Tests</h4>
+                        <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                          <h4 className="text-sm font-semibold text-zinc-700 mb-3">Residual Tests</h4>
                           <div className="space-y-2 text-sm">
                             <div className="flex justify-between">
-                              <span>Durbin-Watson</span>
-                              <span className={`font-medium ${
+                              <span className="text-zinc-600">Durbin-Watson</span>
+                              <span className={`font-medium tabular-nums ${
                                 factorBenchmarking.diagnostics.residual_diagnostics?.durbin_watson < 1.5 ||
                                 factorBenchmarking.diagnostics.residual_diagnostics?.durbin_watson > 2.5
-                                  ? 'text-yellow-600' : 'text-green-600'
+                                  ? 'text-amber-600' : 'text-emerald-600'
                               }`}>
                                 {factorBenchmarking.diagnostics.residual_diagnostics?.durbin_watson?.toFixed(2)}
                               </span>
                             </div>
-                            <div className="text-xs text-gray-500">
+                            <div className="text-xs text-zinc-500">
                               {factorBenchmarking.diagnostics.residual_diagnostics?.dw_interpretation}
                             </div>
                             <div className="flex justify-between mt-2">
-                              <span>Jarque-Bera (Normality)</span>
+                              <span className="text-zinc-600">Jarque-Bera (Normality)</span>
                               <span className={`font-medium ${
-                                factorBenchmarking.diagnostics.residual_diagnostics?.normality_ok ? 'text-green-600' : 'text-yellow-600'
+                                factorBenchmarking.diagnostics.residual_diagnostics?.normality_ok ? 'text-emerald-600' : 'text-amber-600'
                               }`}>
                                 {factorBenchmarking.diagnostics.residual_diagnostics?.normality_ok ? 'OK' : 'Non-normal'}
                               </span>
                             </div>
                             <div className="flex justify-between">
-                              <span>Breusch-Pagan (Homosked.)</span>
+                              <span className="text-zinc-600">Breusch-Pagan (Homosked.)</span>
                               <span className={`font-medium ${
-                                factorBenchmarking.diagnostics.residual_diagnostics?.homoskedasticity_ok ? 'text-green-600' : 'text-yellow-600'
+                                factorBenchmarking.diagnostics.residual_diagnostics?.homoskedasticity_ok ? 'text-emerald-600' : 'text-amber-600'
                               }`}>
                                 {factorBenchmarking.diagnostics.residual_diagnostics?.homoskedasticity_ok ? 'OK' : 'Heteroskedastic'}
                               </span>
@@ -1576,30 +1675,30 @@ export default function PortfolioStatisticsPage() {
 
                         {/* Factor Correlation Matrix */}
                         {factorBenchmarking.diagnostics.factor_correlations && (
-                          <div className="bg-gray-50 rounded-lg p-4 md:col-span-2">
-                            <h4 className="text-sm font-medium text-gray-700 mb-2">Factor Correlation Matrix</h4>
+                          <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100 md:col-span-2">
+                            <h4 className="text-sm font-semibold text-zinc-700 mb-3">Factor Correlation Matrix</h4>
                             <div className="overflow-x-auto">
-                              <table className="text-xs">
+                              <table className="text-xs w-full">
                                 <thead>
                                   <tr>
-                                    <th className="px-2 py-1"></th>
+                                    <th className="px-2 py-1.5 text-left text-zinc-500"></th>
                                     {factorBenchmarking.diagnostics.factor_correlations.factors?.map((f: string) => (
-                                      <th key={f} className="px-2 py-1 font-medium">{f}</th>
+                                      <th key={f} className="px-2 py-1.5 font-semibold text-zinc-700 text-center">{f}</th>
                                     ))}
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {factorBenchmarking.diagnostics.factor_correlations.factors?.map((row: string) => (
                                     <tr key={row}>
-                                      <td className="px-2 py-1 font-medium">{row}</td>
+                                      <td className="px-2 py-1.5 font-semibold text-zinc-700">{row}</td>
                                       {factorBenchmarking.diagnostics.factor_correlations.factors?.map((col: string) => {
                                         const corr = factorBenchmarking.diagnostics.factor_correlations.matrix?.[row]?.[col];
                                         const absCorr = Math.abs(corr || 0);
-                                        const bgColor = row === col ? 'bg-gray-200' :
+                                        const bgColor = row === col ? 'bg-zinc-200' :
                                           absCorr > 0.7 ? 'bg-red-100' :
-                                          absCorr > 0.5 ? 'bg-yellow-100' : '';
+                                          absCorr > 0.5 ? 'bg-amber-100' : '';
                                         return (
-                                          <td key={col} className={`px-2 py-1 text-center ${bgColor}`}>
+                                          <td key={col} className={`px-2 py-1.5 text-center tabular-nums ${bgColor}`}>
                                             {corr?.toFixed(2)}
                                           </td>
                                         );
@@ -1609,27 +1708,27 @@ export default function PortfolioStatisticsPage() {
                                 </tbody>
                               </table>
                             </div>
-                            <div className="mt-2 text-xs text-gray-500">
-                              High correlations (&gt;0.7) highlighted in red, moderate (&gt;0.5) in yellow
+                            <div className="mt-3 text-xs text-zinc-500">
+                              High correlations (&gt;0.7) highlighted in red, moderate (&gt;0.5) in amber
                             </div>
                           </div>
                         )}
 
                         {/* Outliers */}
                         {factorBenchmarking.diagnostics.outliers && factorBenchmarking.diagnostics.outliers.length > 0 && (
-                          <div className="bg-gray-50 rounded-lg p-4 md:col-span-2">
-                            <h4 className="text-sm font-medium text-gray-700 mb-2">
+                          <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100 md:col-span-2">
+                            <h4 className="text-sm font-semibold text-zinc-700 mb-3">
                               Extreme Return Days ({factorBenchmarking.diagnostics.outlier_count} detected)
                             </h4>
                             <div className="flex flex-wrap gap-2">
                               {factorBenchmarking.diagnostics.outliers.slice(0, 5).map((outlier: any, idx: number) => (
-                                <div key={idx} className={`px-2 py-1 rounded text-xs ${outlier.return >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                <span key={idx} className={`badge ${outlier.return >= 0 ? 'badge-success' : 'badge-danger'}`}>
                                   {outlier.date}: {outlier.return >= 0 ? '+' : ''}{outlier.return?.toFixed(2)}%
-                                </div>
+                                </span>
                               ))}
                             </div>
                             {useRobustMode && (
-                              <div className="mt-2 text-xs text-green-600">
+                              <div className="mt-3 text-xs text-emerald-600">
                                 Robust mode enabled: returns winsorized at 2.5% to reduce outlier impact
                               </div>
                             )}
@@ -1639,13 +1738,13 @@ export default function PortfolioStatisticsPage() {
 
                       {/* Rolling Analysis */}
                       {factorRollingData && factorRollingData.rolling_data && (
-                        <div className="mt-6">
-                          <div className="flex items-center gap-4 mb-3">
-                            <h4 className="text-sm font-medium text-gray-700">Rolling Analysis</h4>
+                        <div className="mt-6 pt-6 border-t border-zinc-200">
+                          <div className="flex items-center gap-4 mb-4">
+                            <h4 className="text-sm font-semibold text-zinc-700">Rolling Analysis</h4>
                             <select
                               value={rollingWindow}
                               onChange={(e) => setRollingWindow(Number(e.target.value))}
-                              className="text-sm border border-gray-300 rounded px-2 py-1"
+                              className="select text-sm w-auto"
                             >
                               <option value={30}>30-Day</option>
                               <option value={63}>63-Day (3M)</option>
@@ -1656,8 +1755,8 @@ export default function PortfolioStatisticsPage() {
 
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             {/* Rolling Alpha */}
-                            <div className="bg-white border rounded p-3">
-                              <div className="text-xs text-gray-500 mb-1">Rolling Alpha (Ann.)</div>
+                            <div className="bg-white border border-zinc-200 rounded-lg p-4">
+                              <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium mb-2">Rolling Alpha (Ann.)</div>
                               <div className="h-24 flex items-end gap-px">
                                 {factorRollingData.rolling_data.slice(-30).map((d: any, i: number) => {
                                   const val = d.alpha_ann || 0;
@@ -1666,42 +1765,42 @@ export default function PortfolioStatisticsPage() {
                                   return (
                                     <div
                                       key={i}
-                                      className={`flex-1 ${val >= 0 ? 'bg-green-400' : 'bg-red-400'}`}
+                                      className={`flex-1 rounded-t ${val >= 0 ? 'bg-emerald-400' : 'bg-red-400'}`}
                                       style={{ height: `${Math.max(height, 2)}%` }}
                                       title={`${d.date}: ${val?.toFixed(2)}%`}
                                     />
                                   );
                                 })}
                               </div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                Latest: {factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.alpha_ann?.toFixed(2)}%
+                              <div className="text-xs text-zinc-600 mt-2">
+                                Latest: <span className="font-medium tabular-nums">{factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.alpha_ann?.toFixed(2)}%</span>
                               </div>
                             </div>
 
                             {/* Rolling R² */}
-                            <div className="bg-white border rounded p-3">
-                              <div className="text-xs text-gray-500 mb-1">Rolling R²</div>
+                            <div className="bg-white border border-zinc-200 rounded-lg p-4">
+                              <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium mb-2">Rolling R²</div>
                               <div className="h-24 flex items-end gap-px">
                                 {factorRollingData.rolling_data.slice(-30).map((d: any, i: number) => {
                                   const val = (d.r_squared || 0) * 100;
                                   return (
                                     <div
                                       key={i}
-                                      className="flex-1 bg-indigo-400"
+                                      className="flex-1 bg-indigo-400 rounded-t"
                                       style={{ height: `${val}%` }}
                                       title={`${d.date}: ${val?.toFixed(1)}%`}
                                     />
                                   );
                                 })}
                               </div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                Latest: {(factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.r_squared * 100)?.toFixed(1)}%
+                              <div className="text-xs text-zinc-600 mt-2">
+                                Latest: <span className="font-medium tabular-nums">{(factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.r_squared * 100)?.toFixed(1)}%</span>
                               </div>
                             </div>
 
                             {/* Rolling Residual Vol */}
-                            <div className="bg-white border rounded p-3">
-                              <div className="text-xs text-gray-500 mb-1">Rolling Tracking Error (Ann.)</div>
+                            <div className="bg-white border border-zinc-200 rounded-lg p-4">
+                              <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium mb-2">Rolling Tracking Error</div>
                               <div className="h-24 flex items-end gap-px">
                                 {factorRollingData.rolling_data.slice(-30).map((d: any, i: number) => {
                                   const val = d.residual_vol_ann || 0;
@@ -1710,15 +1809,15 @@ export default function PortfolioStatisticsPage() {
                                   return (
                                     <div
                                       key={i}
-                                      className="flex-1 bg-orange-400"
+                                      className="flex-1 bg-orange-400 rounded-t"
                                       style={{ height: `${Math.max(height, 2)}%` }}
                                       title={`${d.date}: ${val?.toFixed(2)}%`}
                                     />
                                   );
                                 })}
                               </div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                Latest: {factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.residual_vol_ann?.toFixed(2)}%
+                              <div className="text-xs text-zinc-600 mt-2">
+                                Latest: <span className="font-medium tabular-nums">{factorRollingData.rolling_data[factorRollingData.rolling_data.length - 1]?.residual_vol_ann?.toFixed(2)}%</span>
                               </div>
                             </div>
                           </div>
@@ -1727,59 +1826,59 @@ export default function PortfolioStatisticsPage() {
 
                       {/* Contribution Over Time */}
                       {factorContribOverTime && factorContribOverTime.periods && (
-                        <div className="mt-6">
-                          <div className="flex items-center gap-4 mb-3">
-                            <h4 className="text-sm font-medium text-gray-700">Factor Contribution Over Time</h4>
+                        <div className="mt-6 pt-6 border-t border-zinc-200">
+                          <div className="flex items-center gap-4 mb-4">
+                            <h4 className="text-sm font-semibold text-zinc-700">Factor Contribution Over Time</h4>
                             <select
                               value={contribFrequency}
                               onChange={(e) => setContribFrequency(e.target.value as 'M' | 'Q')}
-                              className="text-sm border border-gray-300 rounded px-2 py-1"
+                              className="select text-sm w-auto"
                             >
                               <option value="M">Monthly</option>
                               <option value="Q">Quarterly</option>
                             </select>
                           </div>
 
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs">
-                              <thead className="bg-gray-50">
+                          <div className="table-container">
+                            <table className="table text-xs">
+                              <thead>
                                 <tr>
-                                  <th className="text-left py-2 px-2">Period</th>
-                                  <th className="text-right py-2 px-2">Portfolio</th>
+                                  <th>Period</th>
+                                  <th className="text-right">Portfolio</th>
                                   {factorContribOverTime.factors?.map((f: string) => (
-                                    <th key={f} className="text-right py-2 px-2">{f}</th>
+                                    <th key={f} className="text-right">{f}</th>
                                   ))}
-                                  <th className="text-right py-2 px-2">Alpha</th>
+                                  <th className="text-right">Alpha</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {factorContribOverTime.periods.slice(-12).map((period: any, idx: number) => (
-                                  <tr key={idx} className="border-b border-gray-100">
-                                    <td className="py-2 px-2 font-medium">{period.period}</td>
-                                    <td className={`text-right py-2 px-2 font-medium ${period.portfolio_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <tr key={idx}>
+                                    <td className="font-medium">{period.period}</td>
+                                    <td className={`text-right font-semibold tabular-nums ${period.portfolio_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {period.portfolio_return?.toFixed(2)}%
                                     </td>
                                     {factorContribOverTime.factors?.map((f: string) => (
-                                      <td key={f} className={`text-right py-2 px-2 ${(period.factor_contributions?.[f] || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      <td key={f} className={`text-right tabular-nums ${(period.factor_contributions?.[f] || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                         {period.factor_contributions?.[f]?.toFixed(2)}%
                                       </td>
                                     ))}
-                                    <td className={`text-right py-2 px-2 ${period.alpha_contribution >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    <td className={`text-right tabular-nums ${period.alpha_contribution >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                       {period.alpha_contribution?.toFixed(2)}%
                                     </td>
                                   </tr>
                                 ))}
                               </tbody>
-                              <tfoot className="bg-gray-100 font-medium">
-                                <tr>
-                                  <td className="py-2 px-2">Cumulative</td>
-                                  <td className={`text-right py-2 px-2 ${(factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_portfolio || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              <tfoot className="bg-zinc-50">
+                                <tr className="font-semibold">
+                                  <td>Cumulative</td>
+                                  <td className={`text-right tabular-nums ${(factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_portfolio || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                     {factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_portfolio?.toFixed(2)}%
                                   </td>
-                                  <td colSpan={factorContribOverTime.factors?.length || 0} className="text-right py-2 px-2">
+                                  <td colSpan={factorContribOverTime.factors?.length || 0} className="text-right tabular-nums text-zinc-600">
                                     Factor: {factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_factor_explained?.toFixed(2)}%
                                   </td>
-                                  <td className={`text-right py-2 px-2 ${(factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_alpha || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  <td className={`text-right tabular-nums ${(factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_alpha || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                     {factorContribOverTime.periods[factorContribOverTime.periods.length - 1]?.cumulative_alpha?.toFixed(2)}%
                                   </td>
                                 </tr>
@@ -1792,29 +1891,29 @@ export default function PortfolioStatisticsPage() {
                   )}
 
                   {/* Period info */}
-                  <div className="mt-4 pt-4 border-t text-sm text-gray-500 flex flex-wrap gap-4">
+                  <div className="mt-6 pt-4 border-t border-zinc-200 text-sm text-zinc-500 flex flex-wrap gap-4">
                     <span>Period: {factorBenchmarking.period?.start_date} to {factorBenchmarking.period?.end_date}</span>
                     <span>{factorBenchmarking.regression?.n_observations} trading days</span>
                     {useExcessReturns && (
                       <span>Risk-free rate: {factorBenchmarking.risk_free_rate_annual?.toFixed(1)}% annual</span>
                     )}
                     {useRobustMode && (
-                      <span className="text-indigo-600">Robust mode active</span>
+                      <span className="badge badge-blue">Robust mode active</span>
                     )}
                   </div>
                 </>
               ) : (
-                <div className="py-8 text-center">
+                <div className="py-12 text-center">
                   {factorBenchError ? (
-                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-xl mx-auto">
+                    <div className="alert alert-danger max-w-xl mx-auto text-left">
                       <div className="flex items-start gap-3">
-                        <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        <div className="text-left">
-                          <p className="text-red-800 text-sm font-medium">Factor Analysis Unavailable</p>
-                          <p className="text-red-600 text-sm mt-1">{factorBenchError}</p>
-                          <p className="text-gray-500 text-xs mt-2">
+                        <div>
+                          <p className="font-semibold">Factor Analysis Unavailable</p>
+                          <p className="mt-1">{factorBenchError}</p>
+                          <p className="text-xs mt-2 opacity-75">
                             This may be due to external data sources being temporarily unavailable.
                             Try refreshing data from the Data Management tab or try again later.
                           </p>
@@ -1822,8 +1921,12 @@ export default function PortfolioStatisticsPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="text-gray-500">
-                      Factor analysis not available. Ensure sufficient return data exists.
+                    <div className="empty-state">
+                      <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
+                      <p className="empty-state-title">Factor analysis not available</p>
+                      <p className="empty-state-description">Ensure sufficient return data exists for the selected period.</p>
                     </div>
                   )}
                 </div>

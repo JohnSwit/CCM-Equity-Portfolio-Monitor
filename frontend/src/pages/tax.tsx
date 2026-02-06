@@ -210,15 +210,11 @@ export default function TaxPage() {
           .map(lot => lot.symbol)
       )].sort();
       setSimAccountSymbols(accountSymbols);
-      // Reset symbol if it's not in the new account's symbols
       if (simSymbol && !accountSymbols.includes(simSymbol)) {
         setSimSymbol('');
       }
     } else if (simAccountId && activeTab === 'simulator') {
-      // Load lots if not already loaded
-      loadLots().then(() => {
-        // Symbols will be set by the next effect trigger
-      });
+      loadLots().then(() => {});
     } else {
       setSimAccountSymbols([]);
     }
@@ -353,7 +349,6 @@ export default function TaxPage() {
       setImportFile(null);
       setImportPreview(null);
       await loadImportHistory();
-      // Clear file input
       const fileInput = document.getElementById('tax-lot-file-input') as HTMLInputElement;
       if (fileInput) fileInput.value = '';
     } catch (err: any) {
@@ -395,6 +390,11 @@ export default function TaxPage() {
     return new Date(dateStr).toLocaleDateString();
   };
 
+  const getValueClass = (value: number | null | undefined) => {
+    if (value == null) return 'text-zinc-400';
+    return value >= 0 ? 'value-positive' : 'value-negative';
+  };
+
   // Get unique symbols from lots for filter dropdown
   const uniqueSymbols = [...new Set(lots.map(lot => lot.symbol))].sort();
   const uniqueAccountsInLots = [...new Set(lots.map(lot => lot.account_id))];
@@ -412,10 +412,10 @@ export default function TaxPage() {
       const aVal = a.unrealized_gain_loss || 0;
       const bVal = b.unrealized_gain_loss || 0;
       switch (lotsSortBy) {
-        case 'gain_high': return bVal - aVal; // Highest gains first
-        case 'gain_low': return aVal - bVal; // Lowest gains (biggest losses) first
-        case 'loss_high': return aVal - bVal; // Biggest losses first (most negative)
-        case 'loss_low': return bVal - aVal; // Smallest losses first
+        case 'gain_high': return bVal - aVal;
+        case 'gain_low': return aVal - bVal;
+        case 'loss_high': return aVal - bVal;
+        case 'loss_low': return bVal - aVal;
         default: return 0;
       }
     });
@@ -434,19 +434,34 @@ export default function TaxPage() {
     })
     .sort((a, b) => {
       switch (harvestSortBy) {
-        case 'loss_high': return a.unrealized_loss - b.unrealized_loss; // Most negative first
-        case 'loss_low': return b.unrealized_loss - a.unrealized_loss; // Least negative first
-        case 'st_high': return a.short_term_loss - b.short_term_loss; // Biggest ST losses first
-        case 'lt_high': return a.long_term_loss - b.long_term_loss; // Biggest LT losses first
+        case 'loss_high': return a.unrealized_loss - b.unrealized_loss;
+        case 'loss_low': return b.unrealized_loss - a.unrealized_loss;
+        case 'st_high': return a.short_term_loss - b.short_term_loss;
+        case 'lt_high': return a.long_term_loss - b.long_term_loss;
         default: return 0;
       }
     });
+
+  const tabs = [
+    { id: 'summary', label: 'Tax Summary' },
+    { id: 'lots', label: 'Tax Lots' },
+    { id: 'harvest', label: 'Loss Harvesting' },
+    { id: 'realized', label: 'Realized Gains' },
+    { id: 'simulator', label: 'Trade Simulator' },
+    { id: 'import', label: 'Import Tax Lots' },
+  ];
 
   if (authLoading || loading) {
     return (
       <Layout>
         <div className="flex items-center justify-center h-64">
-          <div className="text-gray-500">Loading...</div>
+          <div className="flex items-center gap-3 text-zinc-500">
+            <svg className="loading-spinner" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span>Loading tax data...</span>
+          </div>
         </div>
       </Layout>
     );
@@ -455,21 +470,21 @@ export default function TaxPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex justify-between items-center">
+        {/* Page Header */}
+        <div className="flex justify-between items-start">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Tax Optimization</h1>
-            <p className="text-sm text-gray-500 mt-1">
+            <h1 className="text-2xl font-bold text-zinc-900">Tax Optimization</h1>
+            <p className="text-sm text-zinc-500 mt-1">
               Manage tax lots, harvest losses, and optimize trades
             </p>
           </div>
-          <div className="flex gap-4 items-center">
+          <div className="flex gap-4 items-end">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Tax Year</label>
+              <label className="label">Tax Year</label>
               <select
                 value={taxYear}
                 onChange={(e) => setTaxYear(Number(e.target.value))}
-                className="px-3 py-2 border rounded"
+                className="select"
               >
                 {[2024, 2025, 2026].map((y) => (
                   <option key={y} value={y}>{y}</option>
@@ -477,11 +492,11 @@ export default function TaxPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Account</label>
+              <label className="label">Account</label>
               <select
                 value={selectedAccount || ''}
                 onChange={(e) => setSelectedAccount(e.target.value ? Number(e.target.value) : null)}
-                className="px-3 py-2 border rounded"
+                className="select"
               >
                 <option value="">All Accounts</option>
                 {accounts.map((a) => (
@@ -492,74 +507,65 @@ export default function TaxPage() {
           </div>
         </div>
 
+        {/* Error Alert */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-            {error}
-            <button onClick={() => setError(null)} className="ml-4 text-red-500 hover:text-red-700">
+          <div className="alert alert-danger flex justify-between items-center">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-600 hover:text-red-800 font-medium">
               Dismiss
             </button>
           </div>
         )}
 
         {/* Tabs */}
-        <div className="border-b">
-          <nav className="flex space-x-8">
-            {[
-              { id: 'summary', label: 'Tax Summary' },
-              { id: 'lots', label: 'Tax Lots' },
-              { id: 'harvest', label: 'Loss Harvesting' },
-              { id: 'realized', label: 'Realized Gains' },
-              { id: 'simulator', label: 'Trade Simulator' },
-              { id: 'import', label: 'Import Tax Lots' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as TabType)}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === tab.id
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
+        <div className="pill-tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as TabType)}
+              className={`pill-tab ${activeTab === tab.id ? 'pill-tab-active' : ''}`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {/* Tab Content */}
         {activeTab === 'summary' && summary && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Realized Gains/Losses */}
-            <div className="card p-6">
-              <h3 className="text-lg font-semibold mb-4">Realized Gains/Losses ({taxYear})</h3>
+            <div className="card">
+              <div className="card-header">
+                <h3 className="card-title">Realized Gains/Losses ({taxYear})</h3>
+              </div>
               <div className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-3 gap-4 text-sm">
                   <div></div>
-                  <div className="text-center text-sm text-gray-500">Short-Term</div>
-                  <div className="text-center text-sm text-gray-500">Long-Term</div>
+                  <div className="text-center font-medium text-zinc-500">Short-Term</div>
+                  <div className="text-center font-medium text-zinc-500">Long-Term</div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="text-sm text-gray-600">Gains</div>
-                  <div className="text-center text-green-600">{formatCurrency(summary.short_term_realized_gains)}</div>
-                  <div className="text-center text-green-600">{formatCurrency(summary.long_term_realized_gains)}</div>
+                <div className="grid grid-cols-3 gap-4 text-sm tabular-nums">
+                  <div className="text-zinc-600 font-medium">Gains</div>
+                  <div className="text-center value-positive">{formatCurrency(summary.short_term_realized_gains)}</div>
+                  <div className="text-center value-positive">{formatCurrency(summary.long_term_realized_gains)}</div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="text-sm text-gray-600">Losses</div>
-                  <div className="text-center text-red-600">({formatCurrency(summary.short_term_realized_losses)})</div>
-                  <div className="text-center text-red-600">({formatCurrency(summary.long_term_realized_losses)})</div>
+                <div className="grid grid-cols-3 gap-4 text-sm tabular-nums">
+                  <div className="text-zinc-600 font-medium">Losses</div>
+                  <div className="text-center value-negative">({formatCurrency(summary.short_term_realized_losses)})</div>
+                  <div className="text-center value-negative">({formatCurrency(summary.long_term_realized_losses)})</div>
                 </div>
-                <div className="grid grid-cols-3 gap-4 border-t pt-2">
-                  <div className="text-sm font-medium">Net</div>
-                  <div className={`text-center font-medium ${summary.net_short_term >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <div className="divider" />
+                <div className="grid grid-cols-3 gap-4 text-sm tabular-nums">
+                  <div className="font-semibold text-zinc-900">Net</div>
+                  <div className={`text-center font-semibold ${getValueClass(summary.net_short_term)}`}>
                     {formatCurrency(summary.net_short_term)}
                   </div>
-                  <div className={`text-center font-medium ${summary.net_long_term >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  <div className={`text-center font-semibold ${getValueClass(summary.net_long_term)}`}>
                     {formatCurrency(summary.net_long_term)}
                   </div>
                 </div>
                 {summary.wash_sale_disallowed > 0 && (
-                  <div className="text-sm text-orange-600 mt-2">
+                  <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg mt-4">
                     Wash Sale Disallowed: {formatCurrency(summary.wash_sale_disallowed)}
                   </div>
                 )}
@@ -567,30 +573,33 @@ export default function TaxPage() {
             </div>
 
             {/* Unrealized Gains/Losses */}
-            <div className="card p-6">
-              <h3 className="text-lg font-semibold mb-4">Unrealized Gains/Losses</h3>
+            <div className="card">
+              <div className="card-header">
+                <h3 className="card-title">Unrealized Gains/Losses</h3>
+              </div>
               <div className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-3 gap-4 text-sm">
                   <div></div>
-                  <div className="text-center text-sm text-gray-500">Short-Term</div>
-                  <div className="text-center text-sm text-gray-500">Long-Term</div>
+                  <div className="text-center font-medium text-zinc-500">Short-Term</div>
+                  <div className="text-center font-medium text-zinc-500">Long-Term</div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="text-sm text-gray-600">Gains</div>
-                  <div className="text-center text-green-600">{formatCurrency(summary.short_term_unrealized_gains)}</div>
-                  <div className="text-center text-green-600">{formatCurrency(summary.long_term_unrealized_gains)}</div>
+                <div className="grid grid-cols-3 gap-4 text-sm tabular-nums">
+                  <div className="text-zinc-600 font-medium">Gains</div>
+                  <div className="text-center value-positive">{formatCurrency(summary.short_term_unrealized_gains)}</div>
+                  <div className="text-center value-positive">{formatCurrency(summary.long_term_unrealized_gains)}</div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="text-sm text-gray-600">Losses</div>
-                  <div className="text-center text-red-600">({formatCurrency(summary.short_term_unrealized_losses)})</div>
-                  <div className="text-center text-red-600">({formatCurrency(summary.long_term_unrealized_losses)})</div>
+                <div className="grid grid-cols-3 gap-4 text-sm tabular-nums">
+                  <div className="text-zinc-600 font-medium">Losses</div>
+                  <div className="text-center value-negative">({formatCurrency(summary.short_term_unrealized_losses)})</div>
+                  <div className="text-center value-negative">({formatCurrency(summary.long_term_unrealized_losses)})</div>
                 </div>
-                <div className="grid grid-cols-3 gap-4 border-t pt-2">
-                  <div className="text-sm font-medium">Net</div>
-                  <div className={`text-center font-medium ${summary.net_short_term_unrealized >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <div className="divider" />
+                <div className="grid grid-cols-3 gap-4 text-sm tabular-nums">
+                  <div className="font-semibold text-zinc-900">Net</div>
+                  <div className={`text-center font-semibold ${getValueClass(summary.net_short_term_unrealized)}`}>
                     {formatCurrency(summary.net_short_term_unrealized)}
                   </div>
-                  <div className={`text-center font-medium ${summary.net_long_term_unrealized >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  <div className={`text-center font-semibold ${getValueClass(summary.net_long_term_unrealized)}`}>
                     {formatCurrency(summary.net_long_term_unrealized)}
                   </div>
                 </div>
@@ -598,31 +607,34 @@ export default function TaxPage() {
             </div>
 
             {/* Tax Estimate */}
-            <div className="card p-6 lg:col-span-2">
-              <h3 className="text-lg font-semibold mb-4">Estimated Tax Impact</h3>
+            <div className="card lg:col-span-2">
+              <div className="card-header">
+                <h3 className="card-title">Estimated Tax Impact</h3>
+              </div>
               <div className="grid grid-cols-4 gap-6">
-                <div className="text-center">
-                  <div className="text-sm text-gray-500">Total Realized</div>
-                  <div className={`text-2xl font-bold ${summary.total_realized >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <div className="metric-card metric-card-blue">
+                  <div className="metric-label">Total Realized</div>
+                  <div className={`metric-value-lg ${getValueClass(summary.total_realized)}`}>
                     {formatCurrency(summary.total_realized)}
                   </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-sm text-gray-500">Total Unrealized</div>
-                  <div className={`text-2xl font-bold ${summary.total_unrealized >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <div className="metric-card metric-card-purple">
+                  <div className="metric-label">Total Unrealized</div>
+                  <div className={`metric-value-lg ${getValueClass(summary.total_unrealized)}`}>
                     {formatCurrency(summary.total_unrealized)}
                   </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-sm text-gray-500">Est. Tax Liability</div>
-                  <div className="text-2xl font-bold text-orange-600">
+                <div className="metric-card metric-card-orange">
+                  <div className="metric-label">Est. Tax Liability</div>
+                  <div className="metric-value-lg text-amber-600">
                     {formatCurrency(summary.estimated_tax_liability)}
                   </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-sm text-gray-500">Rates Used</div>
-                  <div className="text-sm text-gray-700">
-                    ST: 37% | LT: 20%
+                <div className="pl-4 py-1">
+                  <div className="metric-label">Rates Used</div>
+                  <div className="text-sm text-zinc-700 mt-1">
+                    <div>Short-Term: 37%</div>
+                    <div>Long-Term: 20%</div>
                   </div>
                 </div>
               </div>
@@ -633,14 +645,14 @@ export default function TaxPage() {
         {activeTab === 'lots' && (
           <div className="space-y-4">
             {/* Filters */}
-            <div className="card p-4">
+            <div className="card">
               <div className="flex flex-wrap gap-4 items-end">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+                  <label className="label">Symbol</label>
                   <select
                     value={lotsFilterSymbol}
                     onChange={(e) => setLotsFilterSymbol(e.target.value)}
-                    className="px-3 py-2 border rounded min-w-[120px]"
+                    className="select min-w-[140px]"
                   >
                     <option value="">All Symbols</option>
                     {uniqueSymbols.map(symbol => (
@@ -649,11 +661,11 @@ export default function TaxPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Account</label>
+                  <label className="label">Account</label>
                   <select
                     value={lotsFilterAccount || ''}
                     onChange={(e) => setLotsFilterAccount(e.target.value ? Number(e.target.value) : null)}
-                    className="px-3 py-2 border rounded min-w-[150px]"
+                    className="select min-w-[160px]"
                   >
                     <option value="">All Accounts</option>
                     {accounts.filter(a => uniqueAccountsInLots.includes(a.id)).map(a => (
@@ -662,11 +674,11 @@ export default function TaxPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Gain/Loss</label>
+                  <label className="label">Gain/Loss</label>
                   <select
                     value={lotsFilterGainLoss}
                     onChange={(e) => setLotsFilterGainLoss(e.target.value as 'all' | 'gains' | 'losses')}
-                    className="px-3 py-2 border rounded min-w-[120px]"
+                    className="select min-w-[140px]"
                   >
                     <option value="all">All</option>
                     <option value="gains">Gains Only</option>
@@ -674,11 +686,11 @@ export default function TaxPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Sort By</label>
+                  <label className="label">Sort By</label>
                   <select
                     value={lotsSortBy}
                     onChange={(e) => setLotsSortBy(e.target.value as 'none' | 'gain_high' | 'gain_low' | 'loss_high' | 'loss_low')}
-                    className="px-3 py-2 border rounded min-w-[180px]"
+                    className="select min-w-[180px]"
                   >
                     <option value="none">Default</option>
                     <option value="gain_high">Gains: High to Low</option>
@@ -687,52 +699,60 @@ export default function TaxPage() {
                     <option value="loss_low">Losses: Low to High</option>
                   </select>
                 </div>
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-zinc-500 self-center">
                   Showing {filteredLots.length} of {lots.length} lots
                 </div>
               </div>
             </div>
 
-            <div className="card overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+            <div className="card p-0 overflow-hidden">
+              <div className="table-container mx-0">
+                <table className="table">
+                  <thead>
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Account</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Purchase Date</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Shares</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cost Basis</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current Value</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Gain/Loss</th>
-                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Term</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Days Held</th>
+                      <th>Symbol</th>
+                      <th>Account</th>
+                      <th>Purchase Date</th>
+                      <th className="text-right">Shares</th>
+                      <th className="text-right">Cost Basis</th>
+                      <th className="text-right">Current Value</th>
+                      <th className="text-right">Gain/Loss</th>
+                      <th className="text-center">Term</th>
+                      <th className="text-right">Days Held</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="tabular-nums">
                     {filteredLots.map((lot) => (
-                      <tr key={lot.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium">{lot.symbol}</td>
-                        <td className="px-4 py-3 text-gray-600">{lot.account_number || '-'}</td>
-                        <td className="px-4 py-3">{formatDate(lot.purchase_date)}</td>
-                        <td className="px-4 py-3 text-right">{lot.remaining_shares.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(lot.remaining_cost_basis)}</td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(lot.current_value)}</td>
-                        <td className={`px-4 py-3 text-right ${(lot.unrealized_gain_loss || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <tr key={lot.id}>
+                        <td className="font-semibold text-zinc-900">{lot.symbol}</td>
+                        <td className="text-zinc-600">{lot.account_number || '-'}</td>
+                        <td>{formatDate(lot.purchase_date)}</td>
+                        <td className="text-right">{lot.remaining_shares.toFixed(2)}</td>
+                        <td className="text-right">{formatCurrency(lot.remaining_cost_basis)}</td>
+                        <td className="text-right">{formatCurrency(lot.current_value)}</td>
+                        <td className={`text-right ${getValueClass(lot.unrealized_gain_loss)}`}>
                           {formatCurrency(lot.unrealized_gain_loss)} ({formatPercent(lot.unrealized_gain_loss_pct)})
                         </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`px-2 py-1 rounded text-xs ${lot.is_short_term ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                        <td className="text-center">
+                          <span className={`badge ${lot.is_short_term ? 'badge-warning' : 'badge-success'}`}>
                             {lot.is_short_term ? 'Short' : 'Long'}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right">{lot.holding_period_days}</td>
+                        <td className="text-right">{lot.holding_period_days}</td>
                       </tr>
                     ))}
                     {filteredLots.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
-                          {lots.length === 0 ? 'No tax lots found. Import tax lots from the Import tab.' : 'No lots match the current filters.'}
+                        <td colSpan={9}>
+                          <div className="empty-state">
+                            <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <p className="empty-state-title">No tax lots found</p>
+                            <p className="empty-state-description">
+                              {lots.length === 0 ? 'Import tax lots from the Import tab.' : 'No lots match the current filters.'}
+                            </p>
+                          </div>
                         </td>
                       </tr>
                     )}
@@ -745,23 +765,30 @@ export default function TaxPage() {
 
         {activeTab === 'harvest' && (
           <div className="space-y-6">
-            <div className="card p-4 bg-blue-50 border-blue-200">
-              <h3 className="font-semibold text-blue-900">Tax-Loss Harvesting</h3>
-              <p className="text-sm text-blue-700 mt-1">
-                Positions below have unrealized losses that could be harvested to offset gains.
-                Watch for wash sale restrictions (30-day window).
-              </p>
+            <div className="alert alert-info">
+              <div className="flex items-start gap-3">
+                <svg className="h-5 w-5 text-blue-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                  <h3 className="font-semibold text-blue-900">Tax-Loss Harvesting</h3>
+                  <p className="text-sm text-blue-700 mt-1">
+                    Positions below have unrealized losses that could be harvested to offset gains.
+                    Watch for wash sale restrictions (30-day window).
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Filters */}
-            <div className="card p-4">
+            <div className="card">
               <div className="flex flex-wrap gap-4 items-end">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+                  <label className="label">Symbol</label>
                   <select
                     value={harvestFilterSymbol}
                     onChange={(e) => setHarvestFilterSymbol(e.target.value)}
-                    className="px-3 py-2 border rounded min-w-[120px]"
+                    className="select min-w-[140px]"
                   >
                     <option value="">All Symbols</option>
                     {harvestUniqueSymbols.map(symbol => (
@@ -770,11 +797,11 @@ export default function TaxPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Loss Type</label>
+                  <label className="label">Loss Type</label>
                   <select
                     value={harvestFilterType}
                     onChange={(e) => setHarvestFilterType(e.target.value as 'all' | 'short_term' | 'long_term')}
-                    className="px-3 py-2 border rounded min-w-[150px]"
+                    className="select min-w-[160px]"
                   >
                     <option value="all">All Losses</option>
                     <option value="short_term">Short-Term Losses</option>
@@ -782,22 +809,22 @@ export default function TaxPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Min Loss Amount</label>
+                  <label className="label">Min Loss Amount</label>
                   <input
                     type="number"
                     value={harvestMinLoss}
                     onChange={(e) => setHarvestMinLoss(Number(e.target.value))}
-                    className="px-3 py-2 border rounded w-[120px]"
+                    className="input w-[120px]"
                     min={0}
                     step={100}
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Sort By</label>
+                  <label className="label">Sort By</label>
                   <select
                     value={harvestSortBy}
                     onChange={(e) => setHarvestSortBy(e.target.value as 'none' | 'loss_high' | 'loss_low' | 'st_high' | 'lt_high')}
-                    className="px-3 py-2 border rounded min-w-[180px]"
+                    className="select min-w-[200px]"
                   >
                     <option value="loss_high">Total Loss: High to Low</option>
                     <option value="loss_low">Total Loss: Low to High</option>
@@ -806,54 +833,62 @@ export default function TaxPage() {
                     <option value="none">Default</option>
                   </select>
                 </div>
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-zinc-500 self-center">
                   Showing {filteredHarvestCandidates.length} of {harvestCandidates.length} candidates
                 </div>
               </div>
             </div>
 
-            <div className="card overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+            <div className="card p-0 overflow-hidden">
+              <div className="table-container mx-0">
+                <table className="table">
+                  <thead>
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Shares</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cost Basis</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current Value</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Unrealized Loss</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Short-Term</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Long-Term</th>
-                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Wash Sale Risk</th>
+                      <th>Symbol</th>
+                      <th className="text-right">Shares</th>
+                      <th className="text-right">Cost Basis</th>
+                      <th className="text-right">Current Value</th>
+                      <th className="text-right">Unrealized Loss</th>
+                      <th className="text-right">Short-Term</th>
+                      <th className="text-right">Long-Term</th>
+                      <th className="text-center">Wash Sale Risk</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="tabular-nums">
                     {filteredHarvestCandidates.map((c) => (
-                      <tr key={c.security_id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium">{c.symbol}</td>
-                        <td className="px-4 py-3 text-right">{c.total_shares.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(c.total_cost_basis)}</td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(c.current_value)}</td>
-                        <td className="px-4 py-3 text-right text-red-600">
+                      <tr key={c.security_id}>
+                        <td className="font-semibold text-zinc-900">{c.symbol}</td>
+                        <td className="text-right">{c.total_shares.toFixed(2)}</td>
+                        <td className="text-right">{formatCurrency(c.total_cost_basis)}</td>
+                        <td className="text-right">{formatCurrency(c.current_value)}</td>
+                        <td className="text-right value-negative">
                           {formatCurrency(c.unrealized_loss)} ({formatPercent(c.unrealized_loss_pct)})
                         </td>
-                        <td className="px-4 py-3 text-right text-red-600">{formatCurrency(c.short_term_loss)}</td>
-                        <td className="px-4 py-3 text-right text-red-600">{formatCurrency(c.long_term_loss)}</td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="text-right value-negative">{formatCurrency(c.short_term_loss)}</td>
+                        <td className="text-right value-negative">{formatCurrency(c.long_term_loss)}</td>
+                        <td className="text-center">
                           {c.has_recent_purchase || c.has_pending_wash_sale ? (
-                            <span className="px-2 py-1 rounded text-xs bg-orange-100 text-orange-800">
+                            <span className="badge badge-warning">
                               {c.wash_sale_window_end ? `Until ${formatDate(c.wash_sale_window_end)}` : 'At Risk'}
                             </span>
                           ) : (
-                            <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-800">Clear</span>
+                            <span className="badge badge-success">Clear</span>
                           )}
                         </td>
                       </tr>
                     ))}
                     {filteredHarvestCandidates.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                          {harvestCandidates.length === 0 ? 'No tax-loss harvesting opportunities found.' : 'No candidates match the current filters.'}
+                        <td colSpan={8}>
+                          <div className="empty-state">
+                            <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <p className="empty-state-title">No harvesting opportunities</p>
+                            <p className="empty-state-description">
+                              {harvestCandidates.length === 0 ? 'No tax-loss harvesting opportunities found.' : 'No candidates match the current filters.'}
+                            </p>
+                          </div>
                         </td>
                       </tr>
                     )}
@@ -865,42 +900,42 @@ export default function TaxPage() {
         )}
 
         {activeTab === 'realized' && (
-          <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
+          <div className="card p-0 overflow-hidden">
+            <div className="table-container mx-0">
+              <table className="table">
+                <thead>
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Sale Date</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Purchase Date</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Shares</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Proceeds</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cost Basis</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Gain/Loss</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Term</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Wash Sale</th>
+                    <th>Symbol</th>
+                    <th>Sale Date</th>
+                    <th>Purchase Date</th>
+                    <th className="text-right">Shares</th>
+                    <th className="text-right">Proceeds</th>
+                    <th className="text-right">Cost Basis</th>
+                    <th className="text-right">Gain/Loss</th>
+                    <th className="text-center">Term</th>
+                    <th className="text-center">Wash Sale</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="tabular-nums">
                   {realizedGains.map((g) => (
-                    <tr key={g.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium">{g.symbol}</td>
-                      <td className="px-4 py-3">{formatDate(g.sale_date)}</td>
-                      <td className="px-4 py-3">{formatDate(g.purchase_date)}</td>
-                      <td className="px-4 py-3 text-right">{g.shares_sold.toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(g.proceeds)}</td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(g.cost_basis)}</td>
-                      <td className={`px-4 py-3 text-right ${g.adjusted_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    <tr key={g.id}>
+                      <td className="font-semibold text-zinc-900">{g.symbol}</td>
+                      <td>{formatDate(g.sale_date)}</td>
+                      <td>{formatDate(g.purchase_date)}</td>
+                      <td className="text-right">{g.shares_sold.toFixed(2)}</td>
+                      <td className="text-right">{formatCurrency(g.proceeds)}</td>
+                      <td className="text-right">{formatCurrency(g.cost_basis)}</td>
+                      <td className={`text-right ${getValueClass(g.adjusted_gain_loss)}`}>
                         {formatCurrency(g.adjusted_gain_loss)}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-1 rounded text-xs ${g.is_short_term ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                      <td className="text-center">
+                        <span className={`badge ${g.is_short_term ? 'badge-warning' : 'badge-success'}`}>
                           {g.is_short_term ? 'Short' : 'Long'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-center">
+                      <td className="text-center">
                         {g.is_wash_sale && (
-                          <span className="px-2 py-1 rounded text-xs bg-red-100 text-red-800">
+                          <span className="badge badge-danger">
                             {formatCurrency(g.wash_sale_disallowed)}
                           </span>
                         )}
@@ -909,8 +944,14 @@ export default function TaxPage() {
                   ))}
                   {realizedGains.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
-                        No realized gains/losses for {taxYear}.
+                      <td colSpan={9}>
+                        <div className="empty-state">
+                          <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                          </svg>
+                          <p className="empty-state-title">No realized gains</p>
+                          <p className="empty-state-description">No realized gains/losses for {taxYear}.</p>
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -922,22 +963,24 @@ export default function TaxPage() {
 
         {activeTab === 'simulator' && (
           <div className="space-y-6">
-            <div className="card p-6">
-              <h3 className="text-lg font-semibold mb-4">Trade Impact Simulator</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Analyze the tax impact of selling shares using different lot selection methods.
-              </p>
+            <div className="card">
+              <div className="card-header">
+                <div>
+                  <h3 className="card-title">Trade Impact Simulator</h3>
+                  <p className="card-subtitle">Analyze the tax impact of selling shares using different lot selection methods</p>
+                </div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Account</label>
+                  <label className="label">Account</label>
                   <select
                     value={simAccountId || ''}
                     onChange={(e) => {
                       setSimAccountId(e.target.value ? Number(e.target.value) : null);
-                      setSimSymbol(''); // Reset symbol when account changes
-                      setTradeImpact(null); // Clear previous results
+                      setSimSymbol('');
+                      setTradeImpact(null);
                     }}
-                    className="w-full px-3 py-2 border rounded"
+                    className="select"
                   >
                     <option value="">Select Account</option>
                     {accounts.map((a) => (
@@ -946,11 +989,11 @@ export default function TaxPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Symbol</label>
+                  <label className="label">Symbol</label>
                   <select
                     value={simSymbol}
                     onChange={(e) => setSimSymbol(e.target.value)}
-                    className="w-full px-3 py-2 border rounded"
+                    className="select"
                     disabled={!simAccountId}
                   >
                     <option value="">{simAccountId ? 'Select Symbol' : 'Select account first'}</option>
@@ -959,39 +1002,51 @@ export default function TaxPage() {
                     ))}
                   </select>
                   {simAccountId && simAccountSymbols.length === 0 && (
-                    <p className="text-xs text-gray-500 mt-1">No holdings found for this account</p>
+                    <p className="text-xs text-zinc-500 mt-1.5">No holdings found for this account</p>
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Shares to Sell</label>
+                  <label className="label">Shares to Sell</label>
                   <input
                     type="number"
                     value={simShares || ''}
                     onChange={(e) => setSimShares(Number(e.target.value))}
                     placeholder="100"
-                    className="w-full px-3 py-2 border rounded"
+                    className="input"
                   />
                 </div>
                 <div className="flex items-end">
                   <button
                     onClick={handleSimulateTrade}
                     disabled={simulating || !simSymbol || !simShares || !simAccountId}
-                    className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                    className="btn btn-primary w-full"
                   >
-                    {simulating ? 'Analyzing...' : 'Analyze Impact'}
+                    {simulating ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Analyzing...
+                      </>
+                    ) : 'Analyze Impact'}
                   </button>
                 </div>
               </div>
             </div>
 
             {tradeImpact && (
-              <div className="card p-6">
-                <h3 className="text-lg font-semibold mb-4">
-                  Results: Sell {tradeImpact.shares} shares of {tradeImpact.symbol}
-                </h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Estimated Proceeds: {formatCurrency(tradeImpact.estimated_proceeds)}
-                </p>
+              <div className="card">
+                <div className="card-header">
+                  <div>
+                    <h3 className="card-title">
+                      Results: Sell {tradeImpact.shares} shares of {tradeImpact.symbol}
+                    </h3>
+                    <p className="card-subtitle tabular-nums">
+                      Estimated Proceeds: {formatCurrency(tradeImpact.estimated_proceeds)}
+                    </p>
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                   {[
@@ -1002,35 +1057,42 @@ export default function TaxPage() {
                   ].map(({ method, data, label }) => (
                     <div
                       key={method}
-                      className={`p-4 rounded border ${
+                      className={`p-4 rounded-lg border-2 transition-colors ${
                         tradeImpact.recommended_method.toUpperCase() === method
-                          ? 'border-green-500 bg-green-50'
-                          : 'border-gray-200'
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-zinc-200 bg-white'
                       }`}
                     >
                       <div className="flex justify-between items-center mb-2">
-                        <span className="font-semibold">{method}</span>
+                        <span className="font-semibold text-zinc-900">{method}</span>
                         {tradeImpact.recommended_method.toUpperCase() === method && (
-                          <span className="text-xs bg-green-500 text-white px-2 py-1 rounded">Best</span>
+                          <span className="badge badge-success">Best</span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-500 mb-2">{label}</div>
-                      <div className={`text-lg font-bold ${data.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className="text-xs text-zinc-500 mb-3">{label}</div>
+                      <div className={`text-xl font-bold tabular-nums ${getValueClass(data.total_gain_loss)}`}>
                         {formatCurrency(data.total_gain_loss)}
                       </div>
-                      <div className="text-sm text-gray-600">
+                      <div className="text-sm text-zinc-600 tabular-nums">
                         Est. Tax: {formatCurrency(data.estimated_tax)}
                       </div>
                     </div>
                   ))}
                 </div>
 
-                <div className="bg-blue-50 p-4 rounded">
-                  <h4 className="font-semibold text-blue-900">Recommendation</h4>
-                  <p className="text-sm text-blue-700 mt-1">
-                    Use <strong>{tradeImpact.recommended_method.toUpperCase()}</strong> method to save{' '}
-                    <strong>{formatCurrency(tradeImpact.tax_savings_vs_fifo)}</strong> in taxes vs FIFO.
-                  </p>
+                <div className="alert alert-info">
+                  <div className="flex items-start gap-3">
+                    <svg className="h-5 w-5 text-blue-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div>
+                      <h4 className="font-semibold text-blue-900">Recommendation</h4>
+                      <p className="text-sm text-blue-700 mt-1">
+                        Use <strong>{tradeImpact.recommended_method.toUpperCase()}</strong> method to save{' '}
+                        <strong>{formatCurrency(tradeImpact.tax_savings_vs_fifo)}</strong> in taxes vs FIFO.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1040,40 +1102,45 @@ export default function TaxPage() {
         {activeTab === 'import' && (
           <div className="space-y-6">
             {/* Upload Section */}
-            <div className="card p-6">
-              <h3 className="text-lg font-semibold mb-4">Import Tax Lots from CSV</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Upload a CSV file with tax lot data. Required columns: Account Number, Symbol, Open Date, Units, Unit Cost.
-                Optional columns: Account Display Name, Class, Asset Name, Cost Basis, Market Value, Short-Term Gain/Loss, Long-Term Gain/Loss, Total Gain Loss.
-              </p>
+            <div className="card">
+              <div className="card-header">
+                <div>
+                  <h3 className="card-title">Import Tax Lots from CSV</h3>
+                  <p className="card-subtitle">
+                    Required columns: Account Number, Symbol, Open Date, Units, Unit Cost.
+                    Optional: Account Display Name, Class, Asset Name, Cost Basis, Market Value, Gain/Loss columns.
+                  </p>
+                </div>
+              </div>
 
               <div className="flex flex-wrap gap-4 items-end">
                 <div className="flex-1 min-w-[200px]">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Select CSV File</label>
+                  <label className="label">Select CSV File</label>
                   <input
                     id="tax-lot-file-input"
                     type="file"
                     accept=".csv"
                     onChange={handleFileSelect}
-                    className="block w-full text-sm text-gray-500
+                    className="block w-full text-sm text-zinc-500
                       file:mr-4 file:py-2 file:px-4
-                      file:rounded file:border-0
-                      file:text-sm file:font-semibold
+                      file:rounded-lg file:border-0
+                      file:text-sm file:font-medium
                       file:bg-blue-50 file:text-blue-700
-                      hover:file:bg-blue-100"
+                      hover:file:bg-blue-100
+                      file:cursor-pointer cursor-pointer"
                   />
                 </div>
                 <button
                   onClick={handlePreviewImport}
                   disabled={!importFile || previewLoading}
-                  className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
+                  className="btn btn-secondary"
                 >
                   {previewLoading ? 'Previewing...' : 'Preview'}
                 </button>
                 <button
                   onClick={handleCommitImport}
                   disabled={!importPreview || importPreview.valid_rows === 0 || importing}
-                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                  className="btn btn-primary"
                 >
                   {importing ? 'Importing...' : 'Import'}
                 </button>
@@ -1082,34 +1149,34 @@ export default function TaxPage() {
 
             {/* Preview Section */}
             {importPreview && (
-              <div className="card p-6">
-                <h3 className="text-lg font-semibold mb-4">
-                  Preview: {importPreview.file_name}
-                </h3>
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="card-title">Preview: {importPreview.file_name}</h3>
+                </div>
 
                 <div className="grid grid-cols-4 gap-4 mb-6">
-                  <div className="text-center p-3 bg-gray-50 rounded">
-                    <div className="text-2xl font-bold text-gray-800">{importPreview.total_rows}</div>
-                    <div className="text-sm text-gray-500">Total Rows</div>
+                  <div className="text-center p-4 bg-zinc-50 rounded-lg">
+                    <div className="text-2xl font-bold text-zinc-800 tabular-nums">{importPreview.total_rows}</div>
+                    <div className="text-sm text-zinc-500">Total Rows</div>
                   </div>
-                  <div className="text-center p-3 bg-green-50 rounded">
-                    <div className="text-2xl font-bold text-green-600">{importPreview.valid_rows}</div>
-                    <div className="text-sm text-gray-500">Valid Rows</div>
+                  <div className="text-center p-4 bg-emerald-50 rounded-lg">
+                    <div className="text-2xl font-bold text-emerald-600 tabular-nums">{importPreview.valid_rows}</div>
+                    <div className="text-sm text-zinc-500">Valid Rows</div>
                   </div>
-                  <div className="text-center p-3 bg-red-50 rounded">
-                    <div className="text-2xl font-bold text-red-600">{importPreview.error_rows}</div>
-                    <div className="text-sm text-gray-500">Errors</div>
+                  <div className="text-center p-4 bg-red-50 rounded-lg">
+                    <div className="text-2xl font-bold text-red-600 tabular-nums">{importPreview.error_rows}</div>
+                    <div className="text-sm text-zinc-500">Errors</div>
                   </div>
-                  <div className="text-center p-3 bg-yellow-50 rounded">
-                    <div className="text-2xl font-bold text-yellow-600">{importPreview.warnings?.length || 0}</div>
-                    <div className="text-sm text-gray-500">Warnings</div>
+                  <div className="text-center p-4 bg-amber-50 rounded-lg">
+                    <div className="text-2xl font-bold text-amber-600 tabular-nums">{importPreview.warnings?.length || 0}</div>
+                    <div className="text-sm text-zinc-500">Warnings</div>
                   </div>
                 </div>
 
                 {importPreview.errors && importPreview.errors.length > 0 && (
                   <div className="mb-4">
                     <h4 className="font-medium text-red-700 mb-2">Errors</h4>
-                    <div className="bg-red-50 rounded p-3 max-h-40 overflow-y-auto">
+                    <div className="bg-red-50 rounded-lg p-3 max-h-40 overflow-y-auto border border-red-200">
                       {importPreview.errors.map((e, i) => (
                         <div key={i} className="text-sm text-red-600">
                           Row {e.row}: {e.error}
@@ -1121,32 +1188,32 @@ export default function TaxPage() {
 
                 {importPreview.preview_data && importPreview.preview_data.length > 0 && (
                   <div>
-                    <h4 className="font-medium text-gray-700 mb-2">Preview Data (first {importPreview.preview_data.length} rows)</h4>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead className="bg-gray-50">
+                    <h4 className="font-medium text-zinc-700 mb-2">Preview Data (first {importPreview.preview_data.length} rows)</h4>
+                    <div className="overflow-x-auto border border-zinc-200 rounded-lg">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-zinc-50 border-b border-zinc-200">
                           <tr>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Account</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Symbol</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Open Date</th>
-                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Units</th>
-                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Unit Cost</th>
-                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Cost Basis</th>
-                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Market Value</th>
-                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Gain/Loss</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500 uppercase">Account</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500 uppercase">Symbol</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500 uppercase">Open Date</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 uppercase">Units</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 uppercase">Unit Cost</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 uppercase">Cost Basis</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 uppercase">Market Value</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 uppercase">Gain/Loss</th>
                           </tr>
                         </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
+                        <tbody className="tabular-nums">
                           {importPreview.preview_data.map((row) => (
-                            <tr key={row.row_num} className="hover:bg-gray-50">
+                            <tr key={row.row_num} className="border-b border-zinc-100 hover:bg-zinc-50">
                               <td className="px-3 py-2">{row.account_number}</td>
-                              <td className="px-3 py-2 font-medium">{row.symbol}</td>
+                              <td className="px-3 py-2 font-medium text-zinc-900">{row.symbol}</td>
                               <td className="px-3 py-2">{row.open_date}</td>
                               <td className="px-3 py-2 text-right">{row.units?.toFixed(2)}</td>
                               <td className="px-3 py-2 text-right">{formatCurrency(row.unit_cost)}</td>
                               <td className="px-3 py-2 text-right">{formatCurrency(row.cost_basis)}</td>
                               <td className="px-3 py-2 text-right">{row.market_value ? formatCurrency(row.market_value) : '-'}</td>
-                              <td className={`px-3 py-2 text-right ${(row.total_gain_loss || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              <td className={`px-3 py-2 text-right ${getValueClass(row.total_gain_loss)}`}>
                                 {row.total_gain_loss ? formatCurrency(row.total_gain_loss) : '-'}
                               </td>
                             </tr>
@@ -1160,47 +1227,55 @@ export default function TaxPage() {
             )}
 
             {/* Import History */}
-            <div className="card p-6">
-              <h3 className="text-lg font-semibold mb-4">Import History</h3>
+            <div className="card">
+              <div className="card-header">
+                <h3 className="card-title">Import History</h3>
+              </div>
               {importHistory.length === 0 ? (
-                <p className="text-gray-500 text-center py-4">No imports yet</p>
+                <div className="empty-state">
+                  <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  <p className="empty-state-title">No imports yet</p>
+                  <p className="empty-state-description">Upload a CSV file to import tax lots.</p>
+                </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
+                <div className="table-container mx-0 -mb-6">
+                  <table className="table">
+                    <thead>
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">File Name</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Processed</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Imported</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Skipped</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Errors</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                        <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                        <th>File Name</th>
+                        <th>Status</th>
+                        <th className="text-right">Processed</th>
+                        <th className="text-right">Imported</th>
+                        <th className="text-right">Skipped</th>
+                        <th className="text-right">Errors</th>
+                        <th>Date</th>
+                        <th className="text-center">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                    <tbody className="tabular-nums">
                       {importHistory.map((imp) => (
-                        <tr key={imp.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium">{imp.file_name}</td>
-                          <td className="px-4 py-3">
-                            <span className={`px-2 py-1 rounded text-xs ${
-                              imp.status === 'completed' ? 'bg-green-100 text-green-800' :
-                              imp.status === 'completed_with_errors' ? 'bg-yellow-100 text-yellow-800' :
-                              'bg-gray-100 text-gray-800'
+                        <tr key={imp.id}>
+                          <td className="font-medium text-zinc-900">{imp.file_name}</td>
+                          <td>
+                            <span className={`badge ${
+                              imp.status === 'completed' ? 'badge-success' :
+                              imp.status === 'completed_with_errors' ? 'badge-warning' :
+                              'badge-neutral'
                             }`}>
                               {imp.status}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-right">{imp.rows_processed}</td>
-                          <td className="px-4 py-3 text-right text-green-600">{imp.rows_imported}</td>
-                          <td className="px-4 py-3 text-right text-yellow-600">{imp.rows_skipped}</td>
-                          <td className="px-4 py-3 text-right text-red-600">{imp.rows_error}</td>
-                          <td className="px-4 py-3">{formatDate(imp.created_at)}</td>
-                          <td className="px-4 py-3 text-center">
+                          <td className="text-right">{imp.rows_processed}</td>
+                          <td className="text-right text-emerald-600">{imp.rows_imported}</td>
+                          <td className="text-right text-amber-600">{imp.rows_skipped}</td>
+                          <td className="text-right text-red-600">{imp.rows_error}</td>
+                          <td>{formatDate(imp.created_at)}</td>
+                          <td className="text-center">
                             <button
                               onClick={() => handleDeleteImport(imp.id, imp.file_name)}
-                              className="text-red-600 hover:text-red-800"
+                              className="btn btn-ghost btn-xs text-red-600 hover:text-red-700"
                             >
                               Delete
                             </button>
