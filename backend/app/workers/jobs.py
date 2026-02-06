@@ -15,7 +15,7 @@ from app.services.data_sourcing import BenchmarkService, ClassificationService
 from app.models import (
     Account, Group, ViewType, Transaction,
     PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
-    BenchmarkMetric, FactorRegression
+    BenchmarkMetric, FactorRegression, AccountInception, InceptionPosition
 )
 from app.models.sector_models import BenchmarkConstituent, SectorClassification
 from sqlalchemy import func
@@ -127,14 +127,22 @@ def cleanup_orphaned_data(db: Session, delete_accounts: bool = False, delete_sec
         txn.account_id for txn in db.query(Transaction.account_id).distinct().all()
     ])
 
+    # Get account IDs that have inception data (these are NOT orphaned)
+    accounts_with_inception = set([
+        inc.account_id for inc in db.query(AccountInception.account_id).all()
+    ])
+
     # Get all account IDs
     all_account_ids = [acc.id for acc in db.query(Account.id).all()]
 
-    # Find orphaned accounts
-    orphaned_account_ids = [acc_id for acc_id in all_account_ids if acc_id not in accounts_with_txns]
+    # Find truly orphaned accounts (no transactions AND no inception data)
+    orphaned_account_ids = [
+        acc_id for acc_id in all_account_ids
+        if acc_id not in accounts_with_txns and acc_id not in accounts_with_inception
+    ]
 
     if orphaned_account_ids:
-        logger.info(f"Found {len(orphaned_account_ids)} orphaned accounts")
+        logger.info(f"Found {len(orphaned_account_ids)} orphaned accounts (no transactions or inception)")
 
         # Always clear analytics for orphaned accounts
         clear_analytics_for_accounts_without_transactions(db)
@@ -155,14 +163,21 @@ def cleanup_orphaned_data(db: Session, delete_accounts: bool = False, delete_sec
         if txn.security_id is not None
     ])
 
+    # Get security IDs that have inception positions (these should not be deleted)
+    securities_with_inception = set([
+        pos.security_id for pos in db.query(InceptionPosition.security_id).distinct().all()
+    ])
+
     # Get all security IDs (excluding ETFs used for benchmarks/factors)
     benchmark_etf_symbols = ['SPY', 'QQQ', 'DIA', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM', 'USMV']
     all_securities = db.query(Security.id, Security.symbol).all()
 
-    # Find orphaned securities (not used in transactions and not benchmark/factor ETFs)
+    # Find orphaned securities (not used in transactions, not in inception, and not benchmark/factor ETFs)
     orphaned_security_ids = [
         sec.id for sec in all_securities
-        if sec.id not in securities_with_txns and sec.symbol not in benchmark_etf_symbols
+        if sec.id not in securities_with_txns
+        and sec.id not in securities_with_inception
+        and sec.symbol not in benchmark_etf_symbols
     ]
 
     if orphaned_security_ids and delete_securities:
@@ -208,10 +223,11 @@ def cleanup_orphaned_data(db: Session, delete_accounts: bool = False, delete_sec
 
 def clear_analytics_for_accounts_without_transactions(db: Session):
     """
-    Clear all analytics data for accounts that have no transactions.
+    Clear all analytics data for accounts that have no transactions AND no inception data.
     This handles the case where all transactions for an account were deleted.
+    Accounts with inception data are preserved since they have valid starting positions.
     """
-    logger.info("Clearing analytics for accounts without transactions...")
+    logger.info("Clearing analytics for accounts without transactions or inception data...")
 
     # Get all account IDs
     all_account_ids = [acc.id for acc in db.query(Account.id).all()]
@@ -221,8 +237,16 @@ def clear_analytics_for_accounts_without_transactions(db: Session):
         txn.account_id for txn in db.query(Transaction.account_id).distinct().all()
     ])
 
-    # Find accounts with no transactions
-    accounts_to_clear = [acc_id for acc_id in all_account_ids if acc_id not in accounts_with_txns]
+    # Get account IDs that have inception data
+    accounts_with_inception = set([
+        inc.account_id for inc in db.query(AccountInception.account_id).all()
+    ])
+
+    # Find accounts with no transactions AND no inception data
+    accounts_to_clear = [
+        acc_id for acc_id in all_account_ids
+        if acc_id not in accounts_with_txns and acc_id not in accounts_with_inception
+    ]
 
     if not accounts_to_clear:
         logger.info("No accounts without transactions found")
@@ -530,13 +554,18 @@ async def recompute_analytics_job(db: Session = None, use_batch_service: bool = 
         benchmark_results = benchmarks_engine.compute_all_benchmark_returns()
         logger.info(f"Benchmarks computed: {benchmark_results}")
 
-        # Compute benchmark metrics for all views (only accounts with transactions)
+        # Compute benchmark metrics for all views (accounts with transactions or inception data)
         logger.info("Computing benchmark metrics...")
+        from sqlalchemy import or_
         accounts_with_txns = db.query(Transaction.account_id).distinct().subquery()
+        accounts_with_inception = db.query(AccountInception.account_id).distinct().subquery()
         accounts = db.query(Account).filter(
-            Account.id.in_(accounts_with_txns)
+            or_(
+                Account.id.in_(accounts_with_txns),
+                Account.id.in_(accounts_with_inception)
+            )
         ).all()
-        logger.info(f"Computing benchmark metrics for {len(accounts)} accounts with transactions")
+        logger.info(f"Computing benchmark metrics for {len(accounts)} accounts")
         for account in accounts:
             for benchmark_code in ['SPY', 'QQQ', 'INDU']:
                 try:

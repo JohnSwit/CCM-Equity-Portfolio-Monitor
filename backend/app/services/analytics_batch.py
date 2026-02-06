@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.models.models import (
     Account, Transaction, TransactionType, Security,
     PositionsEOD, PricesEOD, PortfolioValueEOD, ReturnsEOD,
-    ViewType
+    ViewType, AccountInception
 )
 from app.core.database import SessionLocal
 
@@ -129,14 +129,19 @@ class BatchAnalyticsService:
         if not end_date:
             end_date = date.today()
 
-        # Get accounts - only those with transactions (to skip orphaned accounts)
+        # Get accounts - those with transactions OR inception data (to skip truly orphaned accounts)
         if account_ids:
             accounts = self.db.query(Account).filter(Account.id.in_(account_ids)).all()
         else:
-            # Only get accounts that have at least one transaction
+            # Get accounts that have at least one transaction OR have inception data
+            from sqlalchemy import or_
             accounts_with_txns = self.db.query(Transaction.account_id).distinct().subquery()
+            accounts_with_inception = self.db.query(AccountInception.account_id).distinct().subquery()
             accounts = self.db.query(Account).filter(
-                Account.id.in_(accounts_with_txns)
+                or_(
+                    Account.id.in_(accounts_with_txns),
+                    Account.id.in_(accounts_with_inception)
+                )
             ).all()
 
         if not accounts:
@@ -315,8 +320,20 @@ class BatchAnalyticsService:
         Build positions for a single account using bulk insert.
 
         Uses vectorized pandas operations with proper forward-fill to handle
-        transactions that occur on non-trading days.
+        transactions that occur on non-trading days. Supports inception data
+        as starting positions.
         """
+        # Check for inception data
+        inception = self.db.query(AccountInception).filter(
+            AccountInception.account_id == account_id
+        ).first()
+
+        inception_positions = {}  # security_id -> shares at inception
+        if inception:
+            for pos in inception.positions:
+                if pos.shares > 0:
+                    inception_positions[pos.security_id] = pos.shares
+
         # Get all transactions for this account, excluding options (no reliable prices)
         query = self.db.query(
             Transaction.security_id,
@@ -335,61 +352,102 @@ class BatchAnalyticsService:
 
         transactions = query.order_by(Transaction.trade_date).all()
 
-        if not transactions:
+        # If no transactions and no inception, nothing to build
+        if not transactions and not inception_positions:
             return 0
-
-        # Convert to DataFrame for vectorized operations
-        txn_df = pd.DataFrame(transactions, columns=['security_id', 'trade_date', 'txn_type', 'units'])
-
-        # Calculate deltas
-        def calc_delta(row):
-            return self._get_transaction_delta(row['txn_type'], row['units'] or 0)
-
-        txn_df['delta'] = txn_df.apply(calc_delta, axis=1)
-
-        # Filter out zero deltas
-        txn_df = txn_df[txn_df['delta'] != 0]
-
-        if txn_df.empty:
-            return 0
-
-        # Group by security and date, sum deltas
-        daily_changes = txn_df.groupby(['security_id', 'trade_date'])['delta'].sum().reset_index()
-
-        # Get unique securities
-        securities = daily_changes['security_id'].unique()
 
         # Filter trading dates
         trading_dates_filtered = [d for d in trading_dates if d <= end_date]
+
+        # If we have inception, include inception date in calendar
+        if inception:
+            # Make sure we include dates from inception onwards
+            if not start_date or start_date > inception.inception_date:
+                start_date = inception.inception_date
+
         if start_date:
             trading_dates_filtered = [d for d in trading_dates_filtered if d >= start_date]
 
+        # Ensure we have at least end_date if no trading dates
         if not trading_dates_filtered:
+            trading_dates_filtered = [end_date]
+
+        # Convert to DataFrame for vectorized operations
+        if transactions:
+            txn_df = pd.DataFrame(transactions, columns=['security_id', 'trade_date', 'txn_type', 'units'])
+
+            # Calculate deltas
+            def calc_delta(row):
+                return self._get_transaction_delta(row['txn_type'], row['units'] or 0)
+
+            txn_df['delta'] = txn_df.apply(calc_delta, axis=1)
+
+            # Filter out zero deltas
+            txn_df = txn_df[txn_df['delta'] != 0]
+
+            if not txn_df.empty:
+                # Group by security and date, sum deltas
+                daily_changes = txn_df.groupby(['security_id', 'trade_date'])['delta'].sum().reset_index()
+                # Get unique securities from transactions
+                transaction_securities = set(daily_changes['security_id'].unique())
+            else:
+                daily_changes = pd.DataFrame(columns=['security_id', 'trade_date', 'delta'])
+                transaction_securities = set()
+        else:
+            daily_changes = pd.DataFrame(columns=['security_id', 'trade_date', 'delta'])
+            transaction_securities = set()
+
+        # Combine transaction securities with inception securities
+        all_securities = transaction_securities.union(set(inception_positions.keys()))
+
+        if not all_securities:
             return 0
 
         positions_to_insert = []
 
         # Process each security separately to handle forward-fill correctly
-        for security_id in securities:
-            sec_changes = daily_changes[daily_changes['security_id'] == security_id].copy()
+        for security_id in all_securities:
+            starting_shares = inception_positions.get(security_id, 0.0)
+            sec_changes = daily_changes[daily_changes['security_id'] == security_id].copy() if not daily_changes.empty else pd.DataFrame()
 
-            # Convert trade_date to Timestamp for consistent index type
-            sec_changes['trade_date'] = pd.to_datetime(sec_changes['trade_date'])
-            sec_changes = sec_changes.set_index('trade_date')['delta']
-
-            # Compute cumulative position at each transaction date
-            cumulative_positions = sec_changes.cumsum()
-
-            # Create a series with the trading calendar as index (also as Timestamps)
+            # Create a series with the trading calendar as index (as Timestamps)
             trading_index = pd.DatetimeIndex([pd.Timestamp(d) for d in trading_dates_filtered])
 
-            # Combine transaction dates with trading dates, then forward-fill
-            # Both indices are now DatetimeIndex so union works correctly
-            all_dates = cumulative_positions.index.union(trading_index).sort_values()
-            full_positions = cumulative_positions.reindex(all_dates).ffill().fillna(0)
+            if not sec_changes.empty:
+                # Convert trade_date to Timestamp for consistent index type
+                sec_changes['trade_date'] = pd.to_datetime(sec_changes['trade_date'])
+                sec_changes = sec_changes.set_index('trade_date')['delta']
 
-            # Filter to only trading dates
-            full_positions = full_positions.reindex(trading_index)
+                # Compute cumulative position at each transaction date, starting from inception
+                cumulative_positions = starting_shares + sec_changes.cumsum()
+
+                # Combine transaction dates with trading dates, then forward-fill
+                all_dates = cumulative_positions.index.union(trading_index).sort_values()
+
+                # Set inception date value if we have inception
+                if inception and inception_positions.get(security_id):
+                    inception_ts = pd.Timestamp(inception.inception_date)
+                    if inception_ts not in cumulative_positions.index:
+                        cumulative_positions[inception_ts] = starting_shares
+                        cumulative_positions = cumulative_positions.sort_index()
+
+                full_positions = cumulative_positions.reindex(all_dates)
+
+                # Forward fill, but first set inception value
+                if inception and inception_positions.get(security_id):
+                    inception_ts = pd.Timestamp(inception.inception_date)
+                    if inception_ts in full_positions.index and pd.isna(full_positions[inception_ts]):
+                        full_positions[inception_ts] = starting_shares
+
+                full_positions = full_positions.ffill().fillna(starting_shares if starting_shares else 0)
+
+                # Filter to only trading dates
+                full_positions = full_positions.reindex(trading_index)
+                # Fill any remaining NaN with starting_shares
+                full_positions = full_positions.fillna(starting_shares if starting_shares else 0)
+            else:
+                # No transactions for this security, just use inception position for all dates
+                full_positions = pd.Series(starting_shares, index=trading_index)
 
             # Add to insert list
             for trade_date, shares in full_positions.items():
@@ -829,9 +887,10 @@ class PostImportAnalyticsJob:
         )
 
     def _get_accounts_with_transactions(self) -> List[int]:
-        """Get all account IDs that have transactions"""
-        result = self.db.query(Transaction.account_id).distinct().all()
-        return [r[0] for r in result]
+        """Get all account IDs that have transactions or inception data"""
+        txn_accounts = set(r[0] for r in self.db.query(Transaction.account_id).distinct().all())
+        inception_accounts = set(r[0] for r in self.db.query(AccountInception.account_id).distinct().all())
+        return list(txn_accounts.union(inception_accounts))
 
     def _get_earliest_transaction_date(self, import_job_id: int) -> Optional[date]:
         """Get earliest transaction date from an import"""
