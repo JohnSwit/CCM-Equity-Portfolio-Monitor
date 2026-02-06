@@ -11,7 +11,7 @@ from sqlalchemy import and_, func
 import asyncio
 import logging
 
-from app.models import Security, PricesEOD, BenchmarkDefinition, BenchmarkLevel
+from app.models import Security, PricesEOD, BenchmarkDefinition, BenchmarkLevel, InceptionPosition
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -445,6 +445,7 @@ class MarketDataProvider:
         This significantly speeds up the process while respecting rate limits.
         """
         from app.models import Transaction
+        from sqlalchemy import or_
 
         # Log Tiingo client status
         logger.info(f"Tiingo API key configured: {bool(settings.TIINGO_API_KEY)}")
@@ -452,10 +453,26 @@ class MarketDataProvider:
         if force_refresh:
             logger.info("Force refresh enabled - will delete and re-fetch all prices")
 
-        # Get all securities with transactions
-        securities = self.db.query(Security).join(Transaction).distinct().all()
+        # Get securities with transactions
+        txn_security_ids = set(
+            r[0] for r in self.db.query(Transaction.security_id).distinct().all()
+            if r[0] is not None
+        )
 
-        logger.info(f"Found {len(securities)} securities with transactions to update")
+        # Get securities with inception positions
+        inception_security_ids = set(
+            r[0] for r in self.db.query(InceptionPosition.security_id).distinct().all()
+        )
+
+        # Combine both sets
+        all_security_ids = txn_security_ids.union(inception_security_ids)
+
+        # Get all securities
+        securities = self.db.query(Security).filter(
+            Security.id.in_(all_security_ids)
+        ).all()
+
+        logger.info(f"Found {len(securities)} securities to update ({len(txn_security_ids)} from transactions, {len(inception_security_ids)} from inception)")
         logger.info(f"Using parallel fetching with max_concurrent={max_concurrent}")
 
         results = {

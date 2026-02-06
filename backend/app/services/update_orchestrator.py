@@ -21,7 +21,8 @@ from app.core.database import SessionLocal
 from app.models import (
     Account, Group, Security, Transaction, PricesEOD,
     PositionsEOD, ReturnsEOD, PortfolioValueEOD, RiskEOD,
-    BenchmarkLevel, BenchmarkDefinition, FactorRegression, ViewType
+    BenchmarkLevel, BenchmarkDefinition, FactorRegression, ViewType,
+    InceptionPosition
 )
 from app.models.update_tracking import (
     TickerProviderCoverage, DataUpdateState, ComputationDependency,
@@ -663,17 +664,23 @@ class UpdateOrchestrator:
             use_batch_service: Use optimized BatchAnalyticsService for bulk operations (default True)
         """
         start_time = time.time()
+        from sqlalchemy import or_
+        from app.models import AccountInception
 
-        # Only get accounts that have at least one transaction (skip orphaned accounts)
+        # Get accounts that have transactions OR inception data (skip truly orphaned accounts)
         accounts_with_txns = self.db.query(Transaction.account_id).distinct().subquery()
+        accounts_with_inception = self.db.query(AccountInception.account_id).distinct().subquery()
         accounts = self.db.query(Account).filter(
-            Account.id.in_(accounts_with_txns)
+            or_(
+                Account.id.in_(accounts_with_txns),
+                Account.id.in_(accounts_with_inception)
+            )
         ).all()
 
         groups = self.db.query(Group).all()
         as_of_date = date.today()
 
-        logger.info(f"Processing analytics for {len(accounts)} accounts with transactions")
+        logger.info(f"Processing analytics for {len(accounts)} accounts with transactions or inception")
 
         if use_batch_service:
             # Use optimized batch service for positions, values, and returns
@@ -916,9 +923,22 @@ class UpdateOrchestrator:
             self.metrics.add_error(f"group:{group.id}", str(e))
 
     def _get_securities_needing_update(self) -> List[Security]:
-        """Get list of securities that need price updates"""
-        # Securities with transactions
-        return self.db.query(Security).join(Transaction).distinct().all()
+        """Get list of securities that need price updates (from transactions or inception)"""
+        # Get securities with transactions
+        txn_security_ids = set(
+            r[0] for r in self.db.query(Transaction.security_id).distinct().all()
+            if r[0] is not None
+        )
+
+        # Get securities with inception positions
+        inception_security_ids = set(
+            r[0] for r in self.db.query(InceptionPosition.security_id).distinct().all()
+        )
+
+        # Combine both sets
+        all_security_ids = txn_security_ids.union(inception_security_ids)
+
+        return self.db.query(Security).filter(Security.id.in_(all_security_ids)).all()
 
     def _get_update_state(self, entity_type: str, entity_id: str) -> DataUpdateState:
         """Get or create update state for an entity"""
