@@ -211,14 +211,12 @@ class InceptionParser:
         try:
             # Create import log
             import_log = ImportLog(
-                filename='inception_upload',
+                file_name='inception_upload',
                 source='inception',
                 status='processing',
-                records_total=len(df),
-                records_processed=0,
-                records_skipped=0,
-                records_errors=0,
-                user_id=user_id
+                rows_processed=0,
+                rows_imported=0,
+                rows_error=0
             )
             self.db.add(import_log)
             self.db.flush()
@@ -283,7 +281,9 @@ class InceptionParser:
                     # Create inception positions
                     for _, row in acct_df.iterrows():
                         # Get or create security
-                        security = self._get_or_create_security(row)
+                        security, is_new = self._get_or_create_security(row)
+                        if is_new:
+                            results['securities_created'] += 1
 
                         # Create inception position
                         position = InceptionPosition(
@@ -303,9 +303,9 @@ class InceptionParser:
 
             # Update import log
             import_log.status = 'completed' if not results['errors'] else 'completed_with_errors'
-            import_log.records_processed = results['positions_created']
-            import_log.records_errors = len(results['errors'])
-            import_log.completed_at = datetime.utcnow()
+            import_log.rows_processed = results['positions_created']
+            import_log.rows_imported = results['positions_created']
+            import_log.rows_error = len(results['errors'])
 
             self.db.commit()
 
@@ -321,8 +321,8 @@ class InceptionParser:
                 'has_errors': True
             }
 
-    def _get_or_create_security(self, row: pd.Series) -> Security:
-        """Get existing security or create new one"""
+    def _get_or_create_security(self, row: pd.Series) -> Tuple[Security, bool]:
+        """Get existing security or create new one. Returns (security, is_new)."""
         symbol = str(row['Symbol']).upper()
         asset_class = self._classify_asset_class(row.get('Class', ''), symbol)
 
@@ -331,6 +331,7 @@ class InceptionParser:
             Security.asset_class == asset_class
         ).first()
 
+        is_new = False
         if not security:
             security = Security(
                 symbol=symbol,
@@ -340,8 +341,9 @@ class InceptionParser:
             )
             self.db.add(security)
             self.db.flush()
+            is_new = True
 
-        return security
+        return security, is_new
 
     def _classify_asset_class(self, class_str: str, symbol: str) -> AssetClass:
         """Classify asset class from string"""
