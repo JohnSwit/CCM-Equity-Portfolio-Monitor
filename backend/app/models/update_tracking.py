@@ -162,16 +162,18 @@ def compute_input_hash(inputs: Dict[str, Any]) -> str:
 def compute_positions_input_hash(
     account_id: int,
     transaction_ids: List[int],
-    last_transaction_date: date
+    last_transaction_date: date,
+    inception_id: int = None
 ) -> str:
-    """Compute input hash for positions computation"""
+    """Compute input hash for positions computation (includes inception data if present)"""
     inputs = {
         'account_id': account_id,
         'transaction_count': len(transaction_ids),
         'transaction_ids_hash': hashlib.md5(
             ','.join(map(str, sorted(transaction_ids))).encode()
-        ).hexdigest(),
-        'last_transaction_date': str(last_transaction_date),
+        ).hexdigest() if transaction_ids else '',
+        'last_transaction_date': str(last_transaction_date) if last_transaction_date else '',
+        'inception_id': inception_id,  # Include inception to trigger recompute when inception changes
     }
     return compute_input_hash(inputs)
 

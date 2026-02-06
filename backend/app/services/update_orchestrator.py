@@ -766,30 +766,49 @@ class UpdateOrchestrator:
         from app.services.risk import RiskEngine
         from app.services.factors import FactorsEngine
         from app.services.benchmarks import BenchmarksEngine
+        from app.models import AccountInception
 
         view_type = 'account'
         view_id = account.id
 
         try:
-            # 1. Positions (depends on transactions)
+            # 1. Positions (depends on transactions and/or inception data)
             transaction_ids = [t.id for t in self.db.query(Transaction.id).filter(
                 Transaction.account_id == account.id
             ).all()]
 
-            if not transaction_ids:
-                return  # No transactions, nothing to compute
+            # Check if account has inception data
+            has_inception = self.db.query(AccountInception).filter(
+                AccountInception.account_id == account.id
+            ).first() is not None
+
+            if not transaction_ids and not has_inception:
+                return  # No transactions and no inception data, nothing to compute
 
             last_txn_date = self.db.query(func.max(Transaction.trade_date)).filter(
                 Transaction.account_id == account.id
             ).scalar()
 
+            # Include inception in hash to trigger recomputation when inception changes
+            inception_id = None
+            if has_inception:
+                inception = self.db.query(AccountInception).filter(
+                    AccountInception.account_id == account.id
+                ).first()
+                if inception:
+                    inception_id = inception.id
+
             positions_hash = compute_positions_input_hash(
-                account.id, transaction_ids, last_txn_date
+                account.id, transaction_ids, last_txn_date, inception_id
             )
 
-            if self.dependency_tracker.needs_recomputation(
+            # Always compute positions for accounts with inception data to ensure inception
+            # securities are included (inception data doesn't change often so this is fine)
+            needs_recompute = has_inception or self.dependency_tracker.needs_recomputation(
                 'positions', view_type, view_id, positions_hash
-            ):
+            )
+
+            if needs_recompute:
                 start = time.time()
                 self.dependency_tracker.mark_started('positions', view_type, view_id, positions_hash)
 
