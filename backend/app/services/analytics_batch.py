@@ -247,6 +247,11 @@ class BatchAnalyticsService:
                 'last_txn_date': stat.last_txn_date
             }
 
+        # Pre-fetch accounts with inception data
+        accounts_with_inception = set(
+            r[0] for r in self.db.query(AccountInception.account_id).all()
+        )
+
         # Pre-fetch last position dates for incremental updates
         position_stats = self.db.query(
             PositionsEOD.account_id,
@@ -257,18 +262,26 @@ class BatchAnalyticsService:
 
         for account in accounts:
             try:
-                # Skip accounts with no transactions
-                if account.id not in account_txn_info:
+                has_transactions = account.id in account_txn_info
+                has_inception = account.id in accounts_with_inception
+
+                # Skip accounts with no transactions AND no inception data
+                if not has_transactions and not has_inception:
                     accounts_skipped += 1
                     continue
 
-                info = account_txn_info[account.id]
+                info = account_txn_info.get(account.id, {'txn_count': 0, 'last_txn_date': None})
                 last_pos_date = last_position_dates.get(account.id)
 
                 # Determine if we need full rebuild or incremental
                 if force_full_rebuild:
                     # Force full rebuild - process all accounts from the beginning
                     incremental_start = None  # None means full rebuild
+                elif has_inception:
+                    # Accounts with inception data should always be processed to ensure
+                    # inception securities are included in positions
+                    # We start from inception date to capture all inception positions
+                    incremental_start = None  # Full rebuild for inception accounts
                 elif last_pos_date and info['last_txn_date']:
                     if last_pos_date >= info['last_txn_date'] and last_pos_date >= end_date - timedelta(days=5):
                         # Positions are up to date, skip
