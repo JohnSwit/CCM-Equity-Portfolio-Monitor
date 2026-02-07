@@ -78,8 +78,10 @@ class ReturnsEngine:
 
         prices_df = pd.DataFrame(prices, columns=['date', 'security_id', 'close'])
 
-        # Merge positions and prices
-        merged = pos_df.merge(prices_df, on=['date', 'security_id'], how='inner')
+        # Merge positions and prices using LEFT join to keep all positions
+        # Securities without prices will have NaN close, which we fill with 0
+        merged = pos_df.merge(prices_df, on=['date', 'security_id'], how='left')
+        merged['close'] = merged['close'].fillna(0)
 
         # Compute market value per position
         merged['market_value'] = merged['shares'] * merged['close']

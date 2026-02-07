@@ -591,13 +591,20 @@ class BatchAnalyticsService:
             index='date', columns='security_id', values='shares', aggfunc='sum'
         ).fillna(0)
 
-        # Align columns
-        common_securities = list(set(pos_wide.columns) & set(price_wide.columns))
-        if not common_securities:
+        # Use ALL securities from positions (not just those with prices)
+        # This ensures we don't exclude positions that are missing price data
+        all_position_securities = list(pos_wide.columns)
+        if not all_position_securities:
             return 0
 
-        pos_wide = pos_wide[common_securities]
-        price_wide = price_wide[common_securities]
+        # Ensure price_wide has all securities from positions
+        # Securities without any prices will have NaN, which we fill with 0
+        for sec_id in all_position_securities:
+            if sec_id not in price_wide.columns:
+                price_wide[sec_id] = 0.0
+
+        # Reindex to ensure same column order
+        price_wide = price_wide.reindex(columns=all_position_securities, fill_value=0.0)
 
         # Compute portfolio values: shares * prices, summed across securities
         portfolio_values = (pos_wide * price_wide).sum(axis=1)
@@ -732,6 +739,14 @@ class BatchAnalyticsService:
 
         pos_wide = pos_wide.reindex(common_dates)
         price_wide = price_wide.reindex(common_dates)
+
+        # Ensure price_wide has all securities from positions
+        # Securities without any prices will be filled with 0
+        all_position_securities = list(pos_wide.columns)
+        for sec_id in all_position_securities:
+            if sec_id not in price_wide.columns:
+                price_wide[sec_id] = 0.0
+        price_wide = price_wide.reindex(columns=all_position_securities, fill_value=0.0)
 
         # Compute portfolio values
         portfolio_values = (pos_wide * price_wide).sum(axis=1)
