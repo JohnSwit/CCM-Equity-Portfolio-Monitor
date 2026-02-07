@@ -815,7 +815,12 @@ class BatchAnalyticsService:
     def _get_trading_calendar(self, start_date: date, end_date: date) -> List[date]:
         """Get trading dates from price data"""
         if self._trading_dates:
-            return [d for d in self._trading_dates if start_date <= d <= end_date]
+            filtered = [d for d in self._trading_dates if start_date <= d <= end_date]
+            # Ensure end_date is included
+            if end_date not in filtered:
+                filtered.append(end_date)
+                filtered.sort()
+            return filtered
 
         dates = self.db.query(PricesEOD.date).filter(
             and_(
@@ -830,6 +835,11 @@ class BatchAnalyticsService:
             # Fall back to all dates
             all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
             self._trading_dates = [d.date() for d in all_dates]
+        else:
+            # Always ensure end_date is included so positions exist for "today"
+            if end_date not in self._trading_dates:
+                self._trading_dates.append(end_date)
+                self._trading_dates.sort()
 
         return self._trading_dates
 

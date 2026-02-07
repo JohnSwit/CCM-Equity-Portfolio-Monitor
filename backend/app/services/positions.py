@@ -278,6 +278,11 @@ class PositionsEngine:
         if not trading_dates:
             all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
             trading_dates = [d.date() for d in all_dates]
+        else:
+            # Always ensure end_date is included so positions exist for "today"
+            # even if today's prices haven't been fetched yet
+            if end_date not in trading_dates:
+                trading_dates.append(end_date)
 
         return trading_dates
 
