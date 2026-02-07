@@ -609,16 +609,17 @@ class BatchAnalyticsService:
         # Compute portfolio values: shares * prices, summed across securities
         portfolio_values = (pos_wide * price_wide).sum(axis=1)
 
-        # Prepare for bulk upsert
+        # Prepare for bulk upsert - include all dates including $0 values
+        # This ensures holdings endpoint can find the latest date even when
+        # positions exist but prices are missing
         values_to_insert = [
             {
                 "view_type": ViewType.ACCOUNT,
                 "view_id": account_id,
                 "date": trade_date,
-                "total_value": float(value)
+                "total_value": float(value) if value is not None else 0.0
             }
             for trade_date, value in portfolio_values.items()
-            if value is not None and value > 0
         ]
 
         if not values_to_insert:
