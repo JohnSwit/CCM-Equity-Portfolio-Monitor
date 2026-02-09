@@ -736,7 +736,7 @@ export default function PortfolioStatisticsPage() {
                       <div className="flex flex-wrap gap-4 text-sm">
                         <span>
                           <span className="font-semibold">Total Return:</span>{' '}
-                          <span className={`font-bold ${contributionData.total_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <span className={`font-bold ${contributionData.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {formatPercent(contributionData.total_return)}
                           </span>
                         </span>
@@ -948,14 +948,14 @@ export default function PortfolioStatisticsPage() {
                         {/* Portfolio Return */}
                         <div className="text-center md:text-left">
                           <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Portfolio Return</div>
-                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.portfolio_return || 0) >= 0 ? 'text-zinc-800' : 'text-red-600'}`}>
+                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.portfolio_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.portfolio_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.portfolio_return)}
                           </div>
                         </div>
                         {/* Active Return (center, larger) */}
                         <div className="text-center">
                           <div className="text-sm text-zinc-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
-                          <div className={`text-4xl font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-4xl font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
                           <div className="text-xs text-zinc-500 mt-2">
@@ -965,7 +965,7 @@ export default function PortfolioStatisticsPage() {
                         {/* Benchmark Return */}
                         <div className="text-center md:text-right">
                           <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">{brinsonData.benchmark || 'Benchmark'} Return</div>
-                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.benchmark_return || 0) >= 0 ? 'text-zinc-600' : 'text-red-600'}`}>
+                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.benchmark_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.benchmark_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.benchmark_return)}
                           </div>
                         </div>
@@ -976,21 +976,21 @@ export default function PortfolioStatisticsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                       <div className="metric-card metric-card-blue">
                         <div className="metric-label">Allocation Effect</div>
-                        <div className={`metric-value-lg ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <div className={`metric-value-lg ${(brinsonData.allocation_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                           {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                         </div>
                         <div className="text-xs text-zinc-500 mt-1">Sector weighting decisions</div>
                       </div>
                       <div className="metric-card metric-card-green">
                         <div className="metric-label">Selection Effect</div>
-                        <div className={`metric-value-lg ${(brinsonData.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <div className={`metric-value-lg ${(brinsonData.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                           {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                         </div>
                         <div className="text-xs text-zinc-500 mt-1">Security selection within sectors</div>
                       </div>
                       <div className="metric-card metric-card-purple">
                         <div className="metric-label">Interaction Effect</div>
-                        <div className={`metric-value-lg ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <div className={`metric-value-lg ${(brinsonData.interaction_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                           {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.interaction_effect)}
                         </div>
                         <div className="text-xs text-zinc-500 mt-1">Combined allocation & selection</div>
@@ -1037,7 +1037,7 @@ export default function PortfolioStatisticsPage() {
                                   }}
                                 ></div>
                               </div>
-                              <div className={`w-24 text-right text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                              <div className={`w-24 text-right text-sm font-semibold tabular-nums ${isPositive ? 'value-positive' : 'value-negative'}`}>
                                 {isPositive ? '+' : ''}{formatBps(value)}
                               </div>
                             </div>
@@ -1047,7 +1047,7 @@ export default function PortfolioStatisticsPage() {
                         <div className="flex items-center gap-3 pt-3 border-t border-zinc-200 mt-3">
                           <div className="w-24 text-sm font-bold text-zinc-900">Total Active</div>
                           <div className="flex-1"></div>
-                          <div className={`w-24 text-right text-sm font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`w-24 text-right text-sm font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
                         </div>
@@ -1094,7 +1094,7 @@ export default function PortfolioStatisticsPage() {
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Active Weight:</span>
-                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                           {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
                                         </span>
                                       </div>
@@ -1113,7 +1113,7 @@ export default function PortfolioStatisticsPage() {
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Selection:</span>
-                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>{formatBps(sector.selection_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Interaction:</span>
@@ -1169,7 +1169,7 @@ export default function PortfolioStatisticsPage() {
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Active Weight:</span>
-                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                           {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
                                         </span>
                                       </div>
@@ -1188,7 +1188,7 @@ export default function PortfolioStatisticsPage() {
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Selection:</span>
-                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>{formatBps(sector.selection_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Interaction:</span>
@@ -1243,7 +1243,7 @@ export default function PortfolioStatisticsPage() {
                                     <td className={`text-right tabular-nums ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
                                       {(sector.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.allocation_effect)}
                                     </td>
-                                    <td className={`text-right tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>
+                                    <td className={`text-right tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {(sector.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.selection_effect)}
                                     </td>
                                     <td className={`text-right tabular-nums ${(sector.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>
@@ -1267,7 +1267,7 @@ export default function PortfolioStatisticsPage() {
                                 <td className={`text-right tabular-nums ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
                                   {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                                 </td>
-                                <td className={`text-right tabular-nums ${(brinsonData.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>
+                                <td className={`text-right tabular-nums ${(brinsonData.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                   {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                                 </td>
                                 <td className={`text-right tabular-nums ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>
@@ -1396,13 +1396,13 @@ export default function PortfolioStatisticsPage() {
                       <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">
                         {useExcessReturns ? 'Excess Return' : 'Total Return'}
                       </div>
-                      <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                         {factorBenchmarking.total_return_pct?.toFixed(2)}%
                       </div>
                     </div>
                     <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
                       <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Alpha (Ann.)</div>
-                      <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                         {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
                       </div>
                       <div className="text-xs text-zinc-400 mt-1">
@@ -1567,26 +1567,26 @@ export default function PortfolioStatisticsPage() {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Portfolio Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.portfolio_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Benchmark Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.benchmark_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.active_return >= 0 ? '+' : ''}
                             {factorBenchmarking.benchmark_attribution.active_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Alpha</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? '+' : ''}
                             {factorBenchmarking.benchmark_attribution.active_alpha?.toFixed(2)}%
                           </div>
@@ -1859,11 +1859,11 @@ export default function PortfolioStatisticsPage() {
                                       {period.portfolio_return?.toFixed(2)}%
                                     </td>
                                     {factorContribOverTime.factors?.map((f: string) => (
-                                      <td key={f} className={`text-right tabular-nums ${(period.factor_contributions?.[f] || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                      <td key={f} className={`text-right tabular-nums ${(period.factor_contributions?.[f] || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                         {period.factor_contributions?.[f]?.toFixed(2)}%
                                       </td>
                                     ))}
-                                    <td className={`text-right tabular-nums ${period.alpha_contribution >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    <td className={`text-right tabular-nums ${period.alpha_contribution >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {period.alpha_contribution?.toFixed(2)}%
                                     </td>
                                   </tr>
