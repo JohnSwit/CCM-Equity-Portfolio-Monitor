@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -59,13 +59,16 @@ export default function Dashboard() {
   const [sectorViewMode, setSectorViewMode] = useState<SectorViewMode>('sector');
   const [sectorData, setSectorData] = useState<any>(null);
 
+  // Request counter to prevent stale responses from overwriting newer data
+  const loadRequestRef = useRef(0);
+
   useEffect(() => {
     loadViews();
   }, []);
 
   useEffect(() => {
     if (selectedView) {
-      loadViewData();
+      loadViewData(selectedView);
     }
   }, [selectedView]);
 
@@ -92,32 +95,51 @@ export default function Dashboard() {
     }
   };
 
-  const loadViewData = async () => {
-    if (!selectedView) return;
+  const loadViewData = async (view: any) => {
+    if (!view) return;
 
+    // Increment request counter; only the latest request applies its results
+    const requestId = ++loadRequestRef.current;
+
+    // Clear previous data immediately so stale data doesn't persist
+    setSummary(null);
+    setReturns([]);
+    setBenchmarkReturns({});
+    setChartData([]);
+    setHoldings(null);
+    setRisk(null);
+    setUnpriced([]);
+    setSectorData(null);
     setLoading(true);
+
     try {
       const [summaryData, returnsData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
-        api.getSummary(selectedView.view_type, selectedView.view_id),
-        api.getReturns(selectedView.view_type, selectedView.view_id),
+        api.getSummary(view.view_type, view.view_id).catch(() => null),
+        api.getReturns(view.view_type, view.view_id).catch(() => []),
         api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
-        api.getHoldings(selectedView.view_type, selectedView.view_id),
-        api.getRisk(selectedView.view_type, selectedView.view_id).catch(() => null),
+        api.getHoldings(view.view_type, view.view_id).catch(() => null),
+        api.getRisk(view.view_type, view.view_id).catch(() => null),
         api.getUnpricedInstruments().catch(() => []),
-        api.getSectorWeights(selectedView.view_type, selectedView.view_id).catch(() => null),
+        api.getSectorWeights(view.view_type, view.view_id).catch(() => null),
       ]);
 
+      // Only apply results if this is still the latest request
+      if (requestId !== loadRequestRef.current) return;
+
       setSummary(summaryData);
-      setReturns(returnsData);
+      setReturns(returnsData || []);
       setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
       setUnpriced(unpricedData);
       setSectorData(sectorWeights);
     } catch (error) {
+      if (requestId !== loadRequestRef.current) return;
       console.error('Failed to load view data:', error);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -453,7 +475,7 @@ export default function Dashboard() {
                 <div className="card-header">
                   <h3 className="card-title">Holdings Breakdown</h3>
                   <button
-                    onClick={loadViewData}
+                    onClick={() => loadViewData(selectedView)}
                     className="btn btn-ghost btn-sm"
                     title="Refresh"
                   >
