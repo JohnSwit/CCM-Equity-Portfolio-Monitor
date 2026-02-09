@@ -3,10 +3,11 @@ Tax Optimization API endpoints - tax lot management, gain/loss tracking,
 wash sale detection, and tax-loss harvesting recommendations.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
+from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -17,6 +18,10 @@ from app.models.schemas import (
     WashSaleCheckResult, TradeImpactAnalysis, TaxLotSellSuggestion, SellOrderRequest
 )
 from app.services.tax_optimization import TaxService
+
+
+class SimulateLotsRequest(BaseModel):
+    lot_ids: List[int]
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +276,130 @@ def get_sell_suggestions(
     suggestions = tax_service.get_sell_suggestions(account_id, symbol, shares, objective)
 
     return [TaxLotSellSuggestion(**s) for s in suggestions]
+
+
+# ============== Multi-Lot Trade Simulation ==============
+
+@router.post("/simulate-lots")
+def simulate_selected_lots(
+    request: SimulateLotsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Simulate selling selected tax lots. Accepts a list of lot IDs and
+    returns per-lot and aggregate tax impact analysis.
+    """
+    from app.models.models import TaxLot, PricesEOD
+
+    if not request.lot_ids:
+        raise HTTPException(status_code=400, detail="No lot IDs provided")
+
+    tax_service = TaxService(db)
+    today = date.today()
+
+    # Fetch all selected lots with their relationships
+    lots = db.query(TaxLot).filter(
+        TaxLot.id.in_(request.lot_ids),
+        TaxLot.is_closed == False
+    ).all()
+
+    if not lots:
+        raise HTTPException(status_code=404, detail="No open lots found for the given IDs")
+
+    missing_ids = set(request.lot_ids) - {lot.id for lot in lots}
+    if missing_ids:
+        logger.warning(f"Some lot IDs not found or already closed: {missing_ids}")
+
+    # Build per-lot analysis
+    lot_results = []
+    totals = {
+        "total_proceeds": 0.0,
+        "total_cost_basis": 0.0,
+        "total_gain_loss": 0.0,
+        "short_term_gain_loss": 0.0,
+        "long_term_gain_loss": 0.0,
+        "estimated_tax": 0.0,
+        "total_shares": 0.0,
+        "lot_count": 0,
+    }
+
+    for lot in lots:
+        current_price = tax_service._get_current_price(lot.security_id)
+        if not current_price:
+            lot_results.append({
+                "lot_id": lot.id,
+                "account_id": lot.account_id,
+                "account_number": lot.account.account_number if lot.account else None,
+                "security_id": lot.security_id,
+                "symbol": lot.security.symbol if lot.security else None,
+                "purchase_date": lot.purchase_date,
+                "remaining_shares": lot.remaining_shares,
+                "cost_basis_per_share": lot.cost_basis_per_share,
+                "current_price": None,
+                "proceeds": None,
+                "cost_basis": lot.remaining_cost_basis,
+                "gain_loss": None,
+                "holding_period_days": (today - lot.purchase_date).days,
+                "is_short_term": (today - lot.purchase_date).days < 365,
+                "estimated_tax": None,
+                "error": "No price available"
+            })
+            continue
+
+        proceeds = lot.remaining_shares * current_price
+        cost_basis = lot.remaining_cost_basis
+        gain_loss = proceeds - cost_basis
+        holding_days = (today - lot.purchase_date).days
+        is_short_term = holding_days < 365
+
+        # Estimate tax
+        if gain_loss > 0:
+            tax = gain_loss * (0.37 if is_short_term else 0.20)
+        else:
+            tax = 0.0
+
+        lot_result = {
+            "lot_id": lot.id,
+            "account_id": lot.account_id,
+            "account_number": lot.account.account_number if lot.account else None,
+            "security_id": lot.security_id,
+            "symbol": lot.security.symbol if lot.security else None,
+            "purchase_date": lot.purchase_date,
+            "remaining_shares": lot.remaining_shares,
+            "cost_basis_per_share": lot.cost_basis_per_share,
+            "current_price": current_price,
+            "proceeds": proceeds,
+            "cost_basis": cost_basis,
+            "gain_loss": gain_loss,
+            "gain_loss_pct": (gain_loss / cost_basis * 100) if cost_basis else 0,
+            "holding_period_days": holding_days,
+            "is_short_term": is_short_term,
+            "estimated_tax": tax,
+        }
+        lot_results.append(lot_result)
+
+        totals["total_proceeds"] += proceeds
+        totals["total_cost_basis"] += cost_basis
+        totals["total_gain_loss"] += gain_loss
+        totals["total_shares"] += lot.remaining_shares
+        totals["lot_count"] += 1
+        totals["estimated_tax"] += tax
+        if is_short_term:
+            totals["short_term_gain_loss"] += gain_loss
+        else:
+            totals["long_term_gain_loss"] += gain_loss
+
+    totals["gain_loss_pct"] = (
+        (totals["total_gain_loss"] / totals["total_cost_basis"] * 100)
+        if totals["total_cost_basis"] else 0
+    )
+
+    return {
+        "lots": lot_results,
+        "totals": totals,
+        "missing_lot_ids": list(missing_ids) if missing_ids else [],
+    }
 
 
 # ============== Account List for Tax ==============

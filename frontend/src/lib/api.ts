@@ -779,6 +779,11 @@ class APIClient {
     return response.data;
   }
 
+  async simulateSelectedLots(lotIds: number[]) {
+    const response = await this.client.post('/tax/simulate-lots', { lot_ids: lotIds });
+    return response.data;
+  }
+
   // Bulk Import
   async startBulkImport(file: File, options?: { batchSize?: number; skipAnalytics?: boolean; validateOnly?: boolean }) {
     const formData = new FormData();
