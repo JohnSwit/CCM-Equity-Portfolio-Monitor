@@ -73,18 +73,6 @@ interface RealizedGain {
   adjusted_gain_loss: number;
 }
 
-interface TradeImpact {
-  symbol: string;
-  shares: number;
-  estimated_proceeds: number;
-  fifo_impact: { total_gain_loss: number; estimated_tax: number };
-  lifo_impact: { total_gain_loss: number; estimated_tax: number };
-  hifo_impact: { total_gain_loss: number; estimated_tax: number };
-  lofo_impact: { total_gain_loss: number; estimated_tax: number };
-  recommended_method: string;
-  tax_savings_vs_fifo: number;
-}
-
 interface Account {
   id: number;
   account_number: string;
@@ -128,7 +116,7 @@ interface SimulationResult {
   missing_lot_ids: number[];
 }
 
-type TabType = 'summary' | 'lots' | 'harvest' | 'realized' | 'simulator' | 'import';
+type TabType = 'summary' | 'lots' | 'harvest' | 'realized' | 'import';
 
 interface TaxLotImport {
   id: number;
@@ -182,12 +170,6 @@ export default function TaxPage() {
   const [harvestCandidates, setHarvestCandidates] = useState<HarvestCandidate[]>([]);
   const [realizedGains, setRealizedGains] = useState<RealizedGain[]>([]);
 
-  // Trade simulator
-  const [simSymbol, setSimSymbol] = useState('');
-  const [simShares, setSimShares] = useState<number>(0);
-  const [simAccountId, setSimAccountId] = useState<number | null>(null);
-  const [tradeImpact, setTradeImpact] = useState<TradeImpact | null>(null);
-  const [simulating, setSimulating] = useState(false);
 
   // Import state
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -213,8 +195,6 @@ export default function TaxPage() {
   const [harvestMinLoss, setHarvestMinLoss] = useState<number>(100);
   const [harvestSortBy, setHarvestSortBy] = useState<'none' | 'loss_high' | 'loss_low' | 'st_high' | 'lt_high'>('loss_high');
 
-  // Simulator symbols for selected account
-  const [simAccountSymbols, setSimAccountSymbols] = useState<string[]>([]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -242,24 +222,6 @@ export default function TaxPage() {
     }
   }, [activeTab, selectedAccount, taxYear]);
 
-  // Load symbols when simulator account changes
-  useEffect(() => {
-    if (simAccountId && lots.length > 0) {
-      const accountSymbols = [...new Set(
-        lots
-          .filter(lot => lot.account_id === simAccountId)
-          .map(lot => lot.symbol)
-      )].sort();
-      setSimAccountSymbols(accountSymbols);
-      if (simSymbol && !accountSymbols.includes(simSymbol)) {
-        setSimSymbol('');
-      }
-    } else if (simAccountId && activeTab === 'simulator') {
-      loadLots().then(() => {});
-    } else {
-      setSimAccountSymbols([]);
-    }
-  }, [simAccountId, lots]);
 
   const loadInitialData = async () => {
     try {
@@ -319,24 +281,6 @@ export default function TaxPage() {
       setRealizedGains(data.gains || []);
     } catch (err: any) {
       console.error('Failed to load realized gains:', err);
-    }
-  };
-
-  const handleSimulateTrade = async () => {
-    if (!simSymbol || !simShares || !simAccountId) {
-      setError('Please select account, enter symbol, and shares');
-      return;
-    }
-
-    try {
-      setSimulating(true);
-      setError(null);
-      const data = await api.getTradeImpact(simAccountId, simSymbol, simShares);
-      setTradeImpact(data);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to simulate trade');
-    } finally {
-      setSimulating(false);
     }
   };
 
@@ -477,9 +421,9 @@ export default function TaxPage() {
       grouped[key].shares += lot.remaining_shares;
     }
 
-    // Build CSV: Col A=Account, Col B=S, Col C=(empty), Col D=Ticker, Col E=M
+    // Build CSV: Col A=Account, Col B=S, Col C=Shares, Col D=Ticker, Col E=M, Col F=VSP
     const rows = Object.values(grouped).map(g =>
-      `${g.account_number},S,,${g.symbol},M`
+      `${g.account_number},S,${g.shares},${g.symbol},M,VSP`
     );
     const csv = rows.join('\n');
 
@@ -570,7 +514,6 @@ export default function TaxPage() {
     { id: 'lots', label: 'Tax Lots' },
     { id: 'harvest', label: 'Loss Harvesting' },
     { id: 'realized', label: 'Realized Gains' },
-    { id: 'simulator', label: 'Trade Simulator' },
     { id: 'import', label: 'Import Tax Lots' },
   ];
 
@@ -767,6 +710,133 @@ export default function TaxPage() {
 
         {activeTab === 'lots' && (
           <div className="space-y-4">
+            {/* Simulation Results (shown at top when available) */}
+            {lotSimResult && (
+              <div className="space-y-4">
+                {/* Totals Summary */}
+                <div className="card">
+                  <div className="card-header">
+                    <div className="flex justify-between items-center w-full">
+                      <div>
+                        <h3 className="card-title">Trade Simulation Results</h3>
+                        <p className="card-subtitle">
+                          {lotSimResult.totals.lot_count} lot{lotSimResult.totals.lot_count !== 1 ? 's' : ''} across{' '}
+                          {[...new Set(lotSimResult.lots.filter(l => !l.error).map(l => l.symbol))].length} securities,{' '}
+                          {lotSimResult.totals.total_shares.toFixed(2)} total shares
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={downloadSchwabCSV}
+                          className="btn btn-primary"
+                        >
+                          <svg className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          Download Schwab CSV
+                        </button>
+                        <button
+                          onClick={() => setLotSimResult(null)}
+                          className="btn btn-ghost text-zinc-500"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
+                    <div className="metric-card metric-card-blue">
+                      <div className="metric-label">Total Proceeds</div>
+                      <div className="metric-value-lg tabular-nums">
+                        {formatCurrency(lotSimResult.totals.total_proceeds)}
+                      </div>
+                    </div>
+                    <div className="metric-card metric-card-purple">
+                      <div className="metric-label">Total Cost Basis</div>
+                      <div className="metric-value-lg tabular-nums">
+                        {formatCurrency(lotSimResult.totals.total_cost_basis)}
+                      </div>
+                    </div>
+                    <div className={`metric-card ${lotSimResult.totals.total_gain_loss >= 0 ? 'metric-card-green' : 'metric-card-red'}`}>
+                      <div className="metric-label">Total Gain/Loss</div>
+                      <div className={`metric-value-lg tabular-nums ${getValueClass(lotSimResult.totals.total_gain_loss)}`}>
+                        {formatCurrency(lotSimResult.totals.total_gain_loss)}
+                        <span className="text-sm ml-1">({formatPercent(lotSimResult.totals.gain_loss_pct)})</span>
+                      </div>
+                    </div>
+                    <div className="metric-card metric-card-orange">
+                      <div className="metric-label">Est. Tax</div>
+                      <div className="metric-value-lg tabular-nums text-amber-600">
+                        {formatCurrency(lotSimResult.totals.estimated_tax)}
+                      </div>
+                    </div>
+                    <div className="p-3">
+                      <div className="metric-label mb-1">Breakdown</div>
+                      <div className="text-sm tabular-nums space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Short-term:</span>
+                          <span className={getValueClass(lotSimResult.totals.short_term_gain_loss)}>
+                            {formatCurrency(lotSimResult.totals.short_term_gain_loss)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Long-term:</span>
+                          <span className={getValueClass(lotSimResult.totals.long_term_gain_loss)}>
+                            {formatCurrency(lotSimResult.totals.long_term_gain_loss)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Per-lot detail table */}
+                <div className="card p-0 overflow-hidden">
+                  <div className="table-container mx-0">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Account</th>
+                          <th>Purchase Date</th>
+                          <th className="text-right">Shares</th>
+                          <th className="text-right">Cost Basis</th>
+                          <th className="text-right">Proceeds</th>
+                          <th className="text-right">Gain/Loss</th>
+                          <th className="text-center">Term</th>
+                          <th className="text-right">Est. Tax</th>
+                        </tr>
+                      </thead>
+                      <tbody className="tabular-nums">
+                        {lotSimResult.lots.map((lot) => (
+                          <tr key={lot.lot_id} className={lot.error ? 'bg-red-50' : ''}>
+                            <td className="font-semibold text-zinc-900">{lot.symbol}</td>
+                            <td className="text-zinc-600">{lot.account_number || '-'}</td>
+                            <td>{formatDate(lot.purchase_date)}</td>
+                            <td className="text-right">{lot.remaining_shares.toFixed(2)}</td>
+                            <td className="text-right">{formatCurrency(lot.cost_basis)}</td>
+                            <td className="text-right">{lot.error ? <span className="text-red-500 text-xs">{lot.error}</span> : formatCurrency(lot.proceeds)}</td>
+                            <td className={`text-right ${getValueClass(lot.gain_loss)}`}>
+                              {lot.gain_loss != null ? (
+                                <>{formatCurrency(lot.gain_loss)} ({formatPercent(lot.gain_loss_pct)})</>
+                              ) : '-'}
+                            </td>
+                            <td className="text-center">
+                              <span className={`badge ${lot.is_short_term ? 'badge-warning' : 'badge-success'}`}>
+                                {lot.is_short_term ? 'Short' : 'Long'}
+                              </span>
+                            </td>
+                            <td className="text-right">{lot.estimated_tax != null ? formatCurrency(lot.estimated_tax) : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Filters */}
             <div className="card">
               <div className="flex flex-wrap gap-4 items-end">
@@ -940,132 +1010,6 @@ export default function TaxPage() {
               </div>
             </div>
 
-            {/* Simulation Results */}
-            {lotSimResult && (
-              <div className="space-y-4">
-                {/* Totals Summary */}
-                <div className="card">
-                  <div className="card-header">
-                    <div className="flex justify-between items-center w-full">
-                      <div>
-                        <h3 className="card-title">Trade Simulation Results</h3>
-                        <p className="card-subtitle">
-                          {lotSimResult.totals.lot_count} lot{lotSimResult.totals.lot_count !== 1 ? 's' : ''} across{' '}
-                          {[...new Set(lotSimResult.lots.filter(l => !l.error).map(l => l.symbol))].length} securities,{' '}
-                          {lotSimResult.totals.total_shares.toFixed(2)} total shares
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={downloadSchwabCSV}
-                          className="btn btn-primary"
-                        >
-                          <svg className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                          </svg>
-                          Download Schwab CSV
-                        </button>
-                        <button
-                          onClick={() => setLotSimResult(null)}
-                          className="btn btn-ghost text-zinc-500"
-                        >
-                          Dismiss
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
-                    <div className="metric-card metric-card-blue">
-                      <div className="metric-label">Total Proceeds</div>
-                      <div className="metric-value-lg tabular-nums">
-                        {formatCurrency(lotSimResult.totals.total_proceeds)}
-                      </div>
-                    </div>
-                    <div className="metric-card metric-card-purple">
-                      <div className="metric-label">Total Cost Basis</div>
-                      <div className="metric-value-lg tabular-nums">
-                        {formatCurrency(lotSimResult.totals.total_cost_basis)}
-                      </div>
-                    </div>
-                    <div className={`metric-card ${lotSimResult.totals.total_gain_loss >= 0 ? 'metric-card-green' : 'metric-card-red'}`}>
-                      <div className="metric-label">Total Gain/Loss</div>
-                      <div className={`metric-value-lg tabular-nums ${getValueClass(lotSimResult.totals.total_gain_loss)}`}>
-                        {formatCurrency(lotSimResult.totals.total_gain_loss)}
-                        <span className="text-sm ml-1">({formatPercent(lotSimResult.totals.gain_loss_pct)})</span>
-                      </div>
-                    </div>
-                    <div className="metric-card metric-card-orange">
-                      <div className="metric-label">Est. Tax</div>
-                      <div className="metric-value-lg tabular-nums text-amber-600">
-                        {formatCurrency(lotSimResult.totals.estimated_tax)}
-                      </div>
-                    </div>
-                    <div className="p-3">
-                      <div className="metric-label mb-1">Breakdown</div>
-                      <div className="text-sm tabular-nums space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Short-term:</span>
-                          <span className={getValueClass(lotSimResult.totals.short_term_gain_loss)}>
-                            {formatCurrency(lotSimResult.totals.short_term_gain_loss)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Long-term:</span>
-                          <span className={getValueClass(lotSimResult.totals.long_term_gain_loss)}>
-                            {formatCurrency(lotSimResult.totals.long_term_gain_loss)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Per-lot detail table */}
-                <div className="card p-0 overflow-hidden">
-                  <div className="table-container mx-0">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Account</th>
-                          <th>Purchase Date</th>
-                          <th className="text-right">Shares</th>
-                          <th className="text-right">Cost Basis</th>
-                          <th className="text-right">Proceeds</th>
-                          <th className="text-right">Gain/Loss</th>
-                          <th className="text-center">Term</th>
-                          <th className="text-right">Est. Tax</th>
-                        </tr>
-                      </thead>
-                      <tbody className="tabular-nums">
-                        {lotSimResult.lots.map((lot) => (
-                          <tr key={lot.lot_id} className={lot.error ? 'bg-red-50' : ''}>
-                            <td className="font-semibold text-zinc-900">{lot.symbol}</td>
-                            <td className="text-zinc-600">{lot.account_number || '-'}</td>
-                            <td>{formatDate(lot.purchase_date)}</td>
-                            <td className="text-right">{lot.remaining_shares.toFixed(2)}</td>
-                            <td className="text-right">{formatCurrency(lot.cost_basis)}</td>
-                            <td className="text-right">{lot.error ? <span className="text-red-500 text-xs">{lot.error}</span> : formatCurrency(lot.proceeds)}</td>
-                            <td className={`text-right ${getValueClass(lot.gain_loss)}`}>
-                              {lot.gain_loss != null ? (
-                                <>{formatCurrency(lot.gain_loss)} ({formatPercent(lot.gain_loss_pct)})</>
-                              ) : '-'}
-                            </td>
-                            <td className="text-center">
-                              <span className={`badge ${lot.is_short_term ? 'badge-warning' : 'badge-success'}`}>
-                                {lot.is_short_term ? 'Short' : 'Long'}
-                              </span>
-                            </td>
-                            <td className="text-right">{lot.estimated_tax != null ? formatCurrency(lot.estimated_tax) : '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1264,144 +1208,6 @@ export default function TaxPage() {
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
-
-        {activeTab === 'simulator' && (
-          <div className="space-y-6">
-            <div className="card">
-              <div className="card-header">
-                <div>
-                  <h3 className="card-title">Trade Impact Simulator</h3>
-                  <p className="card-subtitle">Analyze the tax impact of selling shares using different lot selection methods</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div>
-                  <label className="label">Account</label>
-                  <select
-                    value={simAccountId || ''}
-                    onChange={(e) => {
-                      setSimAccountId(e.target.value ? Number(e.target.value) : null);
-                      setSimSymbol('');
-                      setTradeImpact(null);
-                    }}
-                    className="select"
-                  >
-                    <option value="">Select Account</option>
-                    {accounts.map((a) => (
-                      <option key={a.id} value={a.id}>{a.account_number}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Symbol</label>
-                  <select
-                    value={simSymbol}
-                    onChange={(e) => setSimSymbol(e.target.value)}
-                    className="select"
-                    disabled={!simAccountId}
-                  >
-                    <option value="">{simAccountId ? 'Select Symbol' : 'Select account first'}</option>
-                    {simAccountSymbols.map((symbol) => (
-                      <option key={symbol} value={symbol}>{symbol}</option>
-                    ))}
-                  </select>
-                  {simAccountId && simAccountSymbols.length === 0 && (
-                    <p className="text-xs text-zinc-500 mt-1.5">No holdings found for this account</p>
-                  )}
-                </div>
-                <div>
-                  <label className="label">Shares to Sell</label>
-                  <input
-                    type="number"
-                    value={simShares || ''}
-                    onChange={(e) => setSimShares(Number(e.target.value))}
-                    placeholder="100"
-                    className="input"
-                  />
-                </div>
-                <div className="flex items-end">
-                  <button
-                    onClick={handleSimulateTrade}
-                    disabled={simulating || !simSymbol || !simShares || !simAccountId}
-                    className="btn btn-primary w-full"
-                  >
-                    {simulating ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Analyzing...
-                      </>
-                    ) : 'Analyze Impact'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {tradeImpact && (
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <h3 className="card-title">
-                      Results: Sell {tradeImpact.shares} shares of {tradeImpact.symbol}
-                    </h3>
-                    <p className="card-subtitle tabular-nums">
-                      Estimated Proceeds: {formatCurrency(tradeImpact.estimated_proceeds)}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                  {[
-                    { method: 'FIFO', data: tradeImpact.fifo_impact, label: 'First In, First Out' },
-                    { method: 'LIFO', data: tradeImpact.lifo_impact, label: 'Last In, First Out' },
-                    { method: 'HIFO', data: tradeImpact.hifo_impact, label: 'Highest In, First Out' },
-                    { method: 'LOFO', data: tradeImpact.lofo_impact, label: 'Lowest In, First Out' },
-                  ].map(({ method, data, label }) => (
-                    <div
-                      key={method}
-                      className={`p-4 rounded-lg border-2 transition-colors ${
-                        tradeImpact.recommended_method.toUpperCase() === method
-                          ? 'border-emerald-500 bg-emerald-50'
-                          : 'border-zinc-200 bg-white'
-                      }`}
-                    >
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="font-semibold text-zinc-900">{method}</span>
-                        {tradeImpact.recommended_method.toUpperCase() === method && (
-                          <span className="badge badge-success">Best</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-zinc-500 mb-3">{label}</div>
-                      <div className={`text-xl font-bold tabular-nums ${getValueClass(data.total_gain_loss)}`}>
-                        {formatCurrency(data.total_gain_loss)}
-                      </div>
-                      <div className="text-sm text-zinc-600 tabular-nums">
-                        Est. Tax: {formatCurrency(data.estimated_tax)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="alert alert-info">
-                  <div className="flex items-start gap-3">
-                    <svg className="h-5 w-5 text-blue-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <div>
-                      <h4 className="font-semibold text-blue-900">Recommendation</h4>
-                      <p className="text-sm text-blue-700 mt-1">
-                        Use <strong>{tradeImpact.recommended_method.toUpperCase()}</strong> method to save{' '}
-                        <strong>{formatCurrency(tradeImpact.tax_savings_vs_fifo)}</strong> in taxes vs FIFO.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
