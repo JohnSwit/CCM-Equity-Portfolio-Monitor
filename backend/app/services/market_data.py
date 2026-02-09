@@ -11,7 +11,7 @@ from sqlalchemy import and_, func
 import asyncio
 import logging
 
-from app.models import Security, PricesEOD, BenchmarkDefinition, BenchmarkLevel, InceptionPosition
+from app.models import Security, PricesEOD, BenchmarkDefinition, BenchmarkLevel, InceptionPosition, AccountInception
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -406,20 +406,47 @@ class MarketDataProvider:
         symbol: str,
         force_refresh: bool = False
     ) -> int:
-        """Update prices for a security (fill missing dates)"""
+        """Update prices for a security (fill missing dates).
+
+        Determines the start date from the earliest of:
+        - First transaction date for the security
+        - Inception date (if the security is part of an inception portfolio)
+
+        This ensures inception-only securities (no transactions) still get
+        prices fetched, and securities with transactions get prices going
+        back to inception if that's earlier.
+        """
         from app.models import Transaction
 
         logger.info(f"update_security_prices called for {symbol} (id={security_id})")
 
+        # Find earliest relevant date from transactions
         first_txn = self.db.query(Transaction).filter(
             Transaction.security_id == security_id
         ).order_by(Transaction.trade_date).first()
 
-        if not first_txn:
-            logger.warning(f"No transactions found for {symbol} (id={security_id})")
+        first_txn_date = first_txn.trade_date if first_txn else None
+
+        # Find earliest relevant date from inception positions
+        inception_date = self.db.query(
+            func.min(AccountInception.inception_date)
+        ).join(
+            InceptionPosition, InceptionPosition.inception_id == AccountInception.id
+        ).filter(
+            InceptionPosition.security_id == security_id
+        ).scalar()
+
+        # Use the earliest date from either source
+        if first_txn_date and inception_date:
+            start_date = min(first_txn_date, inception_date)
+        elif first_txn_date:
+            start_date = first_txn_date
+        elif inception_date:
+            start_date = inception_date
+        else:
+            logger.warning(f"No transactions or inception data found for {symbol} (id={security_id})")
             return 0
 
-        start_date = first_txn.trade_date
         end_date = date.today()
         logger.info(f"Date range for {symbol}: {start_date} to {end_date}")
 
@@ -526,13 +553,17 @@ class MarketDataProvider:
 
         end_date = date.today()
 
-        # If no start_date provided, determine from earliest transaction or default to 25 years
+        # If no start_date provided, determine from earliest transaction or inception date
         if start_date is None:
             from app.models import Transaction
             earliest_txn = self.db.query(func.min(Transaction.trade_date)).scalar()
-            if earliest_txn:
-                # Go back a bit before earliest transaction for proper benchmark comparison
-                start_date = earliest_txn - timedelta(days=30)
+            earliest_inception = self.db.query(func.min(AccountInception.inception_date)).scalar()
+
+            # Use earliest of transaction date or inception date
+            candidates = [d for d in [earliest_txn, earliest_inception] if d is not None]
+            if candidates:
+                # Go back a bit before earliest date for proper benchmark comparison
+                start_date = min(candidates) - timedelta(days=30)
             else:
                 # Default to 25 years for comprehensive history
                 start_date = end_date - timedelta(days=25*365)
@@ -572,12 +603,15 @@ class MarketDataProvider:
 
         end_date = date.today()
 
-        # If no start_date provided, determine from earliest transaction or default to 25 years
+        # If no start_date provided, determine from earliest transaction or inception date
         if start_date is None:
             from app.models import Transaction
             earliest_txn = self.db.query(func.min(Transaction.trade_date)).scalar()
-            if earliest_txn:
-                start_date = earliest_txn - timedelta(days=30)
+            earliest_inception = self.db.query(func.min(AccountInception.inception_date)).scalar()
+
+            candidates = [d for d in [earliest_txn, earliest_inception] if d is not None]
+            if candidates:
+                start_date = min(candidates) - timedelta(days=30)
             else:
                 start_date = end_date - timedelta(days=25*365)
 
