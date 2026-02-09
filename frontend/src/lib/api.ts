@@ -189,6 +189,11 @@ class APIClient {
     return response.data;
   }
 
+  async classifySecurities() {
+    const response = await this.client.post('/jobs/classify-securities?unclassified_only=true');
+    return response.data;
+  }
+
   // Transactions
   async getTransactions(params?: {
     account_id?: number;

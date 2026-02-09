@@ -169,6 +169,25 @@ export default function Upload() {
     }
   };
 
+  const [classifying, setClassifying] = useState(false);
+  const [classifyResult, setClassifyResult] = useState<any>(null);
+
+  const handleClassifySecurities = async () => {
+    setClassifying(true);
+    setClassifyResult(null);
+    try {
+      const data = await api.classifySecurities();
+      setClassifyResult(data);
+      alert(`Classification complete: ${data.message}`);
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.detail || error.message || 'Unknown error';
+      alert('Classification failed: ' + errorMsg);
+      setClassifyResult({ status: 'failed', message: errorMsg });
+    } finally {
+      setClassifying(false);
+    }
+  };
+
   const handleDeleteImport = async (importId: number, fileName: string) => {
     if (!confirm(`Delete import "${fileName}" and all its transactions? This cannot be undone. You will need to run the analytics update after deletion.`)) return;
 
@@ -552,16 +571,36 @@ export default function Upload() {
               <p className="text-sm text-gray-600 mb-4">
                 After importing transactions, run the market data update to fetch the latest prices and compute analytics.
               </p>
-              <button
-                onClick={handleRunMarketDataUpdate}
-                disabled={runningJob}
-                className="btn btn-primary"
-              >
-                {runningJob ? 'Running...' : 'Update Market Data & Compute Analytics'}
-              </button>
+              <div className="flex gap-3 flex-wrap">
+                <button
+                  onClick={handleRunMarketDataUpdate}
+                  disabled={runningJob || classifying}
+                  className="btn btn-primary"
+                >
+                  {runningJob ? 'Running...' : 'Update Market Data & Compute Analytics'}
+                </button>
+                <button
+                  onClick={handleClassifySecurities}
+                  disabled={classifying || runningJob}
+                  className="btn btn-secondary"
+                >
+                  {classifying ? 'Classifying...' : 'Classify Unclassified Securities'}
+                </button>
+              </div>
               {jobResult && (
                 <div className={`mt-4 p-3 rounded ${jobResult.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                   {jobResult.message}
+                </div>
+              )}
+              {classifyResult && (
+                <div className={`mt-4 p-3 rounded ${classifyResult.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                  <p>{classifyResult.message}</p>
+                  {classifyResult.total_securities && (
+                    <p className="text-sm mt-1">
+                      {classifyResult.already_classified + classifyResult.success} / {classifyResult.total_securities} securities now classified
+                      {classifyResult.failed > 0 && ` (${classifyResult.failed} could not be classified)`}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
