@@ -1142,8 +1142,8 @@ class ClassificationService:
         """
         Refresh classification for a single security.
 
-        Tries providers in order: static mapping -> Tiingo -> yfinance -> Polygon -> IEX.
-        Static mapping is checked first since it's instant and covers ~500+ tickers.
+        Tries providers in order: static mapping -> Tiingo -> Polygon -> IEX.
+        Static mapping is checked first since it's instant and covers ~1000+ tickers.
 
         Args:
             security_id: Security ID to refresh
@@ -1168,11 +1168,6 @@ class ClassificationService:
             classification = self._fetch_from_tiingo(ticker)
             if classification:
                 return self._save_classification(security_id, classification, "tiingo")
-
-        # Fallback to yfinance (broad coverage for US and international stocks)
-        classification = self._fetch_from_yfinance(ticker)
-        if classification:
-            return self._save_classification(security_id, classification, "yfinance")
 
         # Fallback to Polygon.io
         if self.polygon_api_key:
@@ -1385,46 +1380,6 @@ class ClassificationService:
             return result
 
         return None
-
-    def _fetch_from_yfinance(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch classification from yfinance (broad coverage fallback).
-
-        yfinance gets sector/industry data from Yahoo Finance, which covers
-        most US and international securities.
-        """
-        try:
-            import yfinance as yf
-        except ImportError:
-            return None
-
-        try:
-            normalized = ticker.replace('.', '-').upper()
-            yf_ticker = yf.Ticker(normalized)
-            info = yf_ticker.info
-
-            if not info:
-                return None
-
-            sector = info.get('sector', '')
-            industry = info.get('industry', '')
-
-            if not sector and not industry:
-                return None
-
-            market_cap = info.get('marketCap')
-
-            result = {
-                "gics_sector": sector,
-                "sector": SectorMapper.normalize_sector(sector) if sector else None,
-                "gics_industry": industry,
-                "market_cap_category": self._categorize_market_cap(market_cap),
-            }
-            logger.info(f"yfinance classification for {ticker}: sector={sector}, industry={industry}")
-            return result
-
-        except Exception as e:
-            logger.debug(f"yfinance classification failed for {ticker}: {e}")
-            return None
 
     @staticmethod
     def _looks_like_option(ticker: str) -> bool:
