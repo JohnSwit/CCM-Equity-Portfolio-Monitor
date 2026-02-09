@@ -14,7 +14,7 @@ from app.services.risk import RiskEngine
 from app.services.data_sourcing import BenchmarkService, ClassificationService
 from app.models import (
     Account, Group, ViewType, Transaction,
-    PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
+    PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD, PricesEOD,
     BenchmarkMetric, FactorRegression, AccountInception, InceptionPosition
 )
 from app.models.sector_models import BenchmarkConstituent, SectorClassification
@@ -404,6 +404,61 @@ def clear_group_and_firm_analytics(db: Session):
     logger.info("Group and firm analytics cleared")
 
 
+def _seed_inception_prices(db: Session) -> int:
+    """
+    Ensure PricesEOD records exist for all inception positions on their inception date.
+
+    InceptionPosition stores the price from the CSV, but portfolio value computation
+    reads from PricesEOD. Without this, portfolio value on inception date = $0 and
+    the entire returns chain breaks.
+    """
+    from sqlalchemy import and_
+
+    inception_data = db.query(
+        InceptionPosition.security_id,
+        InceptionPosition.price,
+        AccountInception.inception_date
+    ).join(
+        AccountInception, InceptionPosition.inception_id == AccountInception.id
+    ).filter(
+        InceptionPosition.price > 0
+    ).all()
+
+    if not inception_data:
+        return 0
+
+    # Build unique (security_id, date) -> price map
+    price_map = {}
+    for security_id, price, inception_date in inception_data:
+        key = (security_id, inception_date)
+        if key not in price_map:
+            price_map[key] = price
+
+    created = 0
+    for (security_id, inception_date), price in price_map.items():
+        existing = db.query(PricesEOD.id).filter(
+            and_(
+                PricesEOD.security_id == security_id,
+                PricesEOD.date == inception_date
+            )
+        ).first()
+
+        if not existing:
+            price_eod = PricesEOD(
+                security_id=security_id,
+                date=inception_date,
+                close=price,
+                source='inception'
+            )
+            db.add(price_eod)
+            created += 1
+
+    if created > 0:
+        db.commit()
+
+    return created
+
+
 async def market_data_update_job(db: Session = None):
     """
     Daily job to fetch market data and compute analytics:
@@ -511,6 +566,14 @@ async def recompute_analytics_job(db: Session = None, use_batch_service: bool = 
                 logger.info(f"Classifications refresh: {classification_result}")
             except Exception as e:
                 logger.error(f"Failed to refresh classifications: {e}")
+
+        # 0.7. Seed inception prices into PricesEOD.
+        # Inception positions store prices from the CSV, but portfolio value computation
+        # reads from PricesEOD. Without this, portfolio value on inception date = $0.
+        logger.info("Seeding inception prices into PricesEOD...")
+        prices_seeded = _seed_inception_prices(db)
+        if prices_seeded > 0:
+            logger.info(f"Seeded {prices_seeded} inception prices into PricesEOD")
 
         # Steps 1 & 2: Build positions, compute values and returns
         if use_batch_service:

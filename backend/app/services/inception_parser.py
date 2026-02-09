@@ -373,7 +373,8 @@ class InceptionParser:
     def create_inception_positions_eod(self, account_id: int) -> Dict[str, Any]:
         """
         Create PositionsEOD records from inception positions.
-        This seeds the position calculation with inception data.
+        Also seeds PricesEOD with inception prices so that portfolio value
+        computation can correctly value the portfolio on the inception date.
         """
         inception = self.db.query(AccountInception).filter(
             AccountInception.account_id == account_id
@@ -382,10 +383,12 @@ class InceptionParser:
         if not inception:
             return {'error': 'No inception found for account', 'created': 0}
 
-        created = 0
+        positions_created = 0
+        prices_created = 0
+
         for pos in inception.positions:
-            # Check if position already exists
-            existing = self.db.query(PositionsEOD).filter(
+            # Create PositionsEOD record for inception date
+            existing_pos = self.db.query(PositionsEOD).filter(
                 and_(
                     PositionsEOD.account_id == account_id,
                     PositionsEOD.security_id == pos.security_id,
@@ -393,7 +396,7 @@ class InceptionParser:
                 )
             ).first()
 
-            if not existing:
+            if not existing_pos:
                 position_eod = PositionsEOD(
                     account_id=account_id,
                     security_id=pos.security_id,
@@ -401,10 +404,34 @@ class InceptionParser:
                     shares=pos.shares
                 )
                 self.db.add(position_eod)
-                created += 1
+                positions_created += 1
+
+            # Seed PricesEOD with the inception price so portfolio value
+            # computation doesn't produce $0 on inception date
+            if pos.price and pos.price > 0:
+                existing_price = self.db.query(PricesEOD).filter(
+                    and_(
+                        PricesEOD.security_id == pos.security_id,
+                        PricesEOD.date == inception.inception_date
+                    )
+                ).first()
+
+                if not existing_price:
+                    price_eod = PricesEOD(
+                        security_id=pos.security_id,
+                        date=inception.inception_date,
+                        close=pos.price,
+                        source='inception'
+                    )
+                    self.db.add(price_eod)
+                    prices_created += 1
 
         self.db.commit()
-        return {'created': created, 'inception_date': inception.inception_date.isoformat()}
+        return {
+            'positions_created': positions_created,
+            'prices_created': prices_created,
+            'inception_date': inception.inception_date.isoformat()
+        }
 
 
 def get_account_inception_date(db: Session, account_id: int) -> Optional[date]:
