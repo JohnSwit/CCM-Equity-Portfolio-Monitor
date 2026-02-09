@@ -3,6 +3,7 @@ Data sourcing services for classifications, benchmark constituents, and factor r
 Updated: 2026-01-29 - Migrated to Tiingo API
 """
 import os
+import re
 import httpx
 import pandas as pd
 import io
@@ -596,6 +597,9 @@ class ClassificationService:
         """
         Refresh classification for a single security.
 
+        Tries providers in order: static mapping -> Tiingo -> yfinance -> Polygon -> IEX.
+        Static mapping is checked first since it's instant and covers ~500+ tickers.
+
         Args:
             security_id: Security ID to refresh
 
@@ -608,13 +612,22 @@ class ClassificationService:
             return None
 
         ticker = security.symbol
-        logger.info(f"Refreshing classification for {ticker}")
 
-        # Try Tiingo first (primary source)
+        # Try static mapping first (instant, no API calls needed)
+        classification = self._fetch_from_static(ticker)
+        if classification:
+            return self._save_classification(security_id, classification, "static")
+
+        # Try Tiingo (primary API source)
         if self.tiingo_client:
             classification = self._fetch_from_tiingo(ticker)
             if classification:
                 return self._save_classification(security_id, classification, "tiingo")
+
+        # Fallback to yfinance (broad coverage for US and international stocks)
+        classification = self._fetch_from_yfinance(ticker)
+        if classification:
+            return self._save_classification(security_id, classification, "yfinance")
 
         # Fallback to Polygon.io
         if self.polygon_api_key:
@@ -628,30 +641,59 @@ class ClassificationService:
             if classification:
                 return self._save_classification(security_id, classification, "iex")
 
-        # Fallback to static mapping (basic SIC code mapping)
-        classification = self._fetch_from_static(ticker)
-        if classification:
-            return self._save_classification(security_id, classification, "static")
+        # If the security looks like an option (has digits or special chars), classify as Options
+        if security.is_option or self._looks_like_option(ticker):
+            return self._save_classification(security_id, {
+                "sector": "Options",
+                "gics_sector": "Options",
+                "gics_industry": "Equity Options",
+                "market_cap_category": None,
+            }, "inferred")
 
         logger.warning(f"Could not fetch classification for {ticker}")
         return None
 
-    async def refresh_all_classifications(self, limit: Optional[int] = None) -> Dict[str, Any]:
+    async def refresh_all_classifications(
+        self, limit: Optional[int] = None, unclassified_only: bool = True
+    ) -> Dict[str, Any]:
         """
-        Refresh classifications for all securities (or a limited batch).
+        Refresh classifications for securities.
+
+        By default, only processes securities that don't have a classification yet.
+        Set unclassified_only=False to re-classify all securities.
 
         Args:
             limit: Maximum number of securities to refresh (None for all)
+            unclassified_only: If True, only classify securities without existing classification
 
         Returns:
             Summary dict with success/failure counts
         """
-        query = self.db.query(Security)
+        if unclassified_only:
+            # Only get securities that don't have a classification yet
+            classified_ids = self.db.query(SectorClassification.security_id).subquery()
+            query = self.db.query(Security).filter(~Security.id.in_(classified_ids))
+        else:
+            query = self.db.query(Security)
+
         if limit:
             query = query.limit(limit)
 
         securities = query.all()
-        results = {"total": len(securities), "success": 0, "failed": 0, "errors": []}
+
+        total_securities = self.db.query(func.count(Security.id)).scalar() or 0
+        already_classified = total_securities - len(securities) if unclassified_only else 0
+
+        results = {
+            "total": len(securities),
+            "total_securities": total_securities,
+            "already_classified": already_classified,
+            "success": 0,
+            "failed": 0,
+            "errors": []
+        }
+
+        logger.info(f"Classifying {len(securities)} securities ({already_classified} already classified)")
 
         for security in securities:
             try:
@@ -663,9 +705,13 @@ class ClassificationService:
             except Exception as e:
                 logger.error(f"Error refreshing {security.symbol}: {str(e)}")
                 results["failed"] += 1
-                results["errors"].append({"ticker": security.symbol, "error": str(e)})
+                if len(results["errors"]) < 20:  # Cap error list size
+                    results["errors"].append({"ticker": security.symbol, "error": str(e)})
 
-        logger.info(f"Classification refresh complete: {results['success']}/{results['total']} successful")
+        logger.info(
+            f"Classification refresh complete: {results['success']}/{results['total']} successful, "
+            f"{results['failed']} failed"
+        )
         return results
 
     def _fetch_from_tiingo(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -766,9 +812,88 @@ class ClassificationService:
         return None
 
     def _fetch_from_static(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fallback to static sector mapping for common tickers"""
+        """Fallback to static sector mapping for common tickers.
+
+        Tries multiple ticker variants (e.g., BRK.B, BRK-B, BRKB) to maximize matches.
+        """
+        # Try exact match first
+        result = self.STATIC_MAPPING.get(ticker.upper())
+        if result:
+            return result
+
+        # Try normalized form
         normalized = TickerNormalizer.normalize(ticker)
-        return self.STATIC_MAPPING.get(normalized)
+        result = self.STATIC_MAPPING.get(normalized)
+        if result:
+            return result
+
+        # Try all known variants
+        for variant in TickerNormalizer.get_variants(ticker):
+            result = self.STATIC_MAPPING.get(variant)
+            if result:
+                return result
+
+        # Try without dots/dashes (e.g., "BRKB" for "BRK.B")
+        stripped = re.sub(r'[.\-/\s]', '', ticker.upper())
+        result = self.STATIC_MAPPING.get(stripped)
+        if result:
+            return result
+
+        return None
+
+    def _fetch_from_yfinance(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch classification from yfinance (broad coverage fallback).
+
+        yfinance gets sector/industry data from Yahoo Finance, which covers
+        most US and international securities.
+        """
+        try:
+            import yfinance as yf
+        except ImportError:
+            return None
+
+        try:
+            normalized = ticker.replace('.', '-').upper()
+            yf_ticker = yf.Ticker(normalized)
+            info = yf_ticker.info
+
+            if not info:
+                return None
+
+            sector = info.get('sector', '')
+            industry = info.get('industry', '')
+
+            if not sector and not industry:
+                return None
+
+            market_cap = info.get('marketCap')
+
+            result = {
+                "gics_sector": sector,
+                "sector": SectorMapper.normalize_sector(sector) if sector else None,
+                "gics_industry": industry,
+                "market_cap_category": self._categorize_market_cap(market_cap),
+            }
+            logger.info(f"yfinance classification for {ticker}: sector={sector}, industry={industry}")
+            return result
+
+        except Exception as e:
+            logger.debug(f"yfinance classification failed for {ticker}: {e}")
+            return None
+
+    @staticmethod
+    def _looks_like_option(ticker: str) -> bool:
+        """Check if a ticker looks like an options contract.
+
+        Options tickers typically contain digits and are longer than normal tickers,
+        e.g., 'AAPL240119C00190000' or 'AAPL 01/19/24 C190'.
+        """
+        if not ticker:
+            return False
+        # Options typically have digits embedded in the symbol and are long
+        has_digits = any(c.isdigit() for c in ticker)
+        is_long = len(ticker) > 8
+        return has_digits and is_long
 
     def _categorize_market_cap(self, market_cap: Optional[float]) -> Optional[str]:
         """Categorize market cap into Large/Mid/Small"""

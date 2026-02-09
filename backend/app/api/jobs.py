@@ -616,6 +616,35 @@ async def cleanup_orphaned_data_endpoint(
         )
 
 
+@router.post("/classify-securities")
+async def classify_securities(
+    unclassified_only: bool = Query(True, description="Only classify securities without existing classification"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Classify unclassified securities using Tiingo, yfinance, and static mapping.
+
+    This endpoint specifically targets securities that don't have a sector classification yet.
+    It uses multiple data sources in order: static mapping -> Tiingo -> yfinance.
+    """
+    from app.services.data_sourcing import ClassificationService
+
+    logger.info(f"Starting security classification (unclassified_only={unclassified_only})")
+
+    try:
+        service = ClassificationService(db)
+        result = await service.refresh_all_classifications(unclassified_only=unclassified_only)
+        return {
+            "status": "completed",
+            "message": f"Classified {result['success']} of {result['total']} securities",
+            **result
+        }
+    except Exception as e:
+        logger.error(f"Classification job failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/debug/data-state")
 async def get_data_state(
     db: Session = Depends(get_db),
