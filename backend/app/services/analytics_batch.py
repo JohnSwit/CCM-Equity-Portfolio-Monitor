@@ -882,7 +882,12 @@ class BatchAnalyticsService:
         return len(returns_data)
 
     def _get_trading_calendar(self, start_date: date, end_date: date) -> List[date]:
-        """Get trading dates from price data"""
+        """Get trading dates from price data.
+
+        Uses dates from PricesEOD as the primary source. Falls back to business
+        days (weekdays) when no price data exists, which is more correct than
+        all calendar days since it excludes weekends.
+        """
         if self._trading_dates:
             filtered = [d for d in self._trading_dates if start_date <= d <= end_date]
             # Ensure end_date is included
@@ -901,8 +906,9 @@ class BatchAnalyticsService:
         self._trading_dates = [d[0] for d in dates]
 
         if not self._trading_dates:
-            # Fall back to all dates
-            all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            # Fall back to business days (weekdays) instead of ALL calendar days.
+            # This is more correct and produces ~30% fewer dates.
+            all_dates = pd.bdate_range(start=start_date, end=end_date)
             self._trading_dates = [d.date() for d in all_dates]
         else:
             # Always ensure end_date is included so positions exist for "today"

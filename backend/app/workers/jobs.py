@@ -473,7 +473,21 @@ async def market_data_update_job(db: Session = None):
         close_db = True
 
     try:
+        logger.info("=" * 60)
         logger.info("Starting market data update job")
+        logger.info("=" * 60)
+
+        # Diagnostic: log current data state
+        from app.core.config import settings
+        tiingo_configured = bool(settings.TIINGO_API_KEY) and settings.TIINGO_API_KEY != 'your-tiingo-api-key-here'
+        logger.info(f"Tiingo API key configured: {tiingo_configured}")
+        if settings.TIINGO_API_KEY:
+            logger.info(f"Tiingo API key prefix: {settings.TIINGO_API_KEY[:8]}...")
+
+        inception_count = db.query(func.count(AccountInception.id)).scalar() or 0
+        inception_pos_count = db.query(func.count(InceptionPosition.id)).scalar() or 0
+        prices_count = db.query(func.count(PricesEOD.id)).scalar() or 0
+        logger.info(f"Data state: {inception_count} inception records, {inception_pos_count} inception positions, {prices_count} price records")
 
         market_data = MarketDataProvider(db)
 
@@ -497,7 +511,10 @@ async def market_data_update_job(db: Session = None):
         factor_etf_results = await market_data.update_factor_etf_prices()
         logger.info(f"Factor ETF prices updated: {factor_etf_results}")
 
-        logger.info("Market data fetched successfully")
+        # Log price state after market data fetch
+        post_fetch_prices = db.query(func.count(PricesEOD.id)).scalar() or 0
+        latest_price_date = db.query(func.max(PricesEOD.date)).scalar()
+        logger.info(f"After market data fetch: {post_fetch_prices} total price records, latest date: {latest_price_date}")
 
         # Now recompute analytics with the new data
         logger.info("Recomputing analytics...")
@@ -570,10 +587,19 @@ async def recompute_analytics_job(db: Session = None, use_batch_service: bool = 
         # 0.7. Seed inception prices into PricesEOD.
         # Inception positions store prices from the CSV, but portfolio value computation
         # reads from PricesEOD. Without this, portfolio value on inception date = $0.
-        logger.info("Seeding inception prices into PricesEOD...")
+        inception_pos_with_prices = db.query(func.count(InceptionPosition.id)).filter(
+            InceptionPosition.price > 0
+        ).scalar() or 0
+        logger.info(f"Seeding inception prices: {inception_pos_with_prices} inception positions have prices")
         prices_seeded = _seed_inception_prices(db)
-        if prices_seeded > 0:
-            logger.info(f"Seeded {prices_seeded} inception prices into PricesEOD")
+        logger.info(f"Seeded {prices_seeded} new inception prices into PricesEOD")
+
+        # Verify seeding worked
+        inception_prices_in_db = db.query(func.count(PricesEOD.id)).filter(
+            PricesEOD.source == 'inception'
+        ).scalar() or 0
+        total_prices_in_db = db.query(func.count(PricesEOD.id)).scalar() or 0
+        logger.info(f"PricesEOD state: {total_prices_in_db} total records, {inception_prices_in_db} from inception")
 
         # Steps 1 & 2: Build positions, compute values and returns
         if use_batch_service:

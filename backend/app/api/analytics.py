@@ -50,13 +50,25 @@ def get_summary(
     vt = parse_view_type(view_type)
     db_vt = get_db_view_type(vt)
 
-    # Get latest value
+    # Get latest value - prefer the most recent date with a non-zero value.
+    # This avoids showing $0 when today's market data hasn't been fetched yet
+    # (positions exist for today but prices don't, resulting in a $0 value).
     latest_value = db.query(PortfolioValueEOD).filter(
         and_(
             PortfolioValueEOD.view_type == db_vt,
-            PortfolioValueEOD.view_id == view_id
+            PortfolioValueEOD.view_id == view_id,
+            PortfolioValueEOD.total_value > 0
         )
     ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    # Fall back to any value if all are zero (e.g., truly empty portfolio)
+    if not latest_value:
+        latest_value = db.query(PortfolioValueEOD).filter(
+            and_(
+                PortfolioValueEOD.view_type == db_vt,
+                PortfolioValueEOD.view_id == view_id
+            )
+        ).order_by(desc(PortfolioValueEOD.date)).first()
 
     if not latest_value:
         raise HTTPException(status_code=404, detail="No data found for this view")
@@ -181,13 +193,24 @@ def get_holdings(
     db_vt = get_db_view_type(vt)
 
     if not as_of_date:
-        # Get latest date
+        # Get latest date with a non-zero value (avoids using today when prices
+        # haven't been fetched yet, which would show $0 for everything)
         latest = db.query(PortfolioValueEOD.date).filter(
             and_(
                 PortfolioValueEOD.view_type == db_vt,
-                PortfolioValueEOD.view_id == view_id
+                PortfolioValueEOD.view_id == view_id,
+                PortfolioValueEOD.total_value > 0
             )
         ).order_by(desc(PortfolioValueEOD.date)).first()
+
+        # Fall back to any date if all values are zero
+        if not latest:
+            latest = db.query(PortfolioValueEOD.date).filter(
+                and_(
+                    PortfolioValueEOD.view_type == db_vt,
+                    PortfolioValueEOD.view_id == view_id
+                )
+            ).order_by(desc(PortfolioValueEOD.date)).first()
 
         if not latest:
             raise HTTPException(status_code=404, detail="No data found")

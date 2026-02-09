@@ -274,9 +274,10 @@ class PositionsEngine:
 
         trading_dates = [d[0] for d in dates]
 
-        # If no prices yet, use all dates (will be filtered later)
+        # If no prices yet, use business days (weekdays) instead of all calendar days.
+        # This is more correct and avoids creating positions for weekends/holidays.
         if not trading_dates:
-            all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            all_dates = pd.bdate_range(start=start_date, end=end_date)
             trading_dates = [d.date() for d in all_dates]
         else:
             # Always ensure end_date is included so positions exist for "today"
@@ -448,9 +449,17 @@ class PositionsEngine:
         return holdings
 
     def get_unpriced_securities(self, as_of_date: Optional[date] = None) -> List[Dict]:
-        """Get securities with positions but no prices"""
+        """Get securities with positions but no prices on the given date.
+
+        If no as_of_date is provided, uses the last date that has prices in PricesEOD
+        rather than today. This prevents showing all securities as "unpriced" when
+        today's market data hasn't been fetched yet (e.g., during market hours or
+        if the data provider hasn't updated).
+        """
         if not as_of_date:
-            as_of_date = date.today()
+            # Use the last date with actual price data, not today
+            latest_price_date = self.db.query(func.max(PricesEOD.date)).scalar()
+            as_of_date = latest_price_date if latest_price_date else date.today()
 
         # Get securities with positions but no price on as_of_date
         subq = self.db.query(PositionsEOD.security_id).filter(
