@@ -89,6 +89,11 @@ class Transaction(Base):
     account = relationship("Account")
     security = relationship("Security")
 
+    __table_args__ = (
+        Index('idx_transaction_account_date', 'account_id', 'trade_date'),
+        Index('idx_transaction_account_security', 'account_id', 'security_id', 'trade_date'),
+    )
+
 
 class TransactionTypeMap(Base):
     __tablename__ = "transaction_type_map"
@@ -121,6 +126,7 @@ class PricesEOD(Base):
     __table_args__ = (
         UniqueConstraint('security_id', 'date', name='uq_price_security_date'),
         Index('idx_prices_date', 'date'),
+        Index('idx_prices_security_date', 'security_id', 'date'),
     )
 
 
@@ -139,6 +145,8 @@ class PositionsEOD(Base):
 
     __table_args__ = (
         UniqueConstraint('account_id', 'security_id', 'date', name='uq_position_account_security_date'),
+        Index('idx_positions_account_security_date', 'account_id', 'security_id', 'date'),
+        Index('idx_positions_account_date', 'account_id', 'date'),
     )
 
 
@@ -160,6 +168,7 @@ class PortfolioValueEOD(Base):
 
     __table_args__ = (
         UniqueConstraint('view_type', 'view_id', 'date', name='uq_value_view_date'),
+        Index('idx_portfolio_value_view_date', 'view_type', 'view_id', 'date'),
     )
 
 
@@ -176,6 +185,7 @@ class ReturnsEOD(Base):
 
     __table_args__ = (
         UniqueConstraint('view_type', 'view_id', 'date', name='uq_return_view_date'),
+        Index('idx_returns_view_date', 'view_type', 'view_id', 'date'),
     )
 
 
@@ -248,6 +258,7 @@ class BenchmarkReturn(Base):
 
     __table_args__ = (
         UniqueConstraint('code', 'date', name='uq_benchmark_return_code_date'),
+        Index('idx_benchmark_return_code_date', 'code', 'date'),
     )
 
 
@@ -268,6 +279,7 @@ class BenchmarkMetric(Base):
     __table_args__ = (
         UniqueConstraint('view_type', 'view_id', 'benchmark_code', 'as_of_date',
                         name='uq_benchmark_metric_view_bench_date'),
+        Index('idx_benchmark_metric_view_bench', 'view_type', 'view_id', 'benchmark_code', 'as_of_date'),
     )
 
 
@@ -338,6 +350,7 @@ class FactorRegression(Base):
     __table_args__ = (
         UniqueConstraint('view_type', 'view_id', 'factor_set_code', 'as_of_date', 'window',
                         name='uq_factor_regression_view_set_date_window'),
+        Index('idx_factor_regression_view_set', 'view_type', 'view_id', 'factor_set_code', 'as_of_date'),
     )
 
 
@@ -356,6 +369,7 @@ class RiskEOD(Base):
 
     __table_args__ = (
         UniqueConstraint('view_type', 'view_id', 'date', name='uq_risk_view_date'),
+        Index('idx_risk_view_date', 'view_type', 'view_id', 'date'),
     )
 
 

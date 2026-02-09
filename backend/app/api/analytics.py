@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
 from datetime import date, datetime
 from typing import Optional
+from functools import lru_cache
+import time
 from app.core.database import get_db
 from app.api.auth import get_current_user
+
+
+# Simple time-based cache for expensive, rarely-changing queries
+_benchmark_cache: dict = {}
+_BENCHMARK_CACHE_TTL = 300  # 5 minutes
 from app.models import (
     User, PortfolioValueEOD, ReturnsEOD, RiskEOD,
     BenchmarkMetric, BenchmarkReturn, FactorRegression, ViewType, Account, Group,
@@ -115,7 +123,10 @@ def get_returns(
     vt = parse_view_type(view_type)
     db_vt = get_db_view_type(vt)
 
-    query = db.query(ReturnsEOD).filter(
+    # Select only needed columns for faster query and less memory
+    query = db.query(
+        ReturnsEOD.date, ReturnsEOD.twr_return, ReturnsEOD.twr_index
+    ).filter(
         and_(
             ReturnsEOD.view_type == db_vt,
             ReturnsEOD.view_id == view_id
@@ -131,11 +142,11 @@ def get_returns(
 
     return [
         ReturnDataPoint(
-            date=r.date,
-            return_value=r.twr_return,
-            index_value=r.twr_index
+            date=r_date,
+            return_value=r_twr_return,
+            index_value=r_twr_index
         )
-        for r in returns
+        for r_date, r_twr_return, r_twr_index in returns
     ]
 
 
@@ -154,8 +165,21 @@ def get_benchmark_returns(
     codes = [c.strip() for c in benchmark_codes.split(',')]
     result = {}
 
+    # Check server-side cache for each benchmark code
+    now = time.time()
+    cache_key_parts = f"{start_date}_{end_date}"
+
     for code in codes:
-        query = db.query(BenchmarkReturn).filter(BenchmarkReturn.code == code)
+        code_cache_key = f"{code}_{cache_key_parts}"
+        cached = _benchmark_cache.get(code_cache_key)
+        if cached and (now - cached['ts']) < _BENCHMARK_CACHE_TTL:
+            result[code] = cached['data']
+            continue
+
+        # Fetch only (code, date, return_value) columns instead of full ORM objects
+        query = db.query(BenchmarkReturn.date, BenchmarkReturn.return_value).filter(
+            BenchmarkReturn.code == code
+        )
 
         if start_date:
             query = query.filter(BenchmarkReturn.date >= start_date)
@@ -167,15 +191,16 @@ def get_benchmark_returns(
         # Compute cumulative index starting at 1.0
         cumulative_index = 1.0
         data_points = []
-        for r in returns:
-            cumulative_index *= (1 + r.return_value)
+        for r_date, r_value in returns:
+            cumulative_index *= (1 + r_value)
             data_points.append({
-                'date': r.date,
-                'return_value': r.return_value,
+                'date': r_date,
+                'return_value': r_value,
                 'index_value': cumulative_index
             })
 
         result[code] = data_points
+        _benchmark_cache[code_cache_key] = {'data': data_points, 'ts': now}
 
     return result
 

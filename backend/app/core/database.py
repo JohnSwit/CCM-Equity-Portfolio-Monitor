@@ -9,8 +9,10 @@ logger = logging.getLogger(__name__)
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20
+    pool_size=20,
+    max_overflow=40,
+    pool_recycle=1800,
+    pool_timeout=30,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -87,6 +89,21 @@ def run_migrations():
     ]
 
     # New tables to create
+    # Performance indexes for analytics queries
+    performance_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_prices_security_date ON prices_eod(security_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_positions_account_security_date ON positions_eod(account_id, security_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_positions_account_date ON positions_eod(account_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_portfolio_value_view_date ON portfolio_value_eod(view_type, view_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_returns_view_date ON returns_eod(view_type, view_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_risk_view_date ON risk_eod(view_type, view_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_benchmark_metric_view_bench ON benchmark_metrics(view_type, view_id, benchmark_code, as_of_date)",
+        "CREATE INDEX IF NOT EXISTS idx_benchmark_return_code_date ON benchmark_returns(code, date)",
+        "CREATE INDEX IF NOT EXISTS idx_factor_regression_view_set ON factor_regressions(view_type, view_id, factor_set_code, as_of_date)",
+        "CREATE INDEX IF NOT EXISTS idx_transaction_account_date ON transactions(account_id, trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_transaction_account_security ON transactions(account_id, security_id, trade_date)",
+    ]
+
     new_tables = [
         """
         CREATE TABLE IF NOT EXISTS coverage_documents (
@@ -137,6 +154,14 @@ def run_migrations():
                 logger.info(f"Migration: Added column {column} to {table}")
             except Exception as e:
                 logger.debug(f"Migration skipped for {table}.{column}: {e}")
+
+        # Create performance indexes
+        for sql in performance_indexes:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception as e:
+                logger.debug(f"Index creation skipped: {e}")
 
         # Create new tables
         for sql in new_tables:

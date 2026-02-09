@@ -2,8 +2,59 @@ import axios, { AxiosInstance } from 'axios';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// Simple TTL cache for GET requests to avoid redundant API calls
+// when switching between views or re-rendering
+interface CacheEntry {
+  data: any;
+  expiry: number;
+}
+
+class RequestCache {
+  private cache = new Map<string, CacheEntry>();
+  private defaultTTL: number;
+
+  constructor(defaultTTLMs: number = 30000) {  // 30 second default
+    this.defaultTTL = defaultTTLMs;
+  }
+
+  get(key: string): any | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiry) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  set(key: string, data: any, ttlMs?: number): void {
+    this.cache.set(key, {
+      data,
+      expiry: Date.now() + (ttlMs ?? this.defaultTTL),
+    });
+    // Evict old entries if cache grows too large
+    if (this.cache.size > 200) {
+      const now = Date.now();
+      for (const [k, v] of this.cache) {
+        if (now > v.expiry) this.cache.delete(k);
+      }
+    }
+  }
+
+  invalidate(pattern?: string): void {
+    if (!pattern) {
+      this.cache.clear();
+      return;
+    }
+    for (const key of this.cache.keys()) {
+      if (key.includes(pattern)) this.cache.delete(key);
+    }
+  }
+}
+
 class APIClient {
   private client: AxiosInstance;
+  private requestCache = new RequestCache();
 
   constructor() {
     this.client = axios.create({
@@ -33,6 +84,22 @@ class APIClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  // Cached GET helper - caches based on URL + params
+  private async cachedGet(url: string, params?: any, ttlMs?: number): Promise<any> {
+    const cacheKey = url + '?' + JSON.stringify(params || {});
+    const cached = this.requestCache.get(cacheKey);
+    if (cached) return cached;
+
+    const response = await this.client.get(url, { params });
+    this.requestCache.set(cacheKey, response.data, ttlMs);
+    return response.data;
+  }
+
+  // Invalidate cache (call after mutations that change analytics data)
+  invalidateCache(pattern?: string): void {
+    this.requestCache.invalidate(pattern);
   }
 
   // Auth
@@ -77,37 +144,24 @@ class APIClient {
   }
 
   async getAllViews() {
-    const response = await this.client.get('/views');
-    return response.data;
+    return this.cachedGet('/views', undefined, 60000);  // 1 min cache
   }
 
   // Analytics
   async getSummary(viewType: string, viewId: number) {
-    const response = await this.client.get('/analytics/summary', {
-      params: { view_type: viewType, view_id: viewId },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/summary', { view_type: viewType, view_id: viewId });
   }
 
   async getReturns(viewType: string, viewId: number, startDate?: string, endDate?: string) {
-    const response = await this.client.get('/analytics/returns', {
-      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/returns', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate });
   }
 
   async getHoldings(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/analytics/holdings', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/holdings', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
   }
 
   async getRisk(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/analytics/risk', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/risk', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
   }
 
   async getBenchmarkMetrics(viewType: string, viewId: number, benchmark: string, window: number = 252) {
@@ -125,17 +179,14 @@ class APIClient {
   }
 
   async getUnpricedInstruments(asOfDate?: string) {
-    const response = await this.client.get('/analytics/unpriced-instruments', {
-      params: { as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/unpriced-instruments', { as_of_date: asOfDate }, 60000);
   }
 
   async getBenchmarkReturns(benchmarkCodes: string[], startDate?: string, endDate?: string) {
-    const response = await this.client.get('/analytics/benchmark-returns', {
-      params: { benchmark_codes: benchmarkCodes.join(','), start_date: startDate, end_date: endDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/benchmark-returns',
+      { benchmark_codes: benchmarkCodes.join(','), start_date: startDate, end_date: endDate },
+      60000  // 1 min cache - benchmarks change less frequently
+    );
   }
 
   // Imports
@@ -152,6 +203,7 @@ class APIClient {
         },
       }
     );
+    if (mode === 'commit') this.requestCache.invalidate();
     return response.data;
   }
 
@@ -186,6 +238,7 @@ class APIClient {
   // Jobs
   async runJob(jobName: string) {
     const response = await this.client.post(`/jobs/run?job_name=${jobName}`);
+    this.requestCache.invalidate();  // Clear all caches after jobs run
     return response.data;
   }
 
@@ -282,10 +335,7 @@ class APIClient {
   }
 
   async getSectorWeights(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/portfolio-stats/sector-weights', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/sector-weights', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
   }
 
   async getSectorComparison(viewType: string, viewId: number, benchmark: string = 'SP500', asOfDate?: string) {

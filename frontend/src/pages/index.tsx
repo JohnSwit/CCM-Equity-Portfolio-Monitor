@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import Select from 'react-select';
 import { format, subMonths, startOfYear } from 'date-fns';
+
+// Lazy-load react-select (not needed until user interacts with dropdown)
+const Select = dynamic(() => import('react-select'), { ssr: false }) as any;
 
 // Time period options for the performance chart
 type ChartPeriod = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
@@ -39,6 +42,51 @@ const selectStyles = {
   }),
   placeholder: (base: any) => ({ ...base, color: '#a1a1aa', fontSize: '0.875rem' }),
   singleValue: (base: any) => ({ ...base, color: '#27272a', fontSize: '0.875rem' }),
+};
+
+// Pre-create Intl formatters (expensive to construct, reuse across renders)
+const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const currencyDecFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const sharesWholeNumberFmt = new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const sharesDecimalFmt = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Formatting functions (pure, no component state dependency - defined at module level)
+const formatCurrency = (value: number) => currencyFmt.format(value);
+
+const formatPercent = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  return (value * 100).toFixed(2) + '%';
+};
+
+const formatPercentWithSign = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  const pct = (value * 100).toFixed(2);
+  return (value >= 0 ? '+' : '') + pct + '%';
+};
+
+const formatIndexValue = (value: number) => ((value - 1) * 100).toFixed(2) + '%';
+
+const formatCurrencyWithDecimals = (value: number) => currencyDecFmt.format(value);
+
+const formatGainPercent = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  const pct = (value * 100).toFixed(2);
+  return (value >= 0 ? '+' : '') + pct + '%';
+};
+
+const formatGainCurrency = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '-';
+  const formatted = currencyFmt.format(Math.abs(value));
+  return (value >= 0 ? '+' : '-') + formatted;
+};
+
+const formatSharesDisplay = (value: number) => {
+  return value >= 1000 ? sharesWholeNumberFmt.format(value) : sharesDecimalFmt.format(value);
+};
+
+const getGainColorClass = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return 'text-zinc-400';
+  return value >= 0 ? 'value-positive' : 'value-negative';
 };
 
 export default function Dashboard() {
@@ -255,81 +303,11 @@ export default function Dashboard() {
     setChartData(simpleData);
   };
 
-  // Formatting functions
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value);
-  };
-
-  const formatPercent = (value: number | null | undefined) => {
-    if (value === null || value === undefined) return '-';
-    const pct = (value * 100).toFixed(2);
-    return pct + '%';
-  };
-
-  const formatPercentWithSign = (value: number | null | undefined) => {
-    if (value === null || value === undefined) return '-';
-    const pct = (value * 100).toFixed(2);
-    return (value >= 0 ? '+' : '') + pct + '%';
-  };
-
-  const formatIndexValue = (value: number) => {
-    return ((value - 1) * 100).toFixed(2) + '%';
-  };
-
-  const formatCurrencyWithDecimals = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  };
-
-  const formatGainPercent = (value: number | null | undefined) => {
-    if (value === null || value === undefined) return '-';
-    const pct = (value * 100).toFixed(2);
-    return (value >= 0 ? '+' : '') + pct + '%';
-  };
-
-  const formatGainCurrency = (value: number | null | undefined) => {
-    if (value === null || value === undefined) return '-';
-    const formatted = new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(Math.abs(value));
-    return (value >= 0 ? '+' : '-') + formatted;
-  };
-
-  const formatSharesDisplay = (value: number) => {
-    if (value >= 1000) {
-      return new Intl.NumberFormat('en-US', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0,
-      }).format(value);
-    }
-    return new Intl.NumberFormat('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  };
-
-  const getGainColorClass = (value: number | null | undefined) => {
-    if (value === null || value === undefined) return 'text-zinc-400';
-    return value >= 0 ? 'value-positive' : 'value-negative';
-  };
-
-  const viewOptions = views.map((v) => ({
+  const viewOptions = useMemo(() => views.map((v) => ({
     value: v,
     label: v.view_name,
     group: v.view_type,
-  }));
+  })), [views]);
 
   // Process holdings data for pie chart
   const holdingsPieData = useMemo(() => {
