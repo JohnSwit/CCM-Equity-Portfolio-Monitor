@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, Fragment, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
@@ -59,17 +59,6 @@ interface ModelData {
   last_refreshed: string | null;
 }
 
-interface CoverageDocument {
-  id: number;
-  coverage_id: number;
-  file_name: string;
-  file_path: string;
-  file_type: string | null;
-  file_size: number | null;
-  description: string | null;
-  uploaded_at: string;
-}
-
 interface CoverageSnapshot {
   id: number;
   coverage_id: number;
@@ -100,11 +89,13 @@ interface Coverage {
   weight_pct: number | null;
   current_price: number | null;
   model_data: ModelData | null;
-  documents: CoverageDocument[];
+  documents: any[];
   snapshots: CoverageSnapshot[];
   created_at: string;
   updated_at: string;
 }
+
+type SortField = 'none' | 'market_value' | 'upside' | 'irr';
 
 export default function CoveragePage() {
   const router = useRouter();
@@ -134,12 +125,6 @@ export default function CoveragePage() {
   const [editBearCase, setEditBearCase] = useState('');
   const [editAlert, setEditAlert] = useState('');
 
-  // Document modal
-  const [addingDocument, setAddingDocument] = useState<number | null>(null);
-  const [newDocFileName, setNewDocFileName] = useState('');
-  const [newDocFilePath, setNewDocFilePath] = useState('');
-  const [newDocDescription, setNewDocDescription] = useState('');
-
   // Snapshot diff view
   const [viewingSnapshotDiff, setViewingSnapshotDiff] = useState<{ coverageId: number; snapshotId: number } | null>(null);
   const [snapshotDiff, setSnapshotDiff] = useState<any>(null);
@@ -150,6 +135,17 @@ export default function CoveragePage() {
   // Refresh status
   const [refreshing, setRefreshing] = useState<number | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
+
+  // Inline editing for thesis/bull/bear
+  const [inlineThesis, setInlineThesis] = useState<Record<number, string>>({});
+  const [inlineBull, setInlineBull] = useState<Record<number, string>>({});
+  const [inlineBear, setInlineBear] = useState<Record<number, string>>({});
+  const [savingInline, setSavingInline] = useState<number | null>(null);
+
+  // Column filters
+  const [filterPrimaryAnalyst, setFilterPrimaryAnalyst] = useState<string>('');
+  const [filterSecondaryAnalyst, setFilterSecondaryAnalyst] = useState<string>('');
+  const [sortField, setSortField] = useState<SortField>('none');
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -199,14 +195,12 @@ export default function CoveragePage() {
         model_share_link: newModelShareLink || undefined,
       });
 
-      // Reset form
       setNewTicker('');
       setNewPrimaryAnalyst(null);
       setNewSecondaryAnalyst(null);
       setNewModelPath('');
       setNewModelShareLink('');
 
-      // Reload data
       await loadData();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to add ticker');
@@ -296,35 +290,39 @@ export default function CoveragePage() {
     }
   };
 
-  const handleAddDocument = async (coverageId: number) => {
-    if (!newDocFileName.trim() || !newDocFilePath.trim()) {
-      setError('File name and path are required');
-      return;
-    }
+  // Inline save for thesis/bull/bear - saves on blur
+  const handleInlineSave = async (coverageId: number, field: 'thesis' | 'bull_case' | 'bear_case', value: string) => {
+    const coverage = coverages.find(c => c.id === coverageId);
+    if (!coverage) return;
+
+    // Only save if value actually changed
+    const original = coverage[field] || '';
+    if (value === original) return;
+
     try {
-      await api.addCoverageDocument(coverageId, {
-        file_name: newDocFileName,
-        file_path: newDocFilePath,
-        description: newDocDescription || undefined,
-      });
-      setAddingDocument(null);
-      setNewDocFileName('');
-      setNewDocFilePath('');
-      setNewDocDescription('');
+      setSavingInline(coverageId);
+      await api.updateCoverage(coverageId, { [field]: value || undefined });
       await loadData();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to add document');
+      setError(err.response?.data?.detail || 'Failed to save');
+    } finally {
+      setSavingInline(null);
     }
   };
 
-  const handleDeleteDocument = async (coverageId: number, documentId: number) => {
-    if (!confirm('Delete this document?')) return;
-    try {
-      await api.deleteCoverageDocument(coverageId, documentId);
-      await loadData();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to delete document');
+  // Initialize inline values when expanding a ticker
+  const handleExpandTicker = (coverageId: number) => {
+    if (expandedTicker === coverageId) {
+      setExpandedTicker(null);
+      return;
     }
+    const coverage = coverages.find(c => c.id === coverageId);
+    if (coverage) {
+      setInlineThesis(prev => ({ ...prev, [coverageId]: coverage.thesis || '' }));
+      setInlineBull(prev => ({ ...prev, [coverageId]: coverage.bull_case || '' }));
+      setInlineBear(prev => ({ ...prev, [coverageId]: coverage.bear_case || '' }));
+    }
+    setExpandedTicker(coverageId);
   };
 
   const handleViewSnapshotDiff = async (coverageId: number, snapshotId: number) => {
@@ -347,7 +345,8 @@ export default function CoveragePage() {
     }
   };
 
-  const formatCurrency = (value: number | null | undefined) => {
+  // --- Formatting helpers ---
+  const formatDollar = (value: number | null | undefined) => {
     if (value == null) return '-';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -355,6 +354,14 @@ export default function CoveragePage() {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value);
+  };
+
+  const formatEstimate = (value: number | null | undefined) => {
+    if (value == null) return '-';
+    return '$' + new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(Math.round(value));
   };
 
   const formatPercent = (value: number | null | undefined) => {
@@ -367,15 +374,48 @@ export default function CoveragePage() {
     return `${value.toFixed(2)}%`;
   };
 
-  const formatNumber = (value: number | null | undefined, decimals: number = 2) => {
-    if (value == null) return '-';
-    return value.toFixed(decimals);
+  const formatBps = (current: number | null | undefined, prior: number | null | undefined) => {
+    if (current == null || prior == null) return '-';
+    const bps = Math.round((current - prior) * 10000);
+    return `${bps >= 0 ? '+' : ''}${bps} bps`;
+  };
+
+  const getBpsClass = (current: number | null | undefined, prior: number | null | undefined) => {
+    if (current == null || prior == null) return 'text-zinc-400';
+    const diff = current - prior;
+    if (diff > 0) return 'value-positive';
+    if (diff < 0) return 'value-negative';
+    return 'text-zinc-400';
   };
 
   const getValueClass = (value: number | null | undefined) => {
     if (value == null) return 'text-zinc-400';
     return value >= 0 ? 'value-positive' : 'value-negative';
   };
+
+  // --- Filtering and sorting ---
+  const filteredAndSortedCoverages = coverages
+    .filter(c => {
+      if (filterPrimaryAnalyst && (c.primary_analyst?.name || '') !== filterPrimaryAnalyst) return false;
+      if (filterSecondaryAnalyst && (c.secondary_analyst?.name || '') !== filterSecondaryAnalyst) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      switch (sortField) {
+        case 'market_value':
+          return (b.market_value || 0) - (a.market_value || 0);
+        case 'upside':
+          return (b.model_data?.ccm_upside_pct || -Infinity) - (a.model_data?.ccm_upside_pct || -Infinity);
+        case 'irr':
+          return (b.model_data?.irr_3yr || -Infinity) - (a.model_data?.irr_3yr || -Infinity);
+        default:
+          return 0;
+      }
+    });
+
+  const analystNames = [...new Set(
+    coverages.flatMap(c => [c.primary_analyst?.name, c.secondary_analyst?.name]).filter(Boolean)
+  )].sort() as string[];
 
   if (authLoading || loading) {
     return (
@@ -510,24 +550,77 @@ export default function CoveragePage() {
                 <tr>
                   <th>Ticker</th>
                   <th className="text-center">Status</th>
-                  <th>Primary</th>
-                  <th>Secondary</th>
+                  <th>
+                    <div className="space-y-1">
+                      <div>Primary</div>
+                      <select
+                        value={filterPrimaryAnalyst}
+                        onChange={(e) => setFilterPrimaryAnalyst(e.target.value)}
+                        className="text-xs font-normal bg-white border border-zinc-200 rounded px-1.5 py-0.5 w-full"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <option value="">All</option>
+                        {analystNames.map(name => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </th>
+                  <th>
+                    <div className="space-y-1">
+                      <div>Secondary</div>
+                      <select
+                        value={filterSecondaryAnalyst}
+                        onChange={(e) => setFilterSecondaryAnalyst(e.target.value)}
+                        className="text-xs font-normal bg-white border border-zinc-200 rounded px-1.5 py-0.5 w-full"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <option value="">All</option>
+                        {analystNames.map(name => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </th>
                   <th className="text-right">Price</th>
-                  <th className="text-right">Mkt Value</th>
+                  <th className="text-right">
+                    <div className="space-y-1">
+                      <div
+                        className={`cursor-pointer hover:text-blue-600 ${sortField === 'market_value' ? 'text-blue-600' : ''}`}
+                        onClick={() => setSortField(sortField === 'market_value' ? 'none' : 'market_value')}
+                      >
+                        Mkt Value {sortField === 'market_value' ? ' \u2193' : ''}
+                      </div>
+                    </div>
+                  </th>
                   <th className="text-right">Weight</th>
                   <th className="text-right">CCM FV</th>
-                  <th className="text-right">Upside</th>
-                  <th className="text-right">3Y IRR</th>
+                  <th className="text-right">
+                    <div
+                      className={`cursor-pointer hover:text-blue-600 ${sortField === 'upside' ? 'text-blue-600' : ''}`}
+                      onClick={() => setSortField(sortField === 'upside' ? 'none' : 'upside')}
+                    >
+                      Upside {sortField === 'upside' ? ' \u2193' : ''}
+                    </div>
+                  </th>
+                  <th className="text-right">
+                    <div
+                      className={`cursor-pointer hover:text-blue-600 ${sortField === 'irr' ? 'text-blue-600' : ''}`}
+                      onClick={() => setSortField(sortField === 'irr' ? 'none' : 'irr')}
+                    >
+                      3Y IRR {sortField === 'irr' ? ' \u2193' : ''}
+                    </div>
+                  </th>
                   <th className="text-center">Model</th>
                   <th className="text-center">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {coverages.map((coverage) => (
+                {filteredAndSortedCoverages.map((coverage) => (
                   <Fragment key={coverage.id}>
                     <tr
                       className={`cursor-pointer transition-colors ${expandedTicker === coverage.id ? 'bg-blue-50/50' : ''}`}
-                      onClick={() => setExpandedTicker(expandedTicker === coverage.id ? null : coverage.id)}
+                      onClick={() => handleExpandTicker(coverage.id)}
                     >
                       <td className="font-semibold text-zinc-900">
                         <div className="flex items-center gap-2">
@@ -553,12 +646,12 @@ export default function CoveragePage() {
                       <td className="text-zinc-600">{coverage.primary_analyst?.name || '-'}</td>
                       <td className="text-zinc-600">{coverage.secondary_analyst?.name || '-'}</td>
                       <td className="text-right tabular-nums font-medium">
-                        {coverage.current_price ? `$${coverage.current_price.toFixed(2)}` : '-'}
+                        {coverage.current_price ? formatDollar(coverage.current_price) : '-'}
                       </td>
-                      <td className="text-right tabular-nums">{formatCurrency(coverage.market_value)}</td>
+                      <td className="text-right tabular-nums">{formatDollar(coverage.market_value)}</td>
                       <td className="text-right tabular-nums">{formatWeight(coverage.weight_pct)}</td>
                       <td className="text-right tabular-nums font-medium">
-                        {coverage.model_data?.ccm_fair_value ? `$${coverage.model_data.ccm_fair_value.toFixed(2)}` : '-'}
+                        {coverage.model_data?.ccm_fair_value ? formatDollar(coverage.model_data.ccm_fair_value) : '-'}
                       </td>
                       <td className={`text-right tabular-nums font-medium ${getValueClass(coverage.model_data?.ccm_upside_pct)}`}>
                         {formatPercent(coverage.model_data?.ccm_upside_pct)}
@@ -622,7 +715,7 @@ export default function CoveragePage() {
                                   <div className="metric-card metric-card-blue">
                                     <div className="metric-label">CCM Fair Value</div>
                                     <div className="metric-value">
-                                      {coverage.model_data?.ccm_fair_value ? `$${coverage.model_data.ccm_fair_value.toFixed(2)}` : '-'}
+                                      {coverage.model_data?.ccm_fair_value ? formatDollar(coverage.model_data.ccm_fair_value) : '-'}
                                     </div>
                                     <div className={`text-sm ${getValueClass(coverage.model_data?.ccm_upside_pct)}`}>
                                       {formatPercent(coverage.model_data?.ccm_upside_pct)} upside
@@ -631,7 +724,7 @@ export default function CoveragePage() {
                                   <div className="metric-card metric-card-purple">
                                     <div className="metric-label">Street Target</div>
                                     <div className="metric-value">
-                                      {coverage.model_data?.street_price_target ? `$${coverage.model_data.street_price_target.toFixed(2)}` : '-'}
+                                      {coverage.model_data?.street_price_target ? formatDollar(coverage.model_data.street_price_target) : '-'}
                                     </div>
                                     <div className={`text-sm ${getValueClass(coverage.model_data?.street_upside_pct)}`}>
                                       {formatPercent(coverage.model_data?.street_upside_pct)} upside
@@ -691,17 +784,17 @@ export default function CoveragePage() {
                                         <tbody className="tabular-nums">
                                           <tr className="border-t border-zinc-100">
                                             <td className="py-2 font-medium text-zinc-700">CCM</td>
-                                            <td className="py-2 text-right">{formatNumber(data.ccm_minus1yr)}</td>
-                                            <td className="py-2 text-right">{formatNumber(data.ccm_1yr)}</td>
-                                            <td className="py-2 text-right">{formatNumber(data.ccm_2yr)}</td>
-                                            <td className="py-2 text-right">{formatNumber(data.ccm_3yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.ccm_minus1yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.ccm_1yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.ccm_2yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.ccm_3yr)}</td>
                                           </tr>
                                           <tr className="border-t border-zinc-100">
                                             <td className="py-2 font-medium text-zinc-700">Street</td>
-                                            <td className="py-2 text-right">{formatNumber(data.street_minus1yr)}</td>
-                                            <td className="py-2 text-right">{formatNumber(data.street_1yr)}</td>
-                                            <td className="py-2 text-right">{formatNumber(data.street_2yr)}</td>
-                                            <td className="py-2 text-right">{formatNumber(data.street_3yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.street_minus1yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.street_1yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.street_2yr)}</td>
+                                            <td className="py-2 text-right">{formatEstimate(data.street_3yr)}</td>
                                           </tr>
                                           <tr className="border-t border-zinc-100">
                                             <td className="py-2 font-medium text-emerald-600">Growth (CCM)</td>
@@ -718,13 +811,28 @@ export default function CoveragePage() {
                                             <td className={`py-2 text-right ${getValueClass(data.diff_3yr_pct)}`}>{formatPercent(data.diff_3yr_pct)}</td>
                                           </tr>
                                           {marginData && (
-                                            <tr className="border-t border-zinc-100">
-                                              <td className="py-2 font-medium text-violet-600">Margin (CCM)</td>
-                                              <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_minus1yr)}</td>
-                                              <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_1yr)}</td>
-                                              <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_2yr)}</td>
-                                              <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_3yr)}</td>
-                                            </tr>
+                                            <>
+                                              <tr className="border-t border-zinc-100">
+                                                <td className="py-2 font-medium text-violet-600">Margin (CCM)</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_minus1yr)}</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_1yr)}</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_2yr)}</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_3yr)}</td>
+                                              </tr>
+                                              <tr className="border-t border-dashed border-zinc-100">
+                                                <td className="py-1 text-xs text-zinc-500 italic">YoY (bps)</td>
+                                                <td className="py-1 text-right text-xs text-zinc-400">-</td>
+                                                <td className={`py-1 text-right text-xs ${getBpsClass(marginData.ccm_1yr, marginData.ccm_minus1yr)}`}>
+                                                  {formatBps(marginData.ccm_1yr, marginData.ccm_minus1yr)}
+                                                </td>
+                                                <td className={`py-1 text-right text-xs ${getBpsClass(marginData.ccm_2yr, marginData.ccm_1yr)}`}>
+                                                  {formatBps(marginData.ccm_2yr, marginData.ccm_1yr)}
+                                                </td>
+                                                <td className={`py-1 text-right text-xs ${getBpsClass(marginData.ccm_3yr, marginData.ccm_2yr)}`}>
+                                                  {formatBps(marginData.ccm_3yr, marginData.ccm_2yr)}
+                                                </td>
+                                              </tr>
+                                            </>
                                           )}
                                         </tbody>
                                       </table>
@@ -748,88 +856,63 @@ export default function CoveragePage() {
                                 </div>
                               )}
 
-                              {/* Thesis Section */}
-                              {coverage.thesis && (
-                                <div className="bg-white rounded-lg border border-zinc-200 p-5 lg:col-span-2">
-                                  <h3 className="text-sm font-semibold text-zinc-900 mb-3">Investment Thesis</h3>
-                                  <p className="text-zinc-700 whitespace-pre-wrap leading-relaxed">{coverage.thesis}</p>
+                              {/* Thesis Section - always visible, inline-editable */}
+                              <div className="bg-white rounded-lg border border-zinc-200 p-5 lg:col-span-2">
+                                <div className="flex justify-between items-center mb-3">
+                                  <h3 className="text-sm font-semibold text-zinc-900">Investment Thesis</h3>
+                                  {savingInline === coverage.id && (
+                                    <span className="text-xs text-zinc-400">Saving...</span>
+                                  )}
                                 </div>
-                              )}
+                                <textarea
+                                  value={inlineThesis[coverage.id] ?? coverage.thesis ?? ''}
+                                  onChange={(e) => setInlineThesis(prev => ({ ...prev, [coverage.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(coverage.id, 'thesis', inlineThesis[coverage.id] ?? '')}
+                                  rows={3}
+                                  placeholder="Write your investment thesis here..."
+                                  className="w-full text-sm text-zinc-700 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
 
-                              {/* Bull/Bear Case */}
-                              {(coverage.bull_case || coverage.bear_case) && (
-                                <>
-                                  <div className="bg-emerald-50 rounded-lg border border-emerald-200 p-5">
-                                    <h3 className="text-sm font-semibold text-emerald-800 mb-3 flex items-center gap-2">
-                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                                      </svg>
-                                      Bull Case
-                                    </h3>
-                                    <p className="text-emerald-900 whitespace-pre-wrap leading-relaxed">{coverage.bull_case || 'Not specified'}</p>
-                                  </div>
-                                  <div className="bg-red-50 rounded-lg border border-red-200 p-5">
-                                    <h3 className="text-sm font-semibold text-red-800 mb-3 flex items-center gap-2">
-                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
-                                      </svg>
-                                      Bear Case
-                                    </h3>
-                                    <p className="text-red-900 whitespace-pre-wrap leading-relaxed">{coverage.bear_case || 'Not specified'}</p>
-                                  </div>
-                                </>
-                              )}
-
-                              {/* Documents Section */}
-                              <div className="bg-white rounded-lg border border-zinc-200 p-5">
-                                <div className="flex justify-between items-center mb-4">
-                                  <h3 className="text-sm font-semibold text-zinc-900">Documents</h3>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); setAddingDocument(coverage.id); }}
-                                    className="btn btn-ghost btn-xs text-blue-600"
-                                  >
-                                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                    </svg>
-                                    Add Document
-                                  </button>
-                                </div>
-                                {coverage.documents && coverage.documents.length > 0 ? (
-                                  <ul className="space-y-2">
-                                    {coverage.documents.map((doc) => (
-                                      <li key={doc.id} className="flex justify-between items-center p-2 rounded-lg hover:bg-zinc-50 transition-colors">
-                                        <div className="flex items-center gap-3">
-                                          <div className="w-8 h-8 rounded bg-zinc-100 flex items-center justify-center">
-                                            <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                            </svg>
-                                          </div>
-                                          <div>
-                                            <span className="font-medium text-zinc-900 text-sm">{doc.file_name}</span>
-                                            {doc.description && <span className="text-zinc-500 text-xs ml-2">- {doc.description}</span>}
-                                          </div>
-                                        </div>
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); handleDeleteDocument(coverage.id, doc.id); }}
-                                          className="btn btn-ghost btn-xs text-red-500 hover:text-red-700"
-                                        >
-                                          Delete
-                                        </button>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                ) : (
-                                  <div className="empty-state py-6">
-                                    <svg className="empty-state-icon h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                    </svg>
-                                    <p className="empty-state-description mt-2">No documents uploaded</p>
-                                  </div>
-                                )}
+                              {/* Bull/Bear Case - always visible, inline-editable */}
+                              <div className="bg-emerald-50 rounded-lg border border-emerald-200 p-5">
+                                <h3 className="text-sm font-semibold text-emerald-800 mb-3 flex items-center gap-2">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                                  </svg>
+                                  Bull Case
+                                </h3>
+                                <textarea
+                                  value={inlineBull[coverage.id] ?? coverage.bull_case ?? ''}
+                                  onChange={(e) => setInlineBull(prev => ({ ...prev, [coverage.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(coverage.id, 'bull_case', inlineBull[coverage.id] ?? '')}
+                                  rows={3}
+                                  placeholder="Key bull arguments..."
+                                  className="w-full text-sm text-emerald-900 bg-white/60 border border-emerald-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                              <div className="bg-red-50 rounded-lg border border-red-200 p-5">
+                                <h3 className="text-sm font-semibold text-red-800 mb-3 flex items-center gap-2">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                                  </svg>
+                                  Bear Case
+                                </h3>
+                                <textarea
+                                  value={inlineBear[coverage.id] ?? coverage.bear_case ?? ''}
+                                  onChange={(e) => setInlineBear(prev => ({ ...prev, [coverage.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(coverage.id, 'bear_case', inlineBear[coverage.id] ?? '')}
+                                  rows={3}
+                                  placeholder="Key bear arguments..."
+                                  className="w-full text-sm text-red-900 bg-white/60 border border-red-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
                               </div>
 
                               {/* Snapshots/Version History Section */}
-                              <div className="bg-white rounded-lg border border-zinc-200 p-5">
+                              <div className="bg-white rounded-lg border border-zinc-200 p-5 lg:col-span-2">
                                 <h3 className="text-sm font-semibold text-zinc-900 mb-4">Model Version History</h3>
                                 {coverage.snapshots && coverage.snapshots.length > 0 ? (
                                   <ul className="space-y-2">
@@ -840,7 +923,7 @@ export default function CoveragePage() {
                                             {new Date(snapshot.created_at).toLocaleDateString()} {new Date(snapshot.created_at).toLocaleTimeString()}
                                           </span>
                                           {snapshot.ccm_fair_value && (
-                                            <span className="text-zinc-500 text-sm ml-2 tabular-nums">FV: ${snapshot.ccm_fair_value.toFixed(2)}</span>
+                                            <span className="text-zinc-500 text-sm ml-2 tabular-nums">FV: {formatDollar(snapshot.ccm_fair_value)}</span>
                                           )}
                                         </div>
                                         <div className="flex items-center gap-1">
@@ -876,15 +959,19 @@ export default function CoveragePage() {
                     )}
                   </Fragment>
                 ))}
-                {coverages.length === 0 && (
+                {filteredAndSortedCoverages.length === 0 && (
                   <tr>
                     <td colSpan={12}>
                       <div className="empty-state">
                         <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                         </svg>
-                        <p className="empty-state-title">No tickers in coverage</p>
-                        <p className="empty-state-description">Add a ticker above to get started.</p>
+                        <p className="empty-state-title">
+                          {coverages.length === 0 ? 'No tickers in coverage' : 'No tickers match filters'}
+                        </p>
+                        <p className="empty-state-description">
+                          {coverages.length === 0 ? 'Add a ticker above to get started.' : 'Try adjusting your analyst filters.'}
+                        </p>
                       </div>
                     </td>
                   </tr>
@@ -898,7 +985,7 @@ export default function CoveragePage() {
         <div className="card">
           <div className="flex justify-between items-center">
             <span className="text-zinc-600 font-medium">Total Firm Portfolio Value</span>
-            <span className="text-2xl font-bold text-zinc-900 tabular-nums">{formatCurrency(totalFirmValue)}</span>
+            <span className="text-2xl font-bold text-zinc-900 tabular-nums">{formatDollar(totalFirmValue)}</span>
           </div>
         </div>
 
@@ -1019,63 +1106,6 @@ export default function CoveragePage() {
                   className="btn btn-primary"
                 >
                   Save Changes
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Add Document Modal */}
-        {addingDocument && (
-          <div className="modal-backdrop" onClick={() => { setAddingDocument(null); setNewDocFileName(''); setNewDocFilePath(''); setNewDocDescription(''); }}>
-            <div className="modal w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <h2 className="text-lg font-semibold text-zinc-900">Add Document</h2>
-              </div>
-              <div className="modal-body space-y-4">
-                <div>
-                  <label className="label">File Name</label>
-                  <input
-                    type="text"
-                    value={newDocFileName}
-                    onChange={(e) => setNewDocFileName(e.target.value)}
-                    placeholder="Earnings Report Q1 2024.pdf"
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="label">File Path / URL</label>
-                  <input
-                    type="text"
-                    value={newDocFilePath}
-                    onChange={(e) => setNewDocFilePath(e.target.value)}
-                    placeholder="/documents/AAPL/report.pdf or https://..."
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="label">Description (Optional)</label>
-                  <input
-                    type="text"
-                    value={newDocDescription}
-                    onChange={(e) => setNewDocDescription(e.target.value)}
-                    placeholder="Brief description..."
-                    className="input"
-                  />
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button
-                  onClick={() => { setAddingDocument(null); setNewDocFileName(''); setNewDocFilePath(''); setNewDocDescription(''); }}
-                  className="btn btn-secondary"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => handleAddDocument(addingDocument)}
-                  className="btn btn-primary"
-                >
-                  Add Document
                 </button>
               </div>
             </div>
