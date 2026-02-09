@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.models.models import (
     Account, Transaction, TransactionType, Security,
     PositionsEOD, PricesEOD, PortfolioValueEOD, ReturnsEOD,
-    ViewType, AccountInception
+    ViewType, AccountInception, InceptionPosition
 )
 from app.core.database import SessionLocal
 
@@ -147,6 +147,13 @@ class BatchAnalyticsService:
         if not accounts:
             return {"status": "no_accounts", "accounts_processed": 0}
 
+        # Ensure inception prices are seeded into PricesEOD before any computation.
+        # This is critical: without prices on the inception date, portfolio value = $0
+        # and the entire returns chain breaks.
+        prices_seeded = self._seed_inception_prices()
+        if prices_seeded > 0:
+            logger.info(f"Seeded {prices_seeded} inception prices into PricesEOD")
+
         # Calculate steps
         steps = 0
         if not skip_positions:
@@ -204,6 +211,67 @@ class BatchAnalyticsService:
             results["progress"] = self.progress.to_dict()
 
         return results
+
+    def _seed_inception_prices(self) -> int:
+        """
+        Ensure PricesEOD records exist for all inception positions on their inception date.
+
+        This is the critical link: InceptionPosition stores the price from the CSV,
+        but portfolio value computation reads from PricesEOD. Without this step,
+        portfolio value on inception date = $0 (shares * missing_price = 0) and the
+        entire returns chain breaks because V_{t-1}=0 causes returns to be skipped.
+        """
+        # Get all inception positions with their prices and inception dates
+        inception_data = self.db.query(
+            InceptionPosition.security_id,
+            InceptionPosition.price,
+            AccountInception.inception_date
+        ).join(
+            AccountInception, InceptionPosition.inception_id == AccountInception.id
+        ).filter(
+            InceptionPosition.price > 0
+        ).all()
+
+        if not inception_data:
+            return 0
+
+        # Build unique (security_id, date, price) tuples - use first seen price for any duplicate
+        price_map = {}
+        for security_id, price, inception_date in inception_data:
+            key = (security_id, inception_date)
+            if key not in price_map:
+                price_map[key] = price
+
+        # Check which ones are missing from PricesEOD and insert them
+        prices_to_insert = []
+        for (security_id, inception_date), price in price_map.items():
+            existing = self.db.query(PricesEOD.id).filter(
+                and_(
+                    PricesEOD.security_id == security_id,
+                    PricesEOD.date == inception_date
+                )
+            ).first()
+
+            if not existing:
+                prices_to_insert.append({
+                    "security_id": security_id,
+                    "date": inception_date,
+                    "close": price,
+                    "source": "inception"
+                })
+
+        if not prices_to_insert:
+            return 0
+
+        # Bulk insert inception prices
+        stmt = insert(PricesEOD).values(prices_to_insert)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=['security_id', 'date']
+        )
+        self.db.execute(stmt)
+        self.db.commit()
+
+        return len(prices_to_insert)
 
     def _build_all_positions_bulk(
         self,
@@ -814,7 +882,12 @@ class BatchAnalyticsService:
         return len(returns_data)
 
     def _get_trading_calendar(self, start_date: date, end_date: date) -> List[date]:
-        """Get trading dates from price data"""
+        """Get trading dates from price data.
+
+        Uses dates from PricesEOD as the primary source. Falls back to business
+        days (weekdays) when no price data exists, which is more correct than
+        all calendar days since it excludes weekends.
+        """
         if self._trading_dates:
             filtered = [d for d in self._trading_dates if start_date <= d <= end_date]
             # Ensure end_date is included
@@ -833,8 +906,9 @@ class BatchAnalyticsService:
         self._trading_dates = [d[0] for d in dates]
 
         if not self._trading_dates:
-            # Fall back to all dates
-            all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            # Fall back to business days (weekdays) instead of ALL calendar days.
+            # This is more correct and produces ~30% fewer dates.
+            all_dates = pd.bdate_range(start=start_date, end=end_date)
             self._trading_dates = [d.date() for d in all_dates]
         else:
             # Always ensure end_date is included so positions exist for "today"

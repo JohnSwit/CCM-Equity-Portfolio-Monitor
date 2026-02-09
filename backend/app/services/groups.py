@@ -251,7 +251,7 @@ class GroupsEngine:
 
         # Compute group returns
         group_returns = []
-        index_value = 100.0
+        index_value = 1.0  # Match account-level convention (1.0 = start)
 
         for i, current_date in enumerate(all_dates):
             if i == 0:

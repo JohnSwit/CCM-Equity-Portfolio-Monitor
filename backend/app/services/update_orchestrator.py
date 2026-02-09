@@ -22,7 +22,7 @@ from app.models import (
     Account, Group, Security, Transaction, PricesEOD,
     PositionsEOD, ReturnsEOD, PortfolioValueEOD, RiskEOD,
     BenchmarkLevel, BenchmarkDefinition, FactorRegression, ViewType,
-    InceptionPosition
+    InceptionPosition, AccountInception
 )
 from app.models.update_tracking import (
     TickerProviderCoverage, DataUpdateState, ComputationDependency,
@@ -682,6 +682,10 @@ class UpdateOrchestrator:
 
         logger.info(f"Processing analytics for {len(accounts)} accounts with transactions or inception")
 
+        # Seed inception prices into PricesEOD before any computation.
+        # Without prices on the inception date, portfolio value = $0 and returns break.
+        self._seed_inception_prices()
+
         if use_batch_service:
             # Use optimized batch service for positions, values, and returns
             from app.services.analytics_batch import BatchAnalyticsService
@@ -940,6 +944,53 @@ class UpdateOrchestrator:
         except Exception as e:
             logger.error(f"Analytics failed for group {group.id}: {e}")
             self.metrics.add_error(f"group:{group.id}", str(e))
+
+    def _seed_inception_prices(self):
+        """
+        Ensure PricesEOD records exist for all inception positions on their inception date.
+        Without this, portfolio value on inception date = $0 and returns break.
+        """
+        inception_data = self.db.query(
+            InceptionPosition.security_id,
+            InceptionPosition.price,
+            AccountInception.inception_date
+        ).join(
+            AccountInception, InceptionPosition.inception_id == AccountInception.id
+        ).filter(
+            InceptionPosition.price > 0
+        ).all()
+
+        if not inception_data:
+            return
+
+        price_map = {}
+        for security_id, price, inception_date in inception_data:
+            key = (security_id, inception_date)
+            if key not in price_map:
+                price_map[key] = price
+
+        created = 0
+        for (security_id, inception_date), price in price_map.items():
+            existing = self.db.query(PricesEOD.id).filter(
+                and_(
+                    PricesEOD.security_id == security_id,
+                    PricesEOD.date == inception_date
+                )
+            ).first()
+
+            if not existing:
+                price_eod = PricesEOD(
+                    security_id=security_id,
+                    date=inception_date,
+                    close=price,
+                    source='inception'
+                )
+                self.db.add(price_eod)
+                created += 1
+
+        if created > 0:
+            self.db.commit()
+            logger.info(f"Seeded {created} inception prices into PricesEOD")
 
     def _get_securities_needing_update(self) -> List[Security]:
         """Get list of securities that need price updates (from transactions or inception)"""
