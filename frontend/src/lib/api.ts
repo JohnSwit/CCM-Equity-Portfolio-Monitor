@@ -676,6 +676,8 @@ class APIClient {
     model_complete?: boolean;
     writeup_complete?: boolean;
     thesis?: string;
+    bull_case?: string;
+    bear_case?: string;
     next_steps?: string;
     notes?: string;
     is_active?: boolean;

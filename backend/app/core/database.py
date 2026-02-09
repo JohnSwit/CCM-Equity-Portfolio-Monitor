@@ -81,6 +81,9 @@ def run_migrations():
         ("active_coverage", "bull_case", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS bull_case TEXT"),
         ("active_coverage", "bear_case", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS bear_case TEXT"),
         ("active_coverage", "alert", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS alert TEXT"),
+        # Idea Pipeline new columns
+        ("idea_pipeline", "bull_case", "ALTER TABLE idea_pipeline ADD COLUMN IF NOT EXISTS bull_case TEXT"),
+        ("idea_pipeline", "bear_case", "ALTER TABLE idea_pipeline ADD COLUMN IF NOT EXISTS bear_case TEXT"),
     ]
 
     # New tables to create

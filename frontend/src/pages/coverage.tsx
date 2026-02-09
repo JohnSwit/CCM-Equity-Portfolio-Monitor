@@ -356,12 +356,32 @@ export default function CoveragePage() {
     }).format(value);
   };
 
+  // Price-like values: fair value, street target, EPS - show 2 decimals
+  const formatPrice = (value: number | null | undefined) => {
+    if (value == null) return '-';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
   const formatEstimate = (value: number | null | undefined) => {
     if (value == null) return '-';
     return '$' + new Intl.NumberFormat('en-US', {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(Math.round(value));
+  };
+
+  // EPS-like values: smaller numbers with 2 decimals
+  const formatEps = (value: number | null | undefined) => {
+    if (value == null) return '-';
+    return '$' + new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
   };
 
   const formatPercent = (value: number | null | undefined) => {
@@ -376,8 +396,8 @@ export default function CoveragePage() {
 
   const formatBps = (current: number | null | undefined, prior: number | null | undefined) => {
     if (current == null || prior == null) return '-';
-    const bps = Math.round((current - prior) * 10000);
-    return `${bps >= 0 ? '+' : ''}${bps} bps`;
+    const bps = (current - prior) * 100;
+    return `${bps >= 0 ? '+' : ''}${bps.toFixed(0)} bps`;
   };
 
   const getBpsClass = (current: number | null | undefined, prior: number | null | undefined) => {
@@ -646,12 +666,12 @@ export default function CoveragePage() {
                       <td className="text-zinc-600">{coverage.primary_analyst?.name || '-'}</td>
                       <td className="text-zinc-600">{coverage.secondary_analyst?.name || '-'}</td>
                       <td className="text-right tabular-nums font-medium">
-                        {coverage.current_price ? formatDollar(coverage.current_price) : '-'}
+                        {coverage.current_price ? formatPrice(coverage.current_price) : '-'}
                       </td>
                       <td className="text-right tabular-nums">{formatDollar(coverage.market_value)}</td>
                       <td className="text-right tabular-nums">{formatWeight(coverage.weight_pct)}</td>
                       <td className="text-right tabular-nums font-medium">
-                        {coverage.model_data?.ccm_fair_value ? formatDollar(coverage.model_data.ccm_fair_value) : '-'}
+                        {coverage.model_data?.ccm_fair_value ? formatPrice(coverage.model_data.ccm_fair_value) : '-'}
                       </td>
                       <td className={`text-right tabular-nums font-medium ${getValueClass(coverage.model_data?.ccm_upside_pct)}`}>
                         {formatPercent(coverage.model_data?.ccm_upside_pct)}
@@ -715,7 +735,7 @@ export default function CoveragePage() {
                                   <div className="metric-card metric-card-blue">
                                     <div className="metric-label">CCM Fair Value</div>
                                     <div className="metric-value">
-                                      {coverage.model_data?.ccm_fair_value ? formatDollar(coverage.model_data.ccm_fair_value) : '-'}
+                                      {coverage.model_data?.ccm_fair_value ? formatPrice(coverage.model_data.ccm_fair_value) : '-'}
                                     </div>
                                     <div className={`text-sm ${getValueClass(coverage.model_data?.ccm_upside_pct)}`}>
                                       {formatPercent(coverage.model_data?.ccm_upside_pct)} upside
@@ -724,7 +744,7 @@ export default function CoveragePage() {
                                   <div className="metric-card metric-card-purple">
                                     <div className="metric-label">Street Target</div>
                                     <div className="metric-value">
-                                      {coverage.model_data?.street_price_target ? formatDollar(coverage.model_data.street_price_target) : '-'}
+                                      {coverage.model_data?.street_price_target ? formatPrice(coverage.model_data.street_price_target) : '-'}
                                     </div>
                                     <div className={`text-sm ${getValueClass(coverage.model_data?.street_upside_pct)}`}>
                                       {formatPercent(coverage.model_data?.street_upside_pct)} upside
@@ -766,6 +786,7 @@ export default function CoveragePage() {
                                 if (!data) return null;
                                 const marginData = metric === 'ebitda' ? coverage.model_data?.ebitda_margin :
                                                    metric === 'fcf' ? coverage.model_data?.fcf_margin : null;
+                                const fmt = metric === 'eps' ? formatEps : formatEstimate;
 
                                 return (
                                   <div key={metric} className="bg-white rounded-lg border border-zinc-200 p-5">
@@ -784,24 +805,24 @@ export default function CoveragePage() {
                                         <tbody className="tabular-nums">
                                           <tr className="border-t border-zinc-100">
                                             <td className="py-2 font-medium text-zinc-700">CCM</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.ccm_minus1yr)}</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.ccm_1yr)}</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.ccm_2yr)}</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.ccm_3yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_minus1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_2yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_3yr)}</td>
                                           </tr>
                                           <tr className="border-t border-zinc-100">
                                             <td className="py-2 font-medium text-zinc-700">Street</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.street_minus1yr)}</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.street_1yr)}</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.street_2yr)}</td>
-                                            <td className="py-2 text-right">{formatEstimate(data.street_3yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_minus1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_2yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_3yr)}</td>
                                           </tr>
                                           <tr className="border-t border-zinc-100">
-                                            <td className="py-2 font-medium text-emerald-600">Growth (CCM)</td>
+                                            <td className="py-2 font-medium text-zinc-700">Growth (CCM)</td>
                                             <td className="py-2 text-right text-zinc-400">-</td>
-                                            <td className="py-2 text-right text-emerald-600">{formatPercent(data.growth_ccm_1yr)}</td>
-                                            <td className="py-2 text-right text-emerald-600">{formatPercent(data.growth_ccm_2yr)}</td>
-                                            <td className="py-2 text-right text-emerald-600">{formatPercent(data.growth_ccm_3yr)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.growth_ccm_1yr)}`}>{formatPercent(data.growth_ccm_1yr)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.growth_ccm_2yr)}`}>{formatPercent(data.growth_ccm_2yr)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.growth_ccm_3yr)}`}>{formatPercent(data.growth_ccm_3yr)}</td>
                                           </tr>
                                           <tr className="border-t border-zinc-100">
                                             <td className="py-2 font-medium text-blue-600">CCM vs Street</td>

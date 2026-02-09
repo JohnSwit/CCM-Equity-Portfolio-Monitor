@@ -664,6 +664,8 @@ class IdeaPipeline(Base):
 
     # Research content
     thesis = Column(Text, nullable=True)
+    bull_case = Column(Text, nullable=True)
+    bear_case = Column(Text, nullable=True)
     next_steps = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
 
