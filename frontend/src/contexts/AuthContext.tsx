@@ -35,14 +35,20 @@ function setCachedUser(user: User | null) {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Initialize from cache so the page renders immediately without a loading spinner
-  const cachedUser = getCachedUser();
-  const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('token');
-  const [user, setUser] = useState<User | null>(cachedUser);
-  const [loading, setLoading] = useState(hasToken && !cachedUser);
+  // Always start with null/true to match server render and avoid hydration mismatch.
+  // Cache restore happens in useEffect (client-only).
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
+    // Instantly restore cached user so the UI doesn't flash a spinner
+    const cached = getCachedUser();
+    if (cached) {
+      setUser(cached);
+      setLoading(false);
+    }
+    // Then verify token with the API
     checkAuth();
   }, []);
 
@@ -57,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       localStorage.removeItem('token');
       setCachedUser(null);
+      setUser(null);
     } finally {
       setLoading(false);
     }
