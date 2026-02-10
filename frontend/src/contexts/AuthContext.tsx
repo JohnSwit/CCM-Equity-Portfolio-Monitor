@@ -18,9 +18,28 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Try to restore cached user from sessionStorage for instant render
+function getCachedUser(): User | null {
+  try {
+    const cached = sessionStorage.getItem('cached_user');
+    if (cached) return JSON.parse(cached);
+  } catch {}
+  return null;
+}
+
+function setCachedUser(user: User | null) {
+  try {
+    if (user) sessionStorage.setItem('cached_user', JSON.stringify(user));
+    else sessionStorage.removeItem('cached_user');
+  } catch {}
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Initialize from cache so the page renders immediately without a loading spinner
+  const cachedUser = getCachedUser();
+  const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('token');
+  const [user, setUser] = useState<User | null>(cachedUser);
+  const [loading, setLoading] = useState(hasToken && !cachedUser);
   const router = useRouter();
 
   useEffect(() => {
@@ -33,9 +52,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (token) {
         const userData = await api.getMe();
         setUser(userData);
+        setCachedUser(userData);
       }
     } catch (error) {
       localStorage.removeItem('token');
+      setCachedUser(null);
     } finally {
       setLoading(false);
     }
@@ -51,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem('token');
+    setCachedUser(null);
     setUser(null);
     router.push('/login');
   };

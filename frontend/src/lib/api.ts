@@ -105,12 +105,12 @@ class APIClient {
   // Auth
   async login(email: string, password: string) {
     const response = await this.client.post('/auth/login', { email, password });
+    this.requestCache.invalidate('/auth/me');
     return response.data;
   }
 
   async getMe() {
-    const response = await this.client.get('/auth/me');
-    return response.data;
+    return this.cachedGet('/auth/me', undefined, 120000);  // 2 min cache
   }
 
   // Accounts & Groups
@@ -165,17 +165,11 @@ class APIClient {
   }
 
   async getBenchmarkMetrics(viewType: string, viewId: number, benchmark: string, window: number = 252) {
-    const response = await this.client.get('/analytics/benchmark', {
-      params: { view_type: viewType, view_id: viewId, benchmark, window },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/benchmark', { view_type: viewType, view_id: viewId, benchmark, window }, 60000);
   }
 
   async getFactorExposures(viewType: string, viewId: number, factorSet: string = 'STYLE7', window: number = 252) {
-    const response = await this.client.get('/analytics/factors', {
-      params: { view_type: viewType, view_id: viewId, factor_set: factorSet, window },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/factors', { view_type: viewType, view_id: viewId, factor_set: factorSet, window }, 60000);
   }
 
   async getUnpricedInstruments(asOfDate?: string) {
@@ -262,8 +256,7 @@ class APIClient {
   }
 
   async getAccountsWithTransactionCounts() {
-    const response = await this.client.get('/transactions/accounts');
-    return response.data;
+    return this.cachedGet('/transactions/accounts', undefined, 60000);
   }
 
   async deleteTransaction(transactionId: number) {
@@ -292,46 +285,28 @@ class APIClient {
   }
 
   async getVolatilityMetrics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
-    const response = await this.client.get('/portfolio-stats/volatility-metrics', {
-      params: { view_type: viewType, view_id: viewId, benchmark, window },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/volatility-metrics', { view_type: viewType, view_id: viewId, benchmark, window }, 60000);
   }
 
   async getDrawdownAnalysis(viewType: string, viewId: number) {
-    const response = await this.client.get('/portfolio-stats/drawdown-analysis', {
-      params: { view_type: viewType, view_id: viewId },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/drawdown-analysis', { view_type: viewType, view_id: viewId }, 60000);
   }
 
   async getVarCvar(viewType: string, viewId: number, confidenceLevels: string = '95,99', window: number = 252) {
-    const response = await this.client.get('/portfolio-stats/var-cvar', {
-      params: { view_type: viewType, view_id: viewId, confidence_levels: confidenceLevels, window },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/var-cvar', { view_type: viewType, view_id: viewId, confidence_levels: confidenceLevels, window }, 60000);
   }
 
   async getFactorAnalysis(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/portfolio-stats/factor-analysis', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/factor-analysis', { view_type: viewType, view_id: viewId, as_of_date: asOfDate }, 60000);
   }
 
   async getComprehensiveStatistics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
-    const response = await this.client.get('/portfolio-stats/comprehensive', {
-      params: { view_type: viewType, view_id: viewId, benchmark, window },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/comprehensive', { view_type: viewType, view_id: viewId, benchmark, window }, 60000);
   }
 
   // Phase 2: Advanced Analytics
   async getTurnoverAnalysis(viewType: string, viewId: number, startDate?: string, endDate?: string, period: string = 'monthly') {
-    const response = await this.client.get('/portfolio-stats/turnover', {
-      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/turnover', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period }, 60000);
   }
 
   async getSectorWeights(viewType: string, viewId: number, asOfDate?: string) {
@@ -339,10 +314,7 @@ class APIClient {
   }
 
   async getSectorComparison(viewType: string, viewId: number, benchmark: string = 'SP500', asOfDate?: string) {
-    const response = await this.client.get('/portfolio-stats/sector-comparison', {
-      params: { view_type: viewType, view_id: viewId, benchmark, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/sector-comparison', { view_type: viewType, view_id: viewId, benchmark, as_of_date: asOfDate }, 60000);
   }
 
   async getBrinsonAttribution(viewType: string, viewId: number, benchmark: string = 'SP500', startDate?: string, endDate?: string) {

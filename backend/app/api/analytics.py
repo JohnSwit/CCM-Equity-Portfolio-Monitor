@@ -247,62 +247,13 @@ def get_holdings(
         engine = PositionsEngine(db)
         holdings_data = engine.get_holdings_as_of(view_id, as_of_date)
     else:
-        # For groups, aggregate holdings from member accounts
+        # For groups, use batch query to get all holdings in one go
         from app.services.groups import GroupsEngine
         groups_engine = GroupsEngine(db)
         account_ids = groups_engine.get_group_account_ids(view_id)
 
-        # Aggregate positions
         positions_engine = PositionsEngine(db)
-        all_holdings = {}
-
-        for account_id in account_ids:
-            holdings = positions_engine.get_holdings_as_of(account_id, as_of_date)
-            for holding in holdings:
-                symbol = holding['symbol']
-                if symbol not in all_holdings:
-                    all_holdings[symbol] = holding.copy()
-                    # Track total cost for weighted average across accounts
-                    if holding['avg_cost'] is not None:
-                        all_holdings[symbol]['_total_cost'] = holding['avg_cost'] * holding['shares']
-                        all_holdings[symbol]['_total_cost_shares'] = holding['shares']
-                    else:
-                        all_holdings[symbol]['_total_cost'] = 0
-                        all_holdings[symbol]['_total_cost_shares'] = 0
-                else:
-                    all_holdings[symbol]['shares'] += holding['shares']
-                    all_holdings[symbol]['market_value'] += holding['market_value']
-                    # Aggregate 1D gains
-                    if holding['gain_1d'] is not None:
-                        if all_holdings[symbol]['gain_1d'] is not None:
-                            all_holdings[symbol]['gain_1d'] += holding['gain_1d']
-                        else:
-                            all_holdings[symbol]['gain_1d'] = holding['gain_1d']
-                    # Aggregate unrealized gains
-                    if holding['unr_gain'] is not None:
-                        if all_holdings[symbol]['unr_gain'] is not None:
-                            all_holdings[symbol]['unr_gain'] += holding['unr_gain']
-                        else:
-                            all_holdings[symbol]['unr_gain'] = holding['unr_gain']
-                    # Track cost basis for weighted average
-                    if holding['avg_cost'] is not None:
-                        all_holdings[symbol]['_total_cost'] += holding['avg_cost'] * holding['shares']
-                        all_holdings[symbol]['_total_cost_shares'] += holding['shares']
-
-        # Recalculate avg_cost and percentage gains for aggregated holdings
-        for symbol, h in all_holdings.items():
-            if h['_total_cost_shares'] > 0:
-                h['avg_cost'] = h['_total_cost'] / h['_total_cost_shares']
-                if h['price'] is not None and h['avg_cost'] > 0:
-                    h['unr_gain_pct'] = (h['price'] - h['avg_cost']) / h['avg_cost']
-            # Recalculate 1D gain pct based on aggregated values
-            if h.get('gain_1d') is not None and h['market_value'] > 0:
-                # Estimate based on market value change
-                prev_value = h['market_value'] - h['gain_1d']
-                if prev_value > 0:
-                    h['gain_1d_pct'] = h['gain_1d'] / prev_value
-
-        holdings_data = list(all_holdings.values())
+        holdings_data = positions_engine.get_holdings_for_accounts(account_ids, as_of_date)
 
     # Compute total and weights
     total_value = sum(h['market_value'] for h in holdings_data if h['has_price'])

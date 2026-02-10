@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, func
 from typing import Optional, List
 from datetime import date
@@ -34,7 +34,10 @@ def get_transactions(
     Get all transactions with optional filtering.
     Returns transactions ordered by trade date (most recent first).
     """
-    query = db.query(Transaction).join(Account).join(Security)
+    query = db.query(Transaction).join(Account).join(Security).options(
+        joinedload(Transaction.account),
+        joinedload(Transaction.security)
+    )
 
     # Apply filters
     if account_id:
