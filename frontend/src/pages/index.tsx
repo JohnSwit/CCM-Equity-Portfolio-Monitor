@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
@@ -109,33 +109,23 @@ export default function Dashboard() {
   // Request counter to prevent stale responses from overwriting newer data
   const loadRequestRef = useRef(0);
 
-  // On mount: load views and immediately start loading data for the default (firm) view
-  // This eliminates the sequential cascade: views → select → data
-  const initialLoadDone = useRef(false);
-
   useEffect(() => {
-    if (initialLoadDone.current) return;
-    initialLoadDone.current = true;
-    loadViewsAndData();
+    loadViews();
   }, []);
 
   useEffect(() => {
-    // Only trigger on user-initiated view changes (not the initial load)
-    if (selectedView && initialLoadDone.current) {
+    if (selectedView) {
       loadViewData(selectedView);
     }
   }, [selectedView]);
 
-  const loadViewsAndData = async () => {
+  const loadViews = async () => {
     try {
       const data = await api.getAllViews();
       setViews(data);
       if (data.length > 0) {
         const firmView = data.find((v: any) => v.view_type === 'firm');
-        const defaultView = firmView || data[0];
-        setSelectedView(defaultView);
-        // Immediately load data without waiting for the selectedView useEffect
-        loadViewData(defaultView);
+        setSelectedView(firmView || data[0]);
       }
     } catch (error) {
       console.error('Failed to load views:', error);
