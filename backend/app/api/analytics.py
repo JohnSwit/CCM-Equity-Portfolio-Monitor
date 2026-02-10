@@ -3,7 +3,7 @@ from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, List
 from functools import lru_cache
 import time
 from app.core.database import get_db
@@ -27,6 +27,54 @@ from app.services.returns import ReturnsEngine
 from app.services.positions import PositionsEngine
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+def _get_group_account_ids(db: Session, group_id: int) -> List[int]:
+    """Get member account IDs for a group. Cached per request via helper."""
+    from app.services.groups import GroupsEngine
+    return GroupsEngine(db).get_group_account_ids(group_id)
+
+
+def _get_group_latest_value(db: Session, view_id: int):
+    """
+    For group/firm views without direct PortfolioValueEOD rows,
+    aggregate from member accounts' PortfolioValueEOD.
+    Returns (total_value, as_of_date, created_at) or None.
+    """
+    account_ids = _get_group_account_ids(db, view_id)
+    if not account_ids:
+        return None
+
+    # Find the latest date with data across member accounts (prefer non-zero)
+    latest_date = db.query(func.max(PortfolioValueEOD.date)).filter(
+        and_(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+            PortfolioValueEOD.view_id.in_(account_ids),
+            PortfolioValueEOD.total_value > 0,
+        )
+    ).scalar()
+
+    if not latest_date:
+        latest_date = db.query(func.max(PortfolioValueEOD.date)).filter(
+            and_(
+                PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+                PortfolioValueEOD.view_id.in_(account_ids),
+            )
+        ).scalar()
+
+    if not latest_date:
+        return None
+
+    # Sum the member accounts' values on that date
+    total = db.query(func.sum(PortfolioValueEOD.total_value)).filter(
+        and_(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+            PortfolioValueEOD.view_id.in_(account_ids),
+            PortfolioValueEOD.date == latest_date,
+        )
+    ).scalar() or 0.0
+
+    return total, latest_date
 
 
 def parse_view_type(view_type_str: str) -> ViewType:
@@ -77,6 +125,34 @@ def get_summary(
                 PortfolioValueEOD.view_id == view_id
             )
         ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    # For group/firm views, fall back to aggregating member accounts' values
+    if not latest_value and vt in (ViewType.GROUP, ViewType.FIRM):
+        agg = _get_group_latest_value(db, view_id)
+        if agg:
+            total_value, as_of_date = agg
+            # Build a synthetic response from aggregated data
+            view_name = ""
+            group = db.query(Group).filter(Group.id == view_id).first()
+            view_name = group.name if group else f"Group {view_id}"
+
+            returns_engine = ReturnsEngine(db)
+            period_returns = returns_engine.compute_period_returns(db_vt, view_id, as_of_date)
+
+            return SummaryResponse(
+                view_type=view_type,
+                view_id=view_id,
+                view_name=view_name,
+                total_value=total_value,
+                as_of_date=as_of_date,
+                data_last_updated=None,
+                return_1m=period_returns.get('1M'),
+                return_3m=period_returns.get('3M'),
+                return_ytd=period_returns.get('YTD'),
+                return_1y=period_returns.get('1Y'),
+                return_3y=period_returns.get('3Y'),
+                return_inception=period_returns.get('inception')
+            )
 
     if not latest_value:
         raise HTTPException(status_code=404, detail="No data found for this view")
@@ -237,10 +313,25 @@ def get_holdings(
                 )
             ).order_by(desc(PortfolioValueEOD.date)).first()
 
-        if not latest:
+        # For group/firm views, fall back to member accounts' data
+        if not latest and vt in (ViewType.GROUP, ViewType.FIRM):
+            account_ids = _get_group_account_ids(db, view_id)
+            if account_ids:
+                latest = db.query(func.max(PortfolioValueEOD.date)).filter(
+                    and_(
+                        PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+                        PortfolioValueEOD.view_id.in_(account_ids),
+                        PortfolioValueEOD.total_value > 0,
+                    )
+                ).scalar()
+                if latest:
+                    as_of_date = latest
+
+        if not as_of_date and not latest:
             raise HTTPException(status_code=404, detail="No data found")
 
-        as_of_date = latest[0]
+        if not as_of_date:
+            as_of_date = latest[0]
 
     # Get holdings
     if vt == ViewType.ACCOUNT:
@@ -248,9 +339,7 @@ def get_holdings(
         holdings_data = engine.get_holdings_as_of(view_id, as_of_date)
     else:
         # For groups, use batch query to get all holdings in one go
-        from app.services.groups import GroupsEngine
-        groups_engine = GroupsEngine(db)
-        account_ids = groups_engine.get_group_account_ids(view_id)
+        account_ids = _get_group_account_ids(db, view_id)
 
         positions_engine = PositionsEngine(db)
         holdings_data = positions_engine.get_holdings_for_accounts(account_ids, as_of_date)

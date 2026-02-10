@@ -141,7 +141,7 @@ class SummaryResponse(BaseModel):
     view_name: str
     total_value: float
     as_of_date: date
-    data_last_updated: datetime
+    data_last_updated: Optional[datetime] = None
     return_1m: Optional[float]
     return_3m: Optional[float]
     return_ytd: Optional[float]
