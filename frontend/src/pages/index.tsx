@@ -380,214 +380,220 @@ export default function Dashboard() {
           </div>
         )}
 
-        {!loading && summary && (
+        {!loading && (
           <>
             {/* Summary Header Card */}
-            <div className="card">
-              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <h2 className="text-xl font-semibold text-zinc-900">{summary.view_name}</h2>
-                    <span className="badge badge-neutral">
-                      As of {format(new Date(summary.as_of_date), 'MMM d, yyyy')}
-                    </span>
-                  </div>
-                  <div className="text-3xl font-bold text-zinc-900 tabular-nums">
-                    {formatCurrency(summary.total_value)}
-                  </div>
-                  <p className="text-sm text-zinc-500 mt-1">Total Portfolio Value (Equity Sleeve)</p>
-                </div>
-
-                {/* Return Metrics */}
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 lg:gap-6">
-                  {[
-                    { label: '1M', value: summary.return_1m, color: 'metric-card-blue' },
-                    { label: '3M', value: summary.return_3m, color: 'metric-card-green' },
-                    { label: 'YTD', value: summary.return_ytd, color: 'metric-card-purple' },
-                    { label: '1Y', value: summary.return_1y, color: 'metric-card-orange' },
-                    { label: 'All', value: summary.return_inception, color: 'metric-card-teal' },
-                  ].map((item) => (
-                    <div key={item.label} className={`metric-card ${item.color}`}>
-                      <div className="metric-label">{item.label}</div>
-                      <div className={`metric-value ${item.value != null ? getGainColorClass(item.value) : 'text-zinc-400'}`}>
-                        {item.value != null ? formatPercentWithSign(item.value) : 'N/A'}
-                      </div>
+            {summary && (
+              <div className="card">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
+                  <div>
+                    <div className="flex items-center gap-3 mb-1">
+                      <h2 className="text-xl font-semibold text-zinc-900">{summary.view_name}</h2>
+                      <span className="badge badge-neutral">
+                        As of {format(new Date(summary.as_of_date), 'MMM d, yyyy')}
+                      </span>
                     </div>
-                  ))}
+                    <div className="text-3xl font-bold text-zinc-900 tabular-nums">
+                      {formatCurrency(summary.total_value)}
+                    </div>
+                    <p className="text-sm text-zinc-500 mt-1">Total Portfolio Value (Equity Sleeve)</p>
+                  </div>
+
+                  {/* Return Metrics */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 lg:gap-6">
+                    {[
+                      { label: '1M', value: summary.return_1m, color: 'metric-card-blue' },
+                      { label: '3M', value: summary.return_3m, color: 'metric-card-green' },
+                      { label: 'YTD', value: summary.return_ytd, color: 'metric-card-purple' },
+                      { label: '1Y', value: summary.return_1y, color: 'metric-card-orange' },
+                      { label: 'All', value: summary.return_inception, color: 'metric-card-teal' },
+                    ].map((item) => (
+                      <div key={item.label} className={`metric-card ${item.color}`}>
+                        <div className="metric-label">{item.label}</div>
+                        <div className={`metric-value ${item.value != null ? getGainColorClass(item.value) : 'text-zinc-400'}`}>
+                          {item.value != null ? formatPercentWithSign(item.value) : 'N/A'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* Allocation Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Holdings Breakdown */}
-              <div className="card">
-                <div className="card-header">
-                  <h3 className="card-title">Holdings Breakdown</h3>
-                  <button
-                    onClick={() => loadViewData(selectedView)}
-                    className="btn btn-ghost btn-sm"
-                    title="Refresh"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="pill-tabs mb-4">
-                  {[
-                    { key: 'marketValue', label: 'Value' },
-                    { key: 'cost', label: 'Cost' },
-                    { key: 'gain', label: 'Gains' },
-                    { key: 'loss', label: 'Losses' },
-                  ].map((item) => (
+            {(holdingsPieData.length > 0 || sectorPieData.length > 0) && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Holdings Breakdown */}
+                <div className="card">
+                  <div className="card-header">
+                    <h3 className="card-title">Holdings Breakdown</h3>
                     <button
-                      key={item.key}
-                      onClick={() => setHoldingsViewMode(item.key as HoldingsViewMode)}
-                      className={`pill-tab ${holdingsViewMode === item.key ? 'pill-tab-active' : ''}`}
+                      onClick={() => loadViewData(selectedView)}
+                      className="btn btn-ghost btn-sm"
+                      title="Refresh"
                     >
-                      {item.label}
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
                     </button>
-                  ))}
-                </div>
-
-                {holdingsPieData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={280}>
-                    <PieChart>
-                      <Pie
-                        data={holdingsPieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={55}
-                        outerRadius={90}
-                        paddingAngle={2}
-                        dataKey="value"
-                        label={renderCustomLabel}
-                        labelLine={{ stroke: '#d4d4d8', strokeWidth: 1 }}
-                      >
-                        {holdingsPieData.map((entry: any, index: number) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(value: any, name: any, props: any) => [
-                          formatCurrency(value),
-                          props.payload.name
-                        ]}
-                        contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7' }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-72 flex items-center justify-center text-zinc-400">
-                    No holdings data available
                   </div>
-                )}
-              </div>
-
-              {/* Sector Breakdown */}
-              <div className="card">
-                <div className="card-header">
-                  <h3 className="card-title">Sector Allocation</h3>
-                </div>
-                <div className="pill-tabs mb-4 flex-wrap">
-                  {[
-                    { key: 'sector', label: 'Sector' },
-                    { key: 'industry', label: 'Industry' },
-                    { key: 'country', label: 'Country' },
-                  ].map((item) => (
-                    <button
-                      key={item.key}
-                      onClick={() => setSectorViewMode(item.key as SectorViewMode)}
-                      className={`pill-tab ${sectorViewMode === item.key ? 'pill-tab-active' : ''}`}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-
-                {sectorPieData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={280}>
-                    <PieChart>
-                      <Pie
-                        data={sectorPieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={55}
-                        outerRadius={90}
-                        paddingAngle={2}
-                        dataKey="value"
-                        label={renderCustomLabel}
-                        labelLine={{ stroke: '#d4d4d8', strokeWidth: 1 }}
+                  <div className="pill-tabs mb-4">
+                    {[
+                      { key: 'marketValue', label: 'Value' },
+                      { key: 'cost', label: 'Cost' },
+                      { key: 'gain', label: 'Gains' },
+                      { key: 'loss', label: 'Losses' },
+                    ].map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => setHoldingsViewMode(item.key as HoldingsViewMode)}
+                        className={`pill-tab ${holdingsViewMode === item.key ? 'pill-tab-active' : ''}`}
                       >
-                        {sectorPieData.map((entry: any, index: number) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(value: any, name: any, props: any) => [
-                          formatPercent(value),
-                          props.payload.name
-                        ]}
-                        contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7' }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-72 flex items-center justify-center text-zinc-400">
-                    No sector data available
+                        {item.label}
+                      </button>
+                    ))}
                   </div>
-                )}
+
+                  {holdingsPieData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <PieChart>
+                        <Pie
+                          data={holdingsPieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={55}
+                          outerRadius={90}
+                          paddingAngle={2}
+                          dataKey="value"
+                          label={renderCustomLabel}
+                          labelLine={{ stroke: '#d4d4d8', strokeWidth: 1 }}
+                        >
+                          {holdingsPieData.map((entry: any, index: number) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(value: any, name: any, props: any) => [
+                            formatCurrency(value),
+                            props.payload.name
+                          ]}
+                          contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-72 flex items-center justify-center text-zinc-400">
+                      No holdings data available
+                    </div>
+                  )}
+                </div>
+
+                {/* Sector Breakdown */}
+                <div className="card">
+                  <div className="card-header">
+                    <h3 className="card-title">Sector Allocation</h3>
+                  </div>
+                  <div className="pill-tabs mb-4 flex-wrap">
+                    {[
+                      { key: 'sector', label: 'Sector' },
+                      { key: 'industry', label: 'Industry' },
+                      { key: 'country', label: 'Country' },
+                    ].map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => setSectorViewMode(item.key as SectorViewMode)}
+                        className={`pill-tab ${sectorViewMode === item.key ? 'pill-tab-active' : ''}`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {sectorPieData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <PieChart>
+                        <Pie
+                          data={sectorPieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={55}
+                          outerRadius={90}
+                          paddingAngle={2}
+                          dataKey="value"
+                          label={renderCustomLabel}
+                          labelLine={{ stroke: '#d4d4d8', strokeWidth: 1 }}
+                        >
+                          {sectorPieData.map((entry: any, index: number) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(value: any, name: any, props: any) => [
+                            formatPercent(value),
+                            props.payload.name
+                          ]}
+                          contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-72 flex items-center justify-center text-zinc-400">
+                      No sector data available
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Performance Chart */}
-            <div className="card">
-              <div className="card-header">
-                <h3 className="card-title">Performance vs Benchmarks</h3>
-                <div className="pill-tabs">
-                  <button
-                    onClick={() => setReturnMode('TWR')}
-                    className={`pill-tab ${returnMode === 'TWR' ? 'pill-tab-active' : ''}`}
-                  >
-                    TWR
-                  </button>
-                  <button
-                    onClick={() => setReturnMode('Simple')}
-                    className={`pill-tab ${returnMode === 'Simple' ? 'pill-tab-active' : ''}`}
-                  >
-                    Simple
-                  </button>
+            {chartData.length > 0 && (
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="card-title">Performance vs Benchmarks</h3>
+                  <div className="pill-tabs">
+                    <button
+                      onClick={() => setReturnMode('TWR')}
+                      className={`pill-tab ${returnMode === 'TWR' ? 'pill-tab-active' : ''}`}
+                    >
+                      TWR
+                    </button>
+                    <button
+                      onClick={() => setReturnMode('Simple')}
+                      className={`pill-tab ${returnMode === 'Simple' ? 'pill-tab-active' : ''}`}
+                    >
+                      Simple
+                    </button>
+                  </div>
                 </div>
+                <ResponsiveContainer width="100%" height={360}>
+                  <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(value) => format(new Date(value), 'MMM yy')}
+                      tick={{ fontSize: 11, fill: '#71717a' }}
+                      axisLine={{ stroke: '#e4e4e7' }}
+                    />
+                    <YAxis
+                      tickFormatter={(value) => formatIndexValue(value)}
+                      tick={{ fontSize: 11, fill: '#71717a' }}
+                      axisLine={{ stroke: '#e4e4e7' }}
+                      width={60}
+                    />
+                    <Tooltip
+                      labelFormatter={(value) => format(new Date(value), 'MMM d, yyyy')}
+                      formatter={(value: any) => [formatIndexValue(value), '']}
+                      contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7', fontSize: '12px' }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '12px' }} />
+                    <Line type="monotone" dataKey="Portfolio" stroke="#3b82f6" strokeWidth={2.5} name="Portfolio" dot={false} />
+                    <Line type="monotone" dataKey="SPY" stroke="#10b981" strokeWidth={1.5} name="S&P 500" dot={false} strokeDasharray="4 2" />
+                    <Line type="monotone" dataKey="QQQ" stroke="#8b5cf6" strokeWidth={1.5} name="Nasdaq" dot={false} strokeDasharray="4 2" />
+                    <Line type="monotone" dataKey="INDU" stroke="#f59e0b" strokeWidth={1.5} name="Dow Jones" dot={false} strokeDasharray="4 2" />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
-              <ResponsiveContainer width="100%" height={360}>
-                <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
-                  <XAxis
-                    dataKey="date"
-                    tickFormatter={(value) => format(new Date(value), 'MMM yy')}
-                    tick={{ fontSize: 11, fill: '#71717a' }}
-                    axisLine={{ stroke: '#e4e4e7' }}
-                  />
-                  <YAxis
-                    tickFormatter={(value) => formatIndexValue(value)}
-                    tick={{ fontSize: 11, fill: '#71717a' }}
-                    axisLine={{ stroke: '#e4e4e7' }}
-                    width={60}
-                  />
-                  <Tooltip
-                    labelFormatter={(value) => format(new Date(value), 'MMM d, yyyy')}
-                    formatter={(value: any) => [formatIndexValue(value), '']}
-                    contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7', fontSize: '12px' }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '12px' }} />
-                  <Line type="monotone" dataKey="Portfolio" stroke="#3b82f6" strokeWidth={2.5} name="Portfolio" dot={false} />
-                  <Line type="monotone" dataKey="SPY" stroke="#10b981" strokeWidth={1.5} name="S&P 500" dot={false} strokeDasharray="4 2" />
-                  <Line type="monotone" dataKey="QQQ" stroke="#8b5cf6" strokeWidth={1.5} name="Nasdaq" dot={false} strokeDasharray="4 2" />
-                  <Line type="monotone" dataKey="INDU" stroke="#f59e0b" strokeWidth={1.5} name="Dow Jones" dot={false} strokeDasharray="4 2" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            )}
 
             {/* Holdings Table */}
             {holdings && (
@@ -695,6 +701,16 @@ export default function Dashboard() {
                       )}
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* No data message when nothing loaded */}
+            {!summary && chartData.length === 0 && !holdings && !risk && (
+              <div className="card flex items-center justify-center py-16">
+                <div className="text-center">
+                  <p className="text-zinc-500">No data available for this view.</p>
+                  <p className="text-sm text-zinc-400 mt-1">Try running analytics or selecting a different view.</p>
                 </div>
               </div>
             )}
