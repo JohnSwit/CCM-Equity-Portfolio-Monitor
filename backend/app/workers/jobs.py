@@ -557,10 +557,12 @@ async def recompute_analytics_job(db: Session = None, use_batch_service: bool = 
 
         as_of_date = date.today()
 
-        # 0. Clear old analytics data
-        logger.info("Clearing old analytics data...")
+        # 0. Clear old analytics for orphaned accounts only
+        # NOTE: We no longer clear group/firm analytics upfront because that creates
+        # a data gap where the API serves empty responses. Instead, each group's data
+        # is cleared and rebuilt atomically in compute_all_groups() below.
+        logger.info("Clearing analytics for orphaned accounts...")
         clear_analytics_for_accounts_without_transactions(db)
-        clear_group_and_firm_analytics(db)
 
         # 0.5. Refresh benchmark constituents (SP500 holdings for sector comparison)
         # Only refresh if data is stale (older than DATA_FRESHNESS_HOURS)

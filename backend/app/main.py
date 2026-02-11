@@ -9,17 +9,25 @@ from app.core.config import settings
 
 
 class CacheControlMiddleware(BaseHTTPMiddleware):
-    """Add Cache-Control headers to analytics responses for browser caching."""
+    """Add Cache-Control headers to analytics responses for browser caching.
+
+    Only caches successful (2xx) responses. Error or empty responses during
+    worker updates must not be cached, or the browser will serve stale empty
+    data even after the update completes.
+    """
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if request.method == "GET":
+        if request.method == "GET" and 200 <= response.status_code < 300:
             # Analytics data rarely changes - cache for 60s
             if path.startswith("/analytics/") or path.startswith("/portfolio-stats/"):
                 response.headers["Cache-Control"] = "private, max-age=60"
             # Static lists cache longer
             elif path in ("/views",):
                 response.headers["Cache-Control"] = "private, max-age=120"
+        elif request.method == "GET" and response.status_code >= 400:
+            # Never cache error responses
+            response.headers["Cache-Control"] = "no-store"
         return response
 from app.core.database import init_db, get_db, engine
 from app.core.security import get_password_hash

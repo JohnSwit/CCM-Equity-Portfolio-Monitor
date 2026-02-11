@@ -60,10 +60,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(userData);
         setCachedUser(userData);
       }
-    } catch (error) {
-      localStorage.removeItem('token');
-      setCachedUser(null);
-      setUser(null);
+    } catch (error: any) {
+      // Only log out on explicit auth failures (401/403).
+      // Transient errors (network timeout, 500 from DB load during worker update)
+      // should NOT clear the token — the user is still authenticated.
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        localStorage.removeItem('token');
+        setCachedUser(null);
+        setUser(null);
+      } else {
+        // Keep the cached user on transient failures so the app stays usable
+        const cached = getCachedUser();
+        if (cached) {
+          setUser(cached);
+        }
+      }
     } finally {
       setLoading(false);
     }
