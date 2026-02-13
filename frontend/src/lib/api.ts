@@ -935,6 +935,21 @@ class APIClient {
     const response = await this.client.delete(`/imports/inception/${accountId}`);
     return response.data;
   }
+
+  // Classification imports
+  async importClassifications(file: File, mode: 'preview' | 'commit') {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/imports/classifications?mode=${mode}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getClassificationSummary() {
+    const response = await this.client.get('/imports/classifications');
+    return response.data;
+  }
 }
 
 export const api = new APIClient();

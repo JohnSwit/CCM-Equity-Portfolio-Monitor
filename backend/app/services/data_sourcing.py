@@ -1144,6 +1144,7 @@ class ClassificationService:
 
         Tries providers in order: static mapping -> Tiingo -> Polygon -> IEX.
         Static mapping is checked first since it's instant and covers ~1000+ tickers.
+        User-uploaded classifications (source='upload') are never overwritten.
 
         Args:
             security_id: Security ID to refresh
@@ -1155,6 +1156,18 @@ class ClassificationService:
         if not security:
             logger.error(f"Security {security_id} not found")
             return None
+
+        # Never overwrite user-uploaded classifications
+        existing = self.db.query(SectorClassification).filter(
+            SectorClassification.security_id == security_id
+        ).first()
+        if existing and existing.source == 'upload':
+            logger.debug(f"Skipping {security.symbol}: has user-uploaded classification")
+            return {
+                'sector': existing.sector,
+                'gics_sector': existing.gics_sector,
+                'gics_industry': existing.gics_industry,
+            }
 
         ticker = security.symbol
 

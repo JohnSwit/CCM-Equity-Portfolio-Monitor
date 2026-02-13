@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, ImportLog, Transaction, AccountInception, Account
+from app.models import User, ImportLog, Transaction, AccountInception, Account, Security
 from app.models.schemas import ImportPreviewResponse, ImportCommitResponse
+from app.models.sector_models import SectorClassification
 from app.services.bd_parser import BDParser, calculate_file_hash
 from app.services.inception_parser import InceptionParser, get_accounts_with_inception
 
@@ -313,4 +314,273 @@ async def delete_account_inception(
         'inception_date': inception_date.isoformat(),
         'positions_deleted': position_count,
         'message': f'Deleted inception data for account {account_number}. Analytics cleared.'
+    }
+
+
+# ==================== CLASSIFICATION IMPORT ENDPOINTS ====================
+
+@router.post("/classifications")
+async def import_classifications(
+    file: UploadFile = File(...),
+    mode: str = Query("preview", regex="^(preview|commit)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Import ticker classifications from CSV.
+
+    Expected CSV columns (case-insensitive, flexible naming):
+    - Symbol / Ticker (required)
+    - Sector (required)
+    - Industry (optional)
+    - Country (optional)
+    - GICS Sector (optional - if different from simplified sector)
+    - GICS Industry (optional)
+    - Market Cap (optional - Large/Mid/Small)
+
+    Uploaded classifications are stored with source='upload' and take
+    priority over API-fetched classifications during refresh.
+
+    - mode=preview: Parse CSV and show match summary
+    - mode=commit: Save classifications to database
+    """
+    import csv
+    import io
+    from datetime import date, datetime
+
+    file_content = await file.read()
+
+    try:
+        text = file_content.decode('utf-8-sig')  # Handle BOM
+    except UnicodeDecodeError:
+        text = file_content.decode('latin-1')
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV file is empty or has no headers")
+
+    # Normalize headers to lowercase for flexible matching
+    raw_headers = [h.strip() for h in reader.fieldnames]
+    header_map = {h.lower().replace(' ', '_'): h for h in raw_headers}
+
+    # Find required columns
+    symbol_col = None
+    for key in ['symbol', 'ticker', 'symbols', 'tickers']:
+        if key in header_map:
+            symbol_col = header_map[key]
+            break
+    if not symbol_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must have a 'Symbol' or 'Ticker' column. Found: {raw_headers}"
+        )
+
+    sector_col = None
+    for key in ['sector', 'sectors']:
+        if key in header_map:
+            sector_col = header_map[key]
+            break
+    if not sector_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must have a 'Sector' column. Found: {raw_headers}"
+        )
+
+    # Find optional columns
+    def find_col(*candidates):
+        for c in candidates:
+            if c in header_map:
+                return header_map[c]
+        return None
+
+    industry_col = find_col('industry', 'gics_industry', 'industries')
+    country_col = find_col('country', 'countries', 'domicile')
+    gics_sector_col = find_col('gics_sector')
+    gics_industry_col = find_col('gics_industry') if not industry_col else None
+    market_cap_col = find_col('market_cap', 'market_cap_category', 'cap', 'size')
+
+    # Parse rows
+    rows = []
+    errors = []
+    for i, row in enumerate(reader, start=2):  # start=2 because row 1 is header
+        symbol = (row.get(symbol_col) or '').strip().upper()
+        sector = (row.get(sector_col) or '').strip()
+
+        if not symbol:
+            errors.append(f"Row {i}: Missing symbol")
+            continue
+        if not sector:
+            errors.append(f"Row {i}: Missing sector for {symbol}")
+            continue
+
+        parsed = {
+            'symbol': symbol,
+            'sector': sector,
+            'industry': (row.get(industry_col) or '').strip() if industry_col else None,
+            'country': (row.get(country_col) or '').strip() if country_col else None,
+            'gics_sector': (row.get(gics_sector_col) or '').strip() if gics_sector_col else None,
+            'gics_industry': (row.get(gics_industry_col) or '').strip() if gics_industry_col else None,
+            'market_cap': (row.get(market_cap_col) or '').strip() if market_cap_col else None,
+        }
+        rows.append(parsed)
+
+    if not rows and not errors:
+        raise HTTPException(status_code=400, detail="CSV contains no data rows")
+
+    # Look up which symbols exist in the securities table
+    all_symbols = list({r['symbol'] for r in rows})
+    existing_securities = db.query(Security).filter(
+        Security.symbol.in_(all_symbols)
+    ).all()
+    security_map = {s.symbol.upper(): s for s in existing_securities}
+
+    matched = [r for r in rows if r['symbol'] in security_map]
+    unmatched = [r for r in rows if r['symbol'] not in security_map]
+
+    # Check which matched securities already have classifications
+    matched_ids = [security_map[r['symbol']].id for r in matched]
+    existing_classifications = {
+        c.security_id: c.source
+        for c in db.query(SectorClassification).filter(
+            SectorClassification.security_id.in_(matched_ids)
+        ).all()
+    } if matched_ids else {}
+
+    will_create = sum(
+        1 for r in matched
+        if security_map[r['symbol']].id not in existing_classifications
+    )
+    will_update = sum(
+        1 for r in matched
+        if security_map[r['symbol']].id in existing_classifications
+    )
+
+    if mode == "preview":
+        # Build preview showing what will happen
+        preview_rows = []
+        for r in rows[:50]:  # Show first 50
+            sec = security_map.get(r['symbol'])
+            status = "new" if sec and sec.id not in existing_classifications else \
+                     "update" if sec else "unmatched"
+            existing_source = existing_classifications.get(sec.id) if sec else None
+            preview_rows.append({
+                'symbol': r['symbol'],
+                'sector': r['sector'],
+                'industry': r['industry'],
+                'country': r['country'],
+                'status': status,
+                'existing_source': existing_source,
+            })
+
+        return {
+            'mode': 'preview',
+            'total_rows': len(rows),
+            'matched': len(matched),
+            'unmatched': len(unmatched),
+            'will_create': will_create,
+            'will_update': will_update,
+            'unmatched_symbols': [r['symbol'] for r in unmatched[:20]],
+            'preview_rows': preview_rows,
+            'errors': errors[:20],
+            'columns_detected': {
+                'symbol': symbol_col,
+                'sector': sector_col,
+                'industry': industry_col,
+                'country': country_col,
+                'gics_sector': gics_sector_col,
+                'market_cap': market_cap_col,
+            },
+        }
+
+    else:  # commit
+        created = 0
+        updated = 0
+
+        for r in matched:
+            sec = security_map[r['symbol']]
+            existing = db.query(SectorClassification).filter(
+                SectorClassification.security_id == sec.id
+            ).first()
+
+            classification_data = {
+                'sector': r['sector'],
+                'gics_sector': r['gics_sector'] or r['sector'],
+                'gics_industry': r['gics_industry'] or r['industry'],
+                'market_cap_category': r['market_cap'],
+            }
+
+            if existing:
+                existing.sector = classification_data['sector']
+                existing.gics_sector = classification_data['gics_sector']
+                existing.gics_industry = classification_data['gics_industry']
+                if classification_data['market_cap_category']:
+                    existing.market_cap_category = classification_data['market_cap_category']
+                if r.get('country'):
+                    existing.country = r['country']
+                existing.source = 'upload'
+                existing.as_of_date = date.today()
+                existing.updated_at = datetime.utcnow()
+                updated += 1
+            else:
+                new_class = SectorClassification(
+                    security_id=sec.id,
+                    sector=classification_data['sector'],
+                    gics_sector=classification_data['gics_sector'],
+                    gics_industry=classification_data['gics_industry'],
+                    market_cap_category=classification_data['market_cap_category'],
+                    country=r.get('country'),
+                    source='upload',
+                    as_of_date=date.today(),
+                )
+                db.add(new_class)
+                created += 1
+
+        db.commit()
+
+        return {
+            'mode': 'commit',
+            'success': True,
+            'total_rows': len(rows),
+            'matched': len(matched),
+            'unmatched': len(unmatched),
+            'created': created,
+            'updated': updated,
+            'unmatched_symbols': [r['symbol'] for r in unmatched[:20]],
+            'errors': errors[:20],
+            'message': f"Imported {created + updated} classifications ({created} new, {updated} updated). {len(unmatched)} symbols not found in portfolio."
+        }
+
+
+@router.get("/classifications")
+def get_classification_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get summary of current classifications by source."""
+    from sqlalchemy import func
+
+    total = db.query(func.count(Security.id)).scalar() or 0
+    classified = db.query(func.count(SectorClassification.id)).scalar() or 0
+
+    # Count by source
+    source_counts = dict(
+        db.query(SectorClassification.source, func.count(SectorClassification.id))
+        .group_by(SectorClassification.source)
+        .all()
+    )
+
+    # Get unclassified securities
+    classified_ids = db.query(SectorClassification.security_id).subquery()
+    unclassified = db.query(Security.symbol).filter(
+        ~Security.id.in_(classified_ids),
+        Security.is_option == False
+    ).order_by(Security.symbol).all()
+
+    return {
+        'total_securities': total,
+        'classified': classified,
+        'unclassified': total - classified,
+        'coverage_percent': round(classified / total * 100, 1) if total > 0 else 0,
+        'by_source': source_counts,
+        'unclassified_symbols': [s[0] for s in unclassified[:50]],
     }

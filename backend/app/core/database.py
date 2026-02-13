@@ -86,6 +86,8 @@ def run_migrations():
         # Idea Pipeline new columns
         ("idea_pipeline", "bull_case", "ALTER TABLE idea_pipeline ADD COLUMN IF NOT EXISTS bull_case TEXT"),
         ("idea_pipeline", "bear_case", "ALTER TABLE idea_pipeline ADD COLUMN IF NOT EXISTS bear_case TEXT"),
+        # Sector Classification - country column
+        ("sector_classifications", "country", "ALTER TABLE sector_classifications ADD COLUMN IF NOT EXISTS country VARCHAR"),
     ]
 
     # New tables to create

@@ -45,7 +45,7 @@ interface InceptionAccount {
 
 export default function Upload() {
   // Tab state
-  const [activeTab, setActiveTab] = useState<'simple' | 'bulk' | 'inception'>('simple');
+  const [activeTab, setActiveTab] = useState<'simple' | 'bulk' | 'inception' | 'classifications'>('simple');
 
   // Simple Import state
   const [file, setFile] = useState<File | null>(null);
@@ -76,10 +76,18 @@ export default function Upload() {
   const [inceptionResult, setInceptionResult] = useState<any>(null);
   const [inceptionAccounts, setInceptionAccounts] = useState<InceptionAccount[]>([]);
 
+  // Classification Import state
+  const [classFile, setClassFile] = useState<File | null>(null);
+  const [classPreview, setClassPreview] = useState<any>(null);
+  const [classImporting, setClassImporting] = useState(false);
+  const [classResult, setClassResult] = useState<any>(null);
+  const [classSummary, setClassSummary] = useState<any>(null);
+
   useEffect(() => {
     loadImportHistory();
     loadBulkJobs();
     loadInceptionData();
+    loadClassificationSummary();
   }, []);
 
   // Auto-refresh for active bulk jobs
@@ -355,6 +363,55 @@ export default function Upload() {
     }
   };
 
+  // Classification Import functions
+  const loadClassificationSummary = async () => {
+    try {
+      const data = await api.getClassificationSummary();
+      setClassSummary(data);
+    } catch (error) {
+      console.error('Failed to load classification summary:', error);
+    }
+  };
+
+  const handleClassFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setClassFile(selectedFile);
+      setClassPreview(null);
+      setClassResult(null);
+    }
+  };
+
+  const handleClassPreview = async () => {
+    if (!classFile) return;
+    setClassImporting(true);
+    try {
+      const data = await api.importClassifications(classFile, 'preview');
+      setClassPreview(data);
+    } catch (error: any) {
+      alert('Preview failed: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setClassImporting(false);
+    }
+  };
+
+  const handleClassImport = async () => {
+    if (!classFile) return;
+    if (!confirm('Import these classifications? This will update sector/industry data for matched securities.')) return;
+    setClassImporting(true);
+    try {
+      const data = await api.importClassifications(classFile, 'commit');
+      setClassResult(data);
+      setClassFile(null);
+      setClassPreview(null);
+      await loadClassificationSummary();
+    } catch (error: any) {
+      alert('Import failed: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setClassImporting(false);
+    }
+  };
+
   const formatNumber = (n: number | null | undefined) => {
     if (n == null) return '-';
     return n.toLocaleString();
@@ -425,6 +482,16 @@ export default function Upload() {
               }`}
             >
               Historical Inception
+            </button>
+            <button
+              onClick={() => setActiveTab('classifications')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'classifications'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Classifications
             </button>
           </nav>
         </div>
@@ -1257,6 +1324,259 @@ export default function Upload() {
                   <li>Importing will replace any existing inception data for affected accounts</li>
                   <li>After importing inception data, upload transactions from after the inception date</li>
                 </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Classifications Tab */}
+        {activeTab === 'classifications' && (
+          <div className="space-y-6">
+            {/* Upload Form */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-2">Upload Ticker Classifications</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Upload a CSV with ticker symbols and their sector, industry, and country classifications.
+                These will be used to classify portfolio holdings and S&P 500 constituents.
+              </p>
+
+              <div className="flex items-center gap-4">
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleClassFileChange}
+                  className="text-sm"
+                />
+                <button
+                  onClick={handleClassPreview}
+                  disabled={!classFile || classImporting}
+                  className="btn btn-secondary"
+                >
+                  {classImporting ? 'Processing...' : 'Preview'}
+                </button>
+              </div>
+            </div>
+
+            {/* Preview Results */}
+            {classPreview && (
+              <div className="card">
+                <h2 className="text-lg font-semibold mb-4">Import Preview</h2>
+
+                {/* Summary Stats */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                  <div className="bg-gray-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-gray-900">{classPreview.total_rows}</div>
+                    <div className="text-xs text-gray-500">Total Rows</div>
+                  </div>
+                  <div className="bg-green-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-green-700">{classPreview.matched}</div>
+                    <div className="text-xs text-gray-500">Matched Securities</div>
+                  </div>
+                  <div className="bg-blue-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-700">{classPreview.will_create}</div>
+                    <div className="text-xs text-gray-500">New Classifications</div>
+                  </div>
+                  <div className="bg-amber-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-amber-700">{classPreview.will_update}</div>
+                    <div className="text-xs text-gray-500">Will Update</div>
+                  </div>
+                </div>
+
+                {/* Columns Detected */}
+                {classPreview.columns_detected && (
+                  <div className="mb-4 text-sm text-gray-600">
+                    <strong>Columns detected:</strong>{' '}
+                    {Object.entries(classPreview.columns_detected)
+                      .filter(([, v]) => v)
+                      .map(([k, v]) => `${k}: "${v}"`)
+                      .join(', ')}
+                  </div>
+                )}
+
+                {/* Unmatched Symbols */}
+                {classPreview.unmatched > 0 && (
+                  <div className="mb-4 p-3 bg-amber-50 rounded-lg">
+                    <div className="text-sm font-medium text-amber-800 mb-1">
+                      {classPreview.unmatched} symbols not found in portfolio (will be skipped):
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {classPreview.unmatched_symbols?.map((s: string) => (
+                        <span key={s} className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Preview Table */}
+                {classPreview.preview_rows?.length > 0 && (
+                  <div className="table-container mb-4">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Sector</th>
+                          <th>Industry</th>
+                          <th>Country</th>
+                          <th>Status</th>
+                          <th>Current Source</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {classPreview.preview_rows.map((row: any, idx: number) => (
+                          <tr key={idx}>
+                            <td className="font-medium">{row.symbol}</td>
+                            <td>{row.sector}</td>
+                            <td>{row.industry || '-'}</td>
+                            <td>{row.country || '-'}</td>
+                            <td>
+                              <span className={`text-xs px-2 py-0.5 rounded ${
+                                row.status === 'new' ? 'bg-green-100 text-green-700' :
+                                row.status === 'update' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-500'
+                              }`}>
+                                {row.status === 'new' ? 'New' : row.status === 'update' ? 'Update' : 'Not in portfolio'}
+                              </span>
+                            </td>
+                            <td className="text-gray-500 text-sm">{row.existing_source || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Errors */}
+                {classPreview.errors?.length > 0 && (
+                  <div className="mb-4 p-3 bg-red-50 rounded-lg">
+                    <div className="text-sm font-medium text-red-800 mb-1">Parsing Errors:</div>
+                    {classPreview.errors.map((err: string, i: number) => (
+                      <div key={i} className="text-xs text-red-600">{err}</div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Import Button */}
+                {classPreview.matched > 0 && (
+                  <button
+                    onClick={handleClassImport}
+                    disabled={classImporting}
+                    className="btn btn-primary"
+                  >
+                    {classImporting ? 'Importing...' : `Import ${classPreview.matched} Classifications`}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Import Result */}
+            {classResult && (
+              <div className={`card ${classResult.success ? 'bg-green-50' : 'bg-red-50'}`}>
+                <h2 className="text-lg font-semibold mb-2">
+                  {classResult.success ? 'Import Successful' : 'Import Failed'}
+                </h2>
+                <p className="text-sm">{classResult.message}</p>
+                {classResult.success && (
+                  <div className="mt-2 text-sm text-gray-600">
+                    <span className="font-medium">{classResult.created}</span> new,{' '}
+                    <span className="font-medium">{classResult.updated}</span> updated,{' '}
+                    <span className="font-medium">{classResult.unmatched}</span> unmatched
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Current Classification Summary */}
+            {classSummary && (
+              <div className="card">
+                <h2 className="text-lg font-semibold mb-4">Current Classification Status</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                  <div className="bg-gray-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold">{classSummary.total_securities}</div>
+                    <div className="text-xs text-gray-500">Total Securities</div>
+                  </div>
+                  <div className="bg-green-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-green-700">{classSummary.classified}</div>
+                    <div className="text-xs text-gray-500">Classified</div>
+                  </div>
+                  <div className="bg-amber-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-amber-700">{classSummary.unclassified}</div>
+                    <div className="text-xs text-gray-500">Unclassified</div>
+                  </div>
+                  <div className="bg-blue-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-700">{classSummary.coverage_percent}%</div>
+                    <div className="text-xs text-gray-500">Coverage</div>
+                  </div>
+                </div>
+
+                {/* By Source */}
+                {classSummary.by_source && Object.keys(classSummary.by_source).length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">By Source</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(classSummary.by_source).map(([source, count]: [string, any]) => (
+                        <span key={source} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                          {source}: {count}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Unclassified Symbols */}
+                {classSummary.unclassified_symbols?.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">
+                      Unclassified Securities ({classSummary.unclassified})
+                    </h3>
+                    <div className="flex flex-wrap gap-1">
+                      {classSummary.unclassified_symbols.map((s: string) => (
+                        <span key={s} className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded">
+                          {s}
+                        </span>
+                      ))}
+                      {classSummary.unclassified > 50 && (
+                        <span className="text-xs text-gray-500">
+                          +{classSummary.unclassified - 50} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Instructions */}
+            <div className="card bg-gray-50">
+              <h2 className="text-lg font-semibold mb-4">CSV Format</h2>
+              <div className="text-sm text-gray-700 space-y-2">
+                <p><strong>Required Columns:</strong></p>
+                <ul className="list-disc list-inside ml-4 space-y-1">
+                  <li><code className="bg-gray-200 px-1 rounded">Symbol</code> or <code className="bg-gray-200 px-1 rounded">Ticker</code> - Ticker symbol</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Sector</code> - Sector classification (e.g., Technology, Healthcare)</li>
+                </ul>
+                <p className="mt-3"><strong>Optional Columns:</strong></p>
+                <ul className="list-disc list-inside ml-4 space-y-1">
+                  <li><code className="bg-gray-200 px-1 rounded">Industry</code> - Industry within sector</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Country</code> - Country of domicile</li>
+                  <li><code className="bg-gray-200 px-1 rounded">GICS Sector</code> - GICS sector (if different from simplified sector)</li>
+                  <li><code className="bg-gray-200 px-1 rounded">Market Cap</code> - Large, Mid, or Small</li>
+                </ul>
+                <p className="mt-3"><strong>Notes:</strong></p>
+                <ul className="list-disc list-inside ml-4 space-y-1">
+                  <li>Only symbols already in the portfolio will be matched</li>
+                  <li>Uploaded classifications take priority and will not be overwritten by automatic refresh</li>
+                  <li>Re-uploading will update existing classifications</li>
+                </ul>
+                <p className="mt-3"><strong>Example:</strong></p>
+                <pre className="bg-gray-200 p-2 rounded text-xs mt-1 overflow-x-auto">
+{`Symbol,Sector,Industry,Country
+AAPL,Technology,Consumer Electronics,United States
+MSFT,Technology,Software,United States
+JNJ,Healthcare,Pharmaceuticals,United States
+TSM,Technology,Semiconductors,Taiwan`}
+                </pre>
               </div>
             </div>
           </div>
