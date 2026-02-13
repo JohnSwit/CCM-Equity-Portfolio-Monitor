@@ -1493,11 +1493,11 @@ export default function Upload() {
                 <h2 className="text-lg font-semibold mb-4">Current Classification Status</h2>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
                   <div className="bg-gray-50 rounded-lg p-3 text-center">
-                    <div className="text-2xl font-bold">{classSummary.total_securities}</div>
-                    <div className="text-xs text-gray-500">Total Securities</div>
+                    <div className="text-2xl font-bold">{classSummary.held_securities ?? classSummary.total_securities}</div>
+                    <div className="text-xs text-gray-500">Held Securities</div>
                   </div>
                   <div className="bg-green-50 rounded-lg p-3 text-center">
-                    <div className="text-2xl font-bold text-green-700">{classSummary.classified}</div>
+                    <div className="text-2xl font-bold text-green-700">{classSummary.held_classified ?? classSummary.classified}</div>
                     <div className="text-xs text-gray-500">Classified</div>
                   </div>
                   <div className="bg-amber-50 rounded-lg p-3 text-center">
@@ -1528,7 +1528,7 @@ export default function Upload() {
                 {classSummary.unclassified_symbols?.length > 0 && (
                   <div>
                     <h3 className="text-sm font-medium text-gray-700 mb-2">
-                      Unclassified Securities ({classSummary.unclassified})
+                      Unclassified Holdings ({classSummary.unclassified})
                     </h3>
                     <div className="flex flex-wrap gap-1">
                       {classSummary.unclassified_symbols.map((s: string) => (

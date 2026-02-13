@@ -556,8 +556,13 @@ def get_classification_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get summary of current classifications by source."""
+    """Get summary of current classifications by source.
+
+    Only shows unclassified securities that are currently held in the portfolio
+    (have positions), not all securities in the database.
+    """
     from sqlalchemy import func
+    from app.models import PositionsEOD
 
     total = db.query(func.count(Security.id)).scalar() or 0
     classified = db.query(func.count(SectorClassification.id)).scalar() or 0
@@ -569,18 +574,43 @@ def get_classification_summary(
         .all()
     )
 
-    # Get unclassified securities
+    # Get securities currently held in the portfolio (latest position date, shares > 0)
+    latest_date = db.query(func.max(PositionsEOD.date)).scalar()
+    if latest_date:
+        held_security_ids = db.query(PositionsEOD.security_id).filter(
+            PositionsEOD.date == latest_date,
+            PositionsEOD.shares > 0,
+        ).distinct().subquery()
+    else:
+        held_security_ids = db.query(Security.id).filter(False).subquery()
+
+    # Only show unclassified securities that are currently held
     classified_ids = db.query(SectorClassification.security_id).subquery()
     unclassified = db.query(Security.symbol).filter(
+        Security.id.in_(held_security_ids),
         ~Security.id.in_(classified_ids),
-        Security.is_option == False
+        Security.is_option == False,
     ).order_by(Security.symbol).all()
+
+    unclassified_count = len(unclassified)
+
+    # Count held securities for coverage
+    held_total = db.query(func.count(Security.id)).filter(
+        Security.id.in_(held_security_ids),
+        Security.is_option == False,
+    ).scalar() or 0
+
+    held_classified = db.query(func.count(SectorClassification.id)).filter(
+        SectorClassification.security_id.in_(held_security_ids),
+    ).scalar() or 0
 
     return {
         'total_securities': total,
         'classified': classified,
-        'unclassified': total - classified,
-        'coverage_percent': round(classified / total * 100, 1) if total > 0 else 0,
+        'held_securities': held_total,
+        'held_classified': held_classified,
+        'unclassified': unclassified_count,
+        'coverage_percent': round(held_classified / held_total * 100, 1) if held_total > 0 else 0,
         'by_source': source_counts,
         'unclassified_symbols': [s[0] for s in unclassified[:50]],
     }

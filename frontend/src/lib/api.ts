@@ -309,8 +309,8 @@ class APIClient {
     return this.cachedGet('/portfolio-stats/turnover', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period }, 60000);
   }
 
-  async getSectorWeights(viewType: string, viewId: number, asOfDate?: string) {
-    return this.cachedGet('/portfolio-stats/sector-weights', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
+  async getSectorWeights(viewType: string, viewId: number, asOfDate?: string, groupBy: string = 'sector') {
+    return this.cachedGet('/portfolio-stats/sector-weights', { view_type: viewType, view_id: viewId, as_of_date: asOfDate, group_by: groupBy });
   }
 
   async getSectorComparison(viewType: string, viewId: number, benchmark: string = 'SP500', asOfDate?: string) {

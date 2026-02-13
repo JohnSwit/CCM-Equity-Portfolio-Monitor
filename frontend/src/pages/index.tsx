@@ -119,6 +119,15 @@ export default function Dashboard() {
     }
   }, [selectedView]);
 
+  // Re-fetch sector data when the grouping mode changes
+  useEffect(() => {
+    if (selectedView) {
+      api.getSectorWeights(selectedView.view_type, selectedView.view_id, undefined, sectorViewMode)
+        .then((data) => setSectorData(data))
+        .catch(() => setSectorData(null));
+    }
+  }, [sectorViewMode]);
+
   const loadViews = async () => {
     try {
       const data = await api.getAllViews();
@@ -156,7 +165,7 @@ export default function Dashboard() {
         api.getHoldings(view.view_type, view.view_id).catch(() => null),
         api.getRisk(view.view_type, view.view_id).catch(() => null),
         api.getUnpricedInstruments().catch(() => []),
-        api.getSectorWeights(view.view_type, view.view_id).catch(() => null),
+        api.getSectorWeights(view.view_type, view.view_id, undefined, sectorViewMode).catch(() => null),
       ]);
 
       // Only apply results if this is still the latest request
