@@ -112,13 +112,8 @@ export default function PortfolioStatisticsPage() {
   const [expandedSectors, setExpandedSectors] = useState<Set<string>>(new Set());
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
-  // Data status
-  const [dataStatus, setDataStatus] = useState<any>(null);
-  const [refreshingData, setRefreshingData] = useState<string | null>(null);
-
   useEffect(() => {
     loadViews();
-    loadDataStatus();
     loadAvailableBenchmarks();
   }, []);
 
@@ -322,44 +317,6 @@ export default function PortfolioStatisticsPage() {
     }
   };
 
-  const loadDataStatus = async () => {
-    try {
-      const status = await api.getDataStatus();
-      setDataStatus(status);
-    } catch (error) {
-      console.error('Failed to load data status:', error);
-    }
-  };
-
-  const handleRefreshClassifications = async () => {
-    setRefreshingData('classifications');
-    try {
-      const result = await api.refreshClassifications();
-      alert(`Classification refresh complete: ${result.success}/${result.total} succeeded`);
-      loadDataStatus();
-      if (selectedView) loadStatistics();
-    } catch (error) {
-      console.error('Failed to refresh classifications:', error);
-      alert('Failed to refresh classifications. See console for details.');
-    } finally {
-      setRefreshingData(null);
-    }
-  };
-
-  const handleRefreshBenchmarks = async () => {
-    setRefreshingData('benchmarks');
-    try {
-      const result = await api.refreshSP500Benchmark();
-      alert(`S&P 500 refreshed: ${result.count} constituents loaded`);
-      loadDataStatus();
-      if (selectedView) loadStatistics();
-    } catch (error) {
-      console.error('Failed to refresh S&P 500:', error);
-      alert('Failed to refresh S&P 500. See console for details.');
-    } finally {
-      setRefreshingData(null);
-    }
-  };
 
   const formatPercent = (value: number | null | undefined) => {
     if (value === null || value === undefined) return 'N/A';
@@ -432,107 +389,6 @@ export default function PortfolioStatisticsPage() {
           </div>
         </div>
 
-        {/* Data Status */}
-        {dataStatus && (
-          <div className="card">
-            <div className="card-header">
-              <h2 className="card-title">Data Status & Management</h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Classifications Status */}
-              <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/50">
-                <h3 className="text-sm font-semibold text-zinc-700 mb-3">Security Classifications</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">Coverage:</span>
-                    <span className="font-medium text-zinc-800 tabular-nums">
-                      {dataStatus.classifications.classified_securities} / {dataStatus.classifications.total_securities} ({dataStatus.classifications.coverage_percent}%)
-                    </span>
-                  </div>
-                  {dataStatus.classifications.last_updated && (
-                    <div className="flex justify-between">
-                      <span className="text-zinc-500">Last Updated:</span>
-                      <span className="font-medium text-xs text-zinc-700">{new Date(dataStatus.classifications.last_updated).toLocaleString()}</span>
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-zinc-500">Sources:</span>
-                    <div className="text-xs mt-1 space-y-0.5">
-                      {Object.entries(dataStatus.classifications.sources || {}).map(([source, count]: [string, any]) => (
-                        <div key={source} className="flex justify-between">
-                          <span className="text-zinc-600">{source}:</span>
-                          <span className="font-medium tabular-nums">{count}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleRefreshClassifications}
-                    disabled={refreshingData === 'classifications'}
-                    className="btn btn-primary w-full mt-3"
-                  >
-                    {refreshingData === 'classifications' ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Refreshing...
-                      </>
-                    ) : 'Refresh Classifications'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Benchmark Status */}
-              <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/50">
-                <h3 className="text-sm font-semibold text-zinc-700 mb-3">S&P 500 Benchmark</h3>
-                <div className="space-y-2 text-sm">
-                  {Object.entries(dataStatus.benchmarks || {}).map(([code, data]: [string, any]) => (
-                    <div key={code} className="border-b border-zinc-200 pb-2 last:border-b-0">
-                      <div className="font-medium text-zinc-800">{code}</div>
-                      <div className="text-xs text-zinc-500">
-                        {data.constituent_count} constituents
-                      </div>
-                      {data.as_of_date && (
-                        <div className="text-xs text-zinc-500">
-                          As of: {data.as_of_date}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    onClick={handleRefreshBenchmarks}
-                    disabled={refreshingData === 'benchmarks'}
-                    className="btn btn-primary w-full mt-3"
-                  >
-                    {refreshingData === 'benchmarks' ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Refreshing...
-                      </>
-                    ) : 'Refresh S&P 500'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Data Readiness Indicators */}
-            <div className="mt-6 p-4 bg-zinc-50 rounded-lg border border-zinc-100">
-              <h3 className="text-sm font-semibold text-zinc-700 mb-3">Feature Readiness</h3>
-              <div className="flex flex-wrap gap-4">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${dataStatus.data_readiness.brinson_attribution_ready ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-                  <span className="text-sm text-zinc-700">Brinson Attribution</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {loading && (
           <div className="card">

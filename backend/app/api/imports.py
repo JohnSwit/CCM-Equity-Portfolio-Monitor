@@ -560,9 +560,11 @@ def get_classification_summary(
 
     Only shows unclassified securities that are currently held in the portfolio
     (have positions), not all securities in the database.
+    Also includes S&P 500 constituent classification coverage.
     """
     from sqlalchemy import func
     from app.models import PositionsEOD
+    from app.models.sector_models import BenchmarkConstituent
 
     total = db.query(func.count(Security.id)).scalar() or 0
     classified = db.query(func.count(SectorClassification.id)).scalar() or 0
@@ -604,6 +606,56 @@ def get_classification_summary(
         SectorClassification.security_id.in_(held_security_ids),
     ).scalar() or 0
 
+    # S&P 500 constituent classification coverage
+    sp500_latest_date = db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
+        BenchmarkConstituent.benchmark_code == "SP500"
+    ).scalar()
+
+    sp500_info = None
+    if sp500_latest_date:
+        sp500_symbols = [
+            r[0] for r in db.query(BenchmarkConstituent.symbol).filter(
+                BenchmarkConstituent.benchmark_code == "SP500",
+                BenchmarkConstituent.as_of_date == sp500_latest_date,
+            ).all()
+        ]
+        sp500_total = len(sp500_symbols)
+
+        # Find which S&P names have classifications via security table
+        sp500_classified_count = 0
+        sp500_unclassified_symbols = []
+        if sp500_symbols:
+            # Match S&P symbols to securities, then check classification
+            sp500_securities = db.query(Security.id, Security.symbol).filter(
+                Security.symbol.in_(sp500_symbols),
+            ).all()
+            sp500_sec_map = {s.symbol: s.id for s in sp500_securities}
+
+            sp500_sec_ids = [s.id for s in sp500_securities]
+            sp500_classified_ids = set()
+            if sp500_sec_ids:
+                sp500_classified_ids = {
+                    r[0] for r in db.query(SectorClassification.security_id).filter(
+                        SectorClassification.security_id.in_(sp500_sec_ids),
+                    ).all()
+                }
+
+            sp500_classified_count = len(sp500_classified_ids)
+            # Unclassified = S&P symbols not in securities table OR in securities but without classification
+            for sym in sorted(sp500_symbols):
+                sec_id = sp500_sec_map.get(sym)
+                if sec_id is None or sec_id not in sp500_classified_ids:
+                    sp500_unclassified_symbols.append(sym)
+
+        sp500_info = {
+            'total': sp500_total,
+            'classified': sp500_classified_count,
+            'unclassified': len(sp500_unclassified_symbols),
+            'coverage_percent': round(sp500_classified_count / sp500_total * 100, 1) if sp500_total > 0 else 0,
+            'as_of_date': sp500_latest_date.isoformat(),
+            'unclassified_symbols': sp500_unclassified_symbols[:50],
+        }
+
     return {
         'total_securities': total,
         'classified': classified,
@@ -613,4 +665,5 @@ def get_classification_summary(
         'coverage_percent': round(held_classified / held_total * 100, 1) if held_total > 0 else 0,
         'by_source': source_counts,
         'unclassified_symbols': [s[0] for s in unclassified[:50]],
+        'sp500': sp500_info,
     }

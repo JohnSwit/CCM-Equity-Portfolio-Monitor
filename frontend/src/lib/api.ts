@@ -353,39 +353,8 @@ class APIClient {
   }
 
   // Data Management
-  async refreshClassifications(limit?: number) {
-    const response = await this.client.post('/data-management/refresh-classifications', null, {
-      params: { limit },
-    });
-    return response.data;
-  }
-
   async refreshSingleClassification(securityId: number) {
     const response = await this.client.post(`/data-management/refresh-classification/${securityId}`);
-    return response.data;
-  }
-
-  async refreshSP500Benchmark() {
-    const response = await this.client.post('/data-management/refresh-benchmark');
-    return response.data;
-  }
-
-  async refreshFactorReturns(startDate?: string) {
-    const response = await this.client.post('/data-management/refresh-factor-returns', null, {
-      params: { start_date: startDate },
-    });
-    return response.data;
-  }
-
-  async getDataStatus() {
-    const response = await this.client.get('/data-management/status');
-    return response.data;
-  }
-
-  async getMissingClassifications(limit: number = 100) {
-    const response = await this.client.get('/data-management/missing-classifications', {
-      params: { limit },
-    });
     return response.data;
   }
 

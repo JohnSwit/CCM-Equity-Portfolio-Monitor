@@ -1547,6 +1547,57 @@ export default function Upload() {
               </div>
             )}
 
+            {/* S&P 500 Classification Status */}
+            {classSummary?.sp500 && (
+              <div className="card">
+                <h2 className="text-lg font-semibold mb-4">S&P 500 Classification Status</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                  <div className="bg-gray-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold">{classSummary.sp500.total}</div>
+                    <div className="text-xs text-gray-500">Constituents</div>
+                  </div>
+                  <div className="bg-green-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-green-700">{classSummary.sp500.classified}</div>
+                    <div className="text-xs text-gray-500">Classified</div>
+                  </div>
+                  <div className="bg-amber-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-amber-700">{classSummary.sp500.unclassified}</div>
+                    <div className="text-xs text-gray-500">Unclassified</div>
+                  </div>
+                  <div className="bg-blue-50 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-700">{classSummary.sp500.coverage_percent}%</div>
+                    <div className="text-xs text-gray-500">Coverage</div>
+                  </div>
+                </div>
+
+                {classSummary.sp500.as_of_date && (
+                  <p className="text-xs text-gray-500 mb-3">
+                    Constituents as of {classSummary.sp500.as_of_date}
+                  </p>
+                )}
+
+                {classSummary.sp500.unclassified_symbols?.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">
+                      Unclassified S&P 500 Names ({classSummary.sp500.unclassified})
+                    </h3>
+                    <div className="flex flex-wrap gap-1">
+                      {classSummary.sp500.unclassified_symbols.map((s: string) => (
+                        <span key={s} className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded">
+                          {s}
+                        </span>
+                      ))}
+                      {classSummary.sp500.unclassified > 50 && (
+                        <span className="text-xs text-gray-500">
+                          +{classSummary.sp500.unclassified - 50} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Instructions */}
             <div className="card bg-gray-50">
               <h2 className="text-lg font-semibold mb-4">CSV Format</h2>
