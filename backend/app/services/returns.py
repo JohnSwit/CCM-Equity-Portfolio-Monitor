@@ -78,8 +78,10 @@ class ReturnsEngine:
 
         prices_df = pd.DataFrame(prices, columns=['date', 'security_id', 'close'])
 
-        # Merge positions and prices
-        merged = pos_df.merge(prices_df, on=['date', 'security_id'], how='inner')
+        # Merge positions and prices using LEFT join to keep all positions
+        # Securities without prices will have NaN close, which we fill with 0
+        merged = pos_df.merge(prices_df, on=['date', 'security_id'], how='left')
+        merged['close'] = merged['close'].fillna(0)
 
         # Compute market value per position
         merged['market_value'] = merged['shares'] * merged['close']
@@ -171,12 +173,12 @@ class ReturnsEngine:
         price_wide = prices_df.pivot(index='date', columns='security_id', values='close')
 
         # Forward fill prices (use last known price)
-        price_wide = price_wide.fillna(method='ffill')
+        price_wide = price_wide.ffill()
 
         # Align dates
         all_dates = sorted(set(pos_wide.index) | set(price_wide.index))
-        pos_wide = pos_wide.reindex(all_dates).fillna(method='ffill').fillna(0)
-        price_wide = price_wide.reindex(all_dates).fillna(method='ffill')
+        pos_wide = pos_wide.reindex(all_dates).ffill().fillna(0)
+        price_wide = price_wide.reindex(all_dates).ffill()
 
         # Compute portfolio value each day
         portfolio_values = (pos_wide * price_wide).sum(axis=1)
@@ -186,7 +188,7 @@ class ReturnsEngine:
 
         # Compute returns using start-of-day holdings
         returns_data = []
-        index_value = 100.0
+        index_value = 1.0  # Start at 1.0 to match benchmark convention
 
         for i in range(1, len(portfolio_values)):
             date_t = portfolio_values.index[i]
@@ -236,9 +238,10 @@ class ReturnsEngine:
             ).first()
 
             if existing:
-                if existing.twr_return != row['twr_return']:
-                    existing.twr_return = row['twr_return']
-                    existing.twr_index = row['twr_index']
+                # Always update both twr_return and twr_index to ensure consistency
+                # This is important when the index convention changes (e.g., 100 -> 1.0)
+                existing.twr_return = row['twr_return']
+                existing.twr_index = row['twr_index']
             else:
                 ret = ReturnsEOD(
                     view_type=ViewType.ACCOUNT,

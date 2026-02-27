@@ -30,6 +30,9 @@ class Account(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Relationship to inception snapshot
+    inception = relationship("AccountInception", back_populates="account", uselist=False)
+
 
 class AssetClass(str, enum.Enum):
     EQUITY = "EQUITY"
@@ -58,6 +61,7 @@ class TransactionType(str, enum.Enum):
     BUY = "BUY"
     SELL = "SELL"
     DIVIDEND = "DIVIDEND"
+    DIVIDEND_REINVEST = "DIVIDEND_REINVEST"
     TRANSFER_IN = "TRANSFER_IN"
     TRANSFER_OUT = "TRANSFER_OUT"
     FEE = "FEE"
@@ -370,6 +374,22 @@ class ImportLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class TaxLotImportLog(Base):
+    """Track tax lot CSV imports separately from transaction imports"""
+    __tablename__ = "tax_lot_import_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_name = Column(String)
+    file_hash = Column(String, index=True)
+    status = Column(String)  # pending, completed, completed_with_errors, failed
+    rows_processed = Column(Integer, default=0)
+    rows_imported = Column(Integer, default=0)
+    rows_skipped = Column(Integer, default=0)
+    rows_error = Column(Integer, default=0)
+    errors = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class ManualPrice(Base):
     __tablename__ = "manual_prices"
 
@@ -384,4 +404,521 @@ class ManualPrice(Base):
 
     __table_args__ = (
         UniqueConstraint('security_id', 'date', name='uq_manual_price_security_date'),
+    )
+
+
+class FactorDataSource(str, enum.Enum):
+    STOOQ = "stooq"
+    FRED = "fred"
+    YFINANCE = "yfinance"
+    ALPHAVANTAGE = "alphavantage"
+    TIINGO = "tiingo"
+
+
+class FactorProxySeries(Base):
+    """Cached market data series for factor proxies (ETFs, rates, etc.)"""
+    __tablename__ = "factor_proxy_series"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    source = Column(SQLEnum(FactorDataSource), nullable=False)
+    date = Column(Date, nullable=False, index=True)
+    close = Column(Float)  # Price level for ETFs
+    value = Column(Float)  # Value for rates/macro series
+    daily_return = Column(Float)  # Pre-computed daily return
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('symbol', 'source', 'date', name='uq_factor_proxy_symbol_source_date'),
+        Index('idx_factor_proxy_symbol_date', 'symbol', 'date'),
+    )
+
+
+class FactorModelDefinition(Base):
+    """Defines factor models with their proxy ETFs/series"""
+    __tablename__ = "factor_model_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    factors_config = Column(JSON, nullable=False)  # Dict of factor_name -> {symbol, source, spread_vs}
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class FactorAttributionResult(Base):
+    """Stores factor attribution analysis results"""
+    __tablename__ = "factor_attribution_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    view_type = Column(SQLEnum(ViewType), nullable=False, index=True)
+    view_id = Column(Integer, nullable=False, index=True)
+    factor_model_code = Column(String, nullable=False, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    # Regression results
+    betas_json = Column(JSON)  # factor_name -> beta
+    alpha_daily = Column(Float)
+    alpha_annualized = Column(Float)
+    r_squared = Column(Float)
+    adj_r_squared = Column(Float)
+    # Diagnostics
+    residual_std = Column(Float)
+    durbin_watson = Column(Float)
+    t_stats_json = Column(JSON)  # factor_name -> t-stat
+    p_values_json = Column(JSON)  # factor_name -> p-value
+    # Attribution
+    total_return = Column(Float)
+    factor_contribution_json = Column(JSON)  # factor_name -> contribution %
+    alpha_contribution = Column(Float)
+    residual_contribution = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('view_type', 'view_id', 'factor_model_code', 'start_date', 'end_date',
+                        name='uq_factor_attribution_view_model_period'),
+    )
+
+
+class Analyst(Base):
+    """Analysts who cover securities"""
+    __tablename__ = "analysts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ActiveCoverage(Base):
+    """Active coverage tracking - links tickers to analysts and Excel models"""
+    __tablename__ = "active_coverage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, nullable=False, unique=True, index=True)
+    primary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    secondary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    # OneDrive/SharePoint path or local path to Excel model
+    model_path = Column(String, nullable=True)
+    # OneDrive share link for opening in browser
+    model_share_link = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+
+    # Model status toggle
+    model_updated = Column(Boolean, default=False)
+
+    # Research content
+    thesis = Column(Text, nullable=True)
+    bull_case = Column(Text, nullable=True)
+    bear_case = Column(Text, nullable=True)
+
+    # Alert/action item - triggers UI icon when populated
+    alert = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    primary_analyst = relationship("Analyst", foreign_keys=[primary_analyst_id])
+    secondary_analyst = relationship("Analyst", foreign_keys=[secondary_analyst_id])
+    documents = relationship("CoverageDocument", back_populates="coverage", cascade="all, delete-orphan")
+    snapshots = relationship("CoverageModelSnapshot", back_populates="coverage", cascade="all, delete-orphan")
+
+
+class CoverageModelData(Base):
+    """Cached data extracted from Excel models' API tabs"""
+    __tablename__ = "coverage_model_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_id = Column(Integer, ForeignKey("active_coverage.id"), nullable=False, index=True)
+
+    # IRR and Valuation (from cells E11, E13, E14)
+    irr_3yr = Column(Float, nullable=True)  # E11
+    ccm_fair_value = Column(Float, nullable=True)  # E13
+    street_price_target = Column(Float, nullable=True)  # E14
+
+    # Revenue data (CCM and Street for -1YR, 1YR, 2YR, 3YR)
+    revenue_ccm_minus1yr = Column(Float, nullable=True)
+    revenue_ccm_1yr = Column(Float, nullable=True)
+    revenue_ccm_2yr = Column(Float, nullable=True)
+    revenue_ccm_3yr = Column(Float, nullable=True)
+    revenue_street_minus1yr = Column(Float, nullable=True)
+    revenue_street_1yr = Column(Float, nullable=True)
+    revenue_street_2yr = Column(Float, nullable=True)
+    revenue_street_3yr = Column(Float, nullable=True)
+
+    # EBITDA data
+    ebitda_ccm_minus1yr = Column(Float, nullable=True)
+    ebitda_ccm_1yr = Column(Float, nullable=True)
+    ebitda_ccm_2yr = Column(Float, nullable=True)
+    ebitda_ccm_3yr = Column(Float, nullable=True)
+    ebitda_street_minus1yr = Column(Float, nullable=True)
+    ebitda_street_1yr = Column(Float, nullable=True)
+    ebitda_street_2yr = Column(Float, nullable=True)
+    ebitda_street_3yr = Column(Float, nullable=True)
+
+    # EPS data
+    eps_ccm_minus1yr = Column(Float, nullable=True)
+    eps_ccm_1yr = Column(Float, nullable=True)
+    eps_ccm_2yr = Column(Float, nullable=True)
+    eps_ccm_3yr = Column(Float, nullable=True)
+    eps_street_minus1yr = Column(Float, nullable=True)
+    eps_street_1yr = Column(Float, nullable=True)
+    eps_street_2yr = Column(Float, nullable=True)
+    eps_street_3yr = Column(Float, nullable=True)
+
+    # FCF data
+    fcf_ccm_minus1yr = Column(Float, nullable=True)
+    fcf_ccm_1yr = Column(Float, nullable=True)
+    fcf_ccm_2yr = Column(Float, nullable=True)
+    fcf_ccm_3yr = Column(Float, nullable=True)
+    fcf_street_minus1yr = Column(Float, nullable=True)
+    fcf_street_1yr = Column(Float, nullable=True)
+    fcf_street_2yr = Column(Float, nullable=True)
+    fcf_street_3yr = Column(Float, nullable=True)
+
+    # Timestamp for cache freshness
+    data_as_of = Column(DateTime, nullable=True)
+    last_refreshed = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    coverage = relationship("ActiveCoverage")
+
+
+class CoverageDocument(Base):
+    """Documents associated with coverage items"""
+    __tablename__ = "coverage_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_id = Column(Integer, ForeignKey("active_coverage.id"), nullable=False, index=True)
+    file_name = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_type = Column(String, nullable=True)
+    file_size = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+    coverage = relationship("ActiveCoverage", back_populates="documents")
+
+
+class CoverageModelSnapshot(Base):
+    """Snapshots of model data for version tracking and diff comparison"""
+    __tablename__ = "coverage_model_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    coverage_id = Column(Integer, ForeignKey("active_coverage.id"), nullable=False, index=True)
+
+    # Snapshot metadata
+    snapshot_name = Column(String, nullable=True)  # Optional name for the snapshot
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Key metrics to track changes
+    ccm_fair_value = Column(Float, nullable=True)
+    street_price_target = Column(Float, nullable=True)
+    irr_3yr = Column(Float, nullable=True)
+
+    # Revenue forecasts
+    revenue_ccm_1yr = Column(Float, nullable=True)
+    revenue_ccm_2yr = Column(Float, nullable=True)
+    revenue_ccm_3yr = Column(Float, nullable=True)
+
+    # EBITDA forecasts
+    ebitda_ccm_1yr = Column(Float, nullable=True)
+    ebitda_ccm_2yr = Column(Float, nullable=True)
+    ebitda_ccm_3yr = Column(Float, nullable=True)
+
+    # FCF forecasts
+    fcf_ccm_1yr = Column(Float, nullable=True)
+    fcf_ccm_2yr = Column(Float, nullable=True)
+    fcf_ccm_3yr = Column(Float, nullable=True)
+
+    # EPS forecasts
+    eps_ccm_1yr = Column(Float, nullable=True)
+    eps_ccm_2yr = Column(Float, nullable=True)
+    eps_ccm_3yr = Column(Float, nullable=True)
+
+    coverage = relationship("ActiveCoverage", back_populates="snapshots")
+
+
+class IdeaPipeline(Base):
+    """Idea Pipeline - tracks research ideas before they become active coverage"""
+    __tablename__ = "idea_pipeline"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, nullable=False, unique=True, index=True)
+    primary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    secondary_analyst_id = Column(Integer, ForeignKey("analysts.id"), nullable=True)
+    # OneDrive/SharePoint path or local path to Excel model
+    model_path = Column(String, nullable=True)
+    # OneDrive share link for opening in browser
+    model_share_link = Column(String, nullable=True)
+
+    # Research Pipeline checkboxes
+    initial_review_complete = Column(Boolean, default=False)
+    deep_dive_complete = Column(Boolean, default=False)
+    model_complete = Column(Boolean, default=False)
+    writeup_complete = Column(Boolean, default=False)
+
+    # Research content
+    thesis = Column(Text, nullable=True)
+    next_steps = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    primary_analyst = relationship("Analyst", foreign_keys=[primary_analyst_id])
+    secondary_analyst = relationship("Analyst", foreign_keys=[secondary_analyst_id])
+    documents = relationship("IdeaPipelineDocument", back_populates="idea", cascade="all, delete-orphan")
+
+
+class IdeaPipelineModelData(Base):
+    """Cached data extracted from Excel models' API tabs for idea pipeline"""
+    __tablename__ = "idea_pipeline_model_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    idea_id = Column(Integer, ForeignKey("idea_pipeline.id"), nullable=False, index=True)
+
+    # IRR and Valuation (from cells E11, E13, E14)
+    irr_3yr = Column(Float, nullable=True)
+    ccm_fair_value = Column(Float, nullable=True)
+    street_price_target = Column(Float, nullable=True)
+
+    # Revenue data
+    revenue_ccm_minus1yr = Column(Float, nullable=True)
+    revenue_ccm_1yr = Column(Float, nullable=True)
+    revenue_ccm_2yr = Column(Float, nullable=True)
+    revenue_ccm_3yr = Column(Float, nullable=True)
+    revenue_street_minus1yr = Column(Float, nullable=True)
+    revenue_street_1yr = Column(Float, nullable=True)
+    revenue_street_2yr = Column(Float, nullable=True)
+    revenue_street_3yr = Column(Float, nullable=True)
+
+    # EBITDA data
+    ebitda_ccm_minus1yr = Column(Float, nullable=True)
+    ebitda_ccm_1yr = Column(Float, nullable=True)
+    ebitda_ccm_2yr = Column(Float, nullable=True)
+    ebitda_ccm_3yr = Column(Float, nullable=True)
+    ebitda_street_minus1yr = Column(Float, nullable=True)
+    ebitda_street_1yr = Column(Float, nullable=True)
+    ebitda_street_2yr = Column(Float, nullable=True)
+    ebitda_street_3yr = Column(Float, nullable=True)
+
+    # EPS data
+    eps_ccm_minus1yr = Column(Float, nullable=True)
+    eps_ccm_1yr = Column(Float, nullable=True)
+    eps_ccm_2yr = Column(Float, nullable=True)
+    eps_ccm_3yr = Column(Float, nullable=True)
+    eps_street_minus1yr = Column(Float, nullable=True)
+    eps_street_1yr = Column(Float, nullable=True)
+    eps_street_2yr = Column(Float, nullable=True)
+    eps_street_3yr = Column(Float, nullable=True)
+
+    # FCF data
+    fcf_ccm_minus1yr = Column(Float, nullable=True)
+    fcf_ccm_1yr = Column(Float, nullable=True)
+    fcf_ccm_2yr = Column(Float, nullable=True)
+    fcf_ccm_3yr = Column(Float, nullable=True)
+    fcf_street_minus1yr = Column(Float, nullable=True)
+    fcf_street_1yr = Column(Float, nullable=True)
+    fcf_street_2yr = Column(Float, nullable=True)
+    fcf_street_3yr = Column(Float, nullable=True)
+
+    # Timestamp for cache freshness
+    data_as_of = Column(DateTime, nullable=True)
+    last_refreshed = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    idea = relationship("IdeaPipeline")
+
+
+class IdeaPipelineDocument(Base):
+    """Documents (PDFs, Word files) attached to idea pipeline items"""
+    __tablename__ = "idea_pipeline_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    idea_id = Column(Integer, ForeignKey("idea_pipeline.id"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_type = Column(String, nullable=True)  # pdf, docx, etc.
+    file_size = Column(Integer, nullable=True)  # bytes
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    idea = relationship("IdeaPipeline", back_populates="documents")
+    uploaded_by = relationship("User")
+
+
+# ============== Tax Optimization Models ==============
+
+class TaxLot(Base):
+    """Individual tax lots tracking cost basis for positions"""
+    __tablename__ = "tax_lots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+    purchase_date = Column(Date, nullable=False, index=True)
+    purchase_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    import_log_id = Column(Integer, ForeignKey("tax_lot_import_logs.id"), nullable=True, index=True)
+
+    # Original lot info
+    original_shares = Column(Float, nullable=False)
+    cost_basis_per_share = Column(Float, nullable=False)
+    total_cost_basis = Column(Float, nullable=False)
+
+    # Current state (after partial sales)
+    remaining_shares = Column(Float, nullable=False)
+    remaining_cost_basis = Column(Float, nullable=False)
+
+    # Market value snapshot (from import)
+    market_value = Column(Float, nullable=True)
+    short_term_gain_loss = Column(Float, nullable=True)
+    long_term_gain_loss = Column(Float, nullable=True)
+    total_gain_loss = Column(Float, nullable=True)
+
+    # Status
+    is_closed = Column(Boolean, default=False, index=True)
+    closed_date = Column(Date, nullable=True)
+
+    # Wash sale adjustments
+    wash_sale_adjustment = Column(Float, default=0.0)
+    wash_sale_disallowed_loss = Column(Float, default=0.0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("Account")
+    security = relationship("Security")
+    purchase_transaction = relationship("Transaction")
+    import_log = relationship("TaxLotImportLog")
+
+
+class RealizedGain(Base):
+    """Record of realized gains/losses from sales"""
+    __tablename__ = "realized_gains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+    tax_lot_id = Column(Integer, ForeignKey("tax_lots.id"), nullable=False, index=True)
+    sale_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+
+    sale_date = Column(Date, nullable=False, index=True)
+    purchase_date = Column(Date, nullable=False)
+
+    shares_sold = Column(Float, nullable=False)
+    sale_price_per_share = Column(Float, nullable=False)
+    cost_basis_per_share = Column(Float, nullable=False)
+
+    proceeds = Column(Float, nullable=False)
+    cost_basis = Column(Float, nullable=False)
+    gain_loss = Column(Float, nullable=False)  # Proceeds - Cost Basis
+
+    # Tax classification
+    is_short_term = Column(Boolean, nullable=False)  # < 1 year holding
+    holding_period_days = Column(Integer, nullable=False)
+
+    # Wash sale info
+    is_wash_sale = Column(Boolean, default=False)
+    wash_sale_disallowed = Column(Float, default=0.0)
+    adjusted_gain_loss = Column(Float, nullable=False)  # After wash sale adjustment
+
+    tax_year = Column(Integer, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("Account")
+    security = relationship("Security")
+    tax_lot = relationship("TaxLot")
+    sale_transaction = relationship("Transaction")
+
+
+class WashSaleViolation(Base):
+    """Track wash sale violations for IRS reporting"""
+    __tablename__ = "wash_sale_violations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+
+    # The loss sale
+    loss_sale_date = Column(Date, nullable=False)
+    loss_sale_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    loss_amount = Column(Float, nullable=False)
+
+    # The replacement purchase (within 30 days before/after)
+    replacement_date = Column(Date, nullable=False)
+    replacement_transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    replacement_shares = Column(Float, nullable=False)
+
+    # Disallowed loss (full or partial)
+    disallowed_loss = Column(Float, nullable=False)
+    shares_affected = Column(Float, nullable=False)
+
+    # The tax lot that gets the basis adjustment
+    adjusted_lot_id = Column(Integer, ForeignKey("tax_lots.id"), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("Account")
+    security = relationship("Security")
+    loss_transaction = relationship("Transaction", foreign_keys=[loss_sale_transaction_id])
+    replacement_transaction = relationship("Transaction", foreign_keys=[replacement_transaction_id])
+    adjusted_lot = relationship("TaxLot")
+
+
+# ==================== HISTORICAL INCEPTION MODELS ====================
+
+class AccountInception(Base):
+    """
+    Stores the starting portfolio snapshot for an account at a specific date.
+    This allows calculating returns from a historical inception date rather
+    than from the first transaction.
+    """
+    __tablename__ = "account_inceptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    inception_date = Column(Date, nullable=False)
+    total_value = Column(Float)  # Total portfolio value at inception (calculated from positions)
+    notes = Column(Text)  # Optional notes about the inception
+    import_log_id = Column(Integer, ForeignKey("import_logs.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("Account", back_populates="inception")
+    positions = relationship("InceptionPosition", back_populates="inception", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('account_id', name='uq_inception_account'),
+    )
+
+
+class InceptionPosition(Base):
+    """
+    Individual security positions at the inception date.
+    These serve as the starting point for position calculations.
+    """
+    __tablename__ = "inception_positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    inception_id = Column(Integer, ForeignKey("account_inceptions.id"), nullable=False, index=True)
+    security_id = Column(Integer, ForeignKey("securities.id"), nullable=False, index=True)
+    shares = Column(Float, nullable=False)
+    price = Column(Float)  # Price at inception date
+    market_value = Column(Float)  # Market value at inception (shares * price)
+    cost_basis = Column(Float)  # Optional: for informational purposes (tax lots separate)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    inception = relationship("AccountInception", back_populates="positions")
+    security = relationship("Security")
+
+    __table_args__ = (
+        UniqueConstraint('inception_id', 'security_id', name='uq_inception_position_security'),
     )

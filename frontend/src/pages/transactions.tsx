@@ -4,6 +4,29 @@ import { api } from '@/lib/api';
 import { format } from 'date-fns';
 import Select from 'react-select';
 
+const selectStyles = {
+  control: (base: any, state: any) => ({
+    ...base,
+    borderColor: state.isFocused ? '#3b82f6' : '#e4e4e7',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(59, 130, 246, 0.1)' : 'none',
+    borderRadius: '0.5rem',
+    minHeight: '42px',
+    '&:hover': { borderColor: '#a1a1aa' },
+  }),
+  option: (base: any, state: any) => ({
+    ...base,
+    backgroundColor: state.isSelected ? '#3b82f6' : state.isFocused ? '#f4f4f5' : 'white',
+    color: state.isSelected ? 'white' : '#27272a',
+    padding: '8px 12px',
+  }),
+  menu: (base: any) => ({
+    ...base,
+    borderRadius: '0.5rem',
+    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+    border: '1px solid #e4e4e7',
+  }),
+};
+
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -146,20 +169,22 @@ export default function TransactionsPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="card">
-          <h1 className="text-2xl font-bold mb-2">Transaction Management</h1>
-          <p className="text-gray-600">
-            View, filter, and delete transactions. All deletions automatically recompute analytics across all levels (account, group, firm).
+        {/* Page Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-900">Transaction Management</h1>
+          <p className="text-sm text-zinc-500 mt-1">
+            View, filter, and delete transactions. All deletions automatically recompute analytics across all levels.
           </p>
         </div>
 
         {/* Filters */}
         <div className="card">
-          <h2 className="text-lg font-semibold mb-4">Filters</h2>
+          <div className="card-header">
+            <h2 className="card-title">Filters</h2>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Account</label>
+              <label className="label">Account</label>
               <Select
                 options={accountOptions}
                 value={accountOptions.find(o => o.value === selectedAccount)}
@@ -167,13 +192,14 @@ export default function TransactionsPage() {
                   setSelectedAccount(option?.value || null);
                   setOffset(0);
                 }}
+                styles={selectStyles}
                 isClearable
                 placeholder="All accounts..."
                 className="w-full"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Symbol</label>
+              <label className="label">Symbol</label>
               <input
                 type="text"
                 value={symbolFilter}
@@ -182,7 +208,7 @@ export default function TransactionsPage() {
                   setOffset(0);
                 }}
                 placeholder="Filter by symbol (e.g., AAPL)"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                className="input"
               />
             </div>
           </div>
@@ -191,8 +217,11 @@ export default function TransactionsPage() {
             <div className="flex gap-2 items-center">
               <button
                 onClick={loadTransactions}
-                className="btn-primary"
+                className="btn btn-secondary"
               >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
                 Refresh
               </button>
               {selectedAccount && (
@@ -202,14 +231,14 @@ export default function TransactionsPage() {
                     selectedAccount.account_number,
                     selectedAccount.transaction_count
                   )}
-                  className="btn-danger"
+                  className="btn btn-danger"
                 >
-                  Delete All Transactions for {selectedAccount.account_number}
+                  Delete All for {selectedAccount.account_number}
                 </button>
               )}
             </div>
-            <div className="text-sm text-gray-600">
-              Total: {totalCount} transactions
+            <div className="text-sm text-zinc-500">
+              Total: <span className="font-medium text-zinc-700">{totalCount.toLocaleString()}</span> transactions
             </div>
           </div>
         </div>
@@ -223,7 +252,7 @@ export default function TransactionsPage() {
               </div>
               <button
                 onClick={handleBulkDelete}
-                className="btn-danger"
+                className="btn btn-danger"
               >
                 Delete Selected
               </button>
@@ -232,21 +261,37 @@ export default function TransactionsPage() {
         )}
 
         {/* Transactions Table */}
-        <div className="card">
-          <h2 className="text-lg font-semibold mb-4">
-            Transactions
-            <span className="text-sm font-normal text-gray-600 ml-2">
-              (Page {currentPage} of {totalPages})
-            </span>
-          </h2>
+        <div className="card p-0 overflow-hidden">
+          <div className="px-6 py-4 border-b border-zinc-100">
+            <h2 className="text-base font-semibold text-zinc-900">
+              Transactions
+              <span className="text-sm font-normal text-zinc-500 ml-2">
+                (Page {currentPage} of {totalPages || 1})
+              </span>
+            </h2>
+          </div>
 
           {loading ? (
-            <div className="text-center py-8">Loading transactions...</div>
+            <div className="flex items-center justify-center py-12">
+              <div className="flex items-center gap-3 text-zinc-500">
+                <svg className="loading-spinner" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span>Loading transactions...</span>
+              </div>
+            </div>
           ) : transactions.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">No transactions found</div>
+            <div className="empty-state py-12">
+              <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              <p className="empty-state-title">No transactions found</p>
+              <p className="empty-state-description">Try adjusting your filters.</p>
+            </div>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              <div className="table-container mx-0">
                 <table className="table">
                   <thead>
                     <tr>
@@ -255,7 +300,7 @@ export default function TransactionsPage() {
                           type="checkbox"
                           checked={selectAll}
                           onChange={toggleSelectAll}
-                          className="rounded"
+                          className="rounded border-zinc-300"
                         />
                       </th>
                       <th>Date</th>
@@ -266,47 +311,47 @@ export default function TransactionsPage() {
                       <th className="text-right">Quantity</th>
                       <th className="text-right">Price</th>
                       <th className="text-right">Amount</th>
-                      <th>Actions</th>
+                      <th className="text-center">Actions</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="tabular-nums">
                     {transactions.map((txn) => (
-                      <tr key={txn.id} className={selectedTransactions.has(txn.id) ? 'bg-blue-50' : ''}>
+                      <tr key={txn.id} className={selectedTransactions.has(txn.id) ? 'bg-blue-50/50' : ''}>
                         <td>
                           <input
                             type="checkbox"
                             checked={selectedTransactions.has(txn.id)}
                             onChange={() => toggleTransaction(txn.id)}
-                            className="rounded"
+                            className="rounded border-zinc-300"
                           />
                         </td>
-                        <td className="whitespace-nowrap">
+                        <td className="whitespace-nowrap text-zinc-600">
                           {format(new Date(txn.trade_date), 'MMM d, yyyy')}
                         </td>
                         <td className="whitespace-nowrap">
                           <div className="text-sm">
-                            <div className="font-medium">{txn.account_number}</div>
-                            <div className="text-gray-500 text-xs">{txn.account_name}</div>
+                            <div className="font-medium text-zinc-900">{txn.account_number}</div>
+                            <div className="text-zinc-500 text-xs">{txn.account_name}</div>
                           </div>
                         </td>
-                        <td className="font-semibold">{txn.symbol}</td>
-                        <td className="max-w-xs truncate">{txn.asset_name}</td>
+                        <td className="font-semibold text-zinc-900">{txn.symbol}</td>
+                        <td className="max-w-xs truncate text-zinc-600">{txn.asset_name}</td>
                         <td>
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            txn.transaction_type === 'BUY' ? 'bg-green-100 text-green-800' :
-                            txn.transaction_type === 'SELL' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
+                          <span className={`badge ${
+                            txn.transaction_type === 'BUY' ? 'badge-success' :
+                            txn.transaction_type === 'SELL' ? 'badge-danger' :
+                            'badge-neutral'
                           }`}>
                             {txn.transaction_type}
                           </span>
                         </td>
                         <td className="text-right">{txn.quantity.toFixed(4)}</td>
                         <td className="text-right">{formatCurrency(txn.price)}</td>
-                        <td className="text-right">{formatCurrency(txn.amount)}</td>
-                        <td>
+                        <td className="text-right font-medium">{formatCurrency(txn.amount)}</td>
+                        <td className="text-center">
                           <button
                             onClick={() => handleDeleteTransaction(txn.id, txn.symbol, txn.account_number)}
-                            className="text-red-600 hover:text-red-800 text-sm font-medium"
+                            className="btn btn-ghost btn-xs text-red-600 hover:text-red-700"
                           >
                             Delete
                           </button>
@@ -318,22 +363,22 @@ export default function TransactionsPage() {
               </div>
 
               {/* Pagination */}
-              <div className="mt-4 flex justify-between items-center">
-                <div className="text-sm text-gray-600">
-                  Showing {offset + 1} to {Math.min(offset + limit, totalCount)} of {totalCount}
+              <div className="px-6 py-4 border-t border-zinc-100 flex justify-between items-center">
+                <div className="text-sm text-zinc-500">
+                  Showing {offset + 1} to {Math.min(offset + limit, totalCount)} of {totalCount.toLocaleString()}
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setOffset(Math.max(0, offset - limit))}
                     disabled={offset === 0}
-                    className="px-3 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="btn btn-secondary btn-sm"
                   >
                     Previous
                   </button>
                   <button
                     onClick={() => setOffset(offset + limit)}
                     disabled={offset + limit >= totalCount}
-                    className="px-3 py-1 border rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="btn btn-secondary btn-sm"
                   >
                     Next
                   </button>

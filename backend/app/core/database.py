@@ -1,7 +1,10 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 engine = create_engine(
     settings.DATABASE_URL,
@@ -23,6 +26,138 @@ def get_db():
         db.close()
 
 
+def update_enum_values():
+    """Update PostgreSQL enum types with new values.
+
+    This handles the case where new enum values are added in Python code
+    but the database enum type was created before those values existed.
+    """
+    enum_updates = [
+        # (enum_type_name, new_value)
+        # Note: PostgreSQL enum uses UPPERCASE values (STOOQ, FRED, etc.)
+        ("factordatasource", "TIINGO"),
+    ]
+
+    with engine.connect() as conn:
+        for enum_type, new_value in enum_updates:
+            try:
+                # Check if the enum type exists
+                result = conn.execute(text(
+                    "SELECT 1 FROM pg_type WHERE typname = :enum_type"
+                ), {"enum_type": enum_type})
+
+                if result.fetchone():
+                    # Check if the value already exists in the enum
+                    result = conn.execute(text(f"""
+                        SELECT enumlabel FROM pg_enum
+                        JOIN pg_type ON pg_enum.enumtypid = pg_type.oid
+                        WHERE pg_type.typname = :enum_type
+                    """), {"enum_type": enum_type})
+                    existing_values = [row[0] for row in result.fetchall()]
+
+                    if new_value not in existing_values:
+                        # Add the new value to the enum
+                        # Note: ALTER TYPE ADD VALUE cannot be parameterized, so we use f-string
+                        # but validate the inputs are safe (alphanumeric only)
+                        if enum_type.isalnum() and new_value.replace('_', '').isalnum():
+                            conn.execute(text(
+                                f"ALTER TYPE {enum_type} ADD VALUE IF NOT EXISTS '{new_value}'"
+                            ))
+                            conn.commit()
+                            logger.info(f"Added '{new_value}' to enum type '{enum_type}'")
+                    else:
+                        logger.debug(f"Value '{new_value}' already exists in enum '{enum_type}'")
+            except Exception as e:
+                # Log but don't fail - the enum might not exist yet
+                logger.debug(f"Could not update enum {enum_type}: {e}")
+
+
+def run_migrations():
+    """Run database migrations for adding new columns to existing tables."""
+    migrations = [
+        # Active Coverage new columns
+        ("active_coverage", "model_updated", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS model_updated BOOLEAN DEFAULT false"),
+        ("active_coverage", "thesis", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS thesis TEXT"),
+        ("active_coverage", "bull_case", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS bull_case TEXT"),
+        ("active_coverage", "bear_case", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS bear_case TEXT"),
+        ("active_coverage", "alert", "ALTER TABLE active_coverage ADD COLUMN IF NOT EXISTS alert TEXT"),
+    ]
+
+    # New tables to create
+    new_tables = [
+        """
+        CREATE TABLE IF NOT EXISTS coverage_documents (
+            id SERIAL PRIMARY KEY,
+            coverage_id INTEGER NOT NULL REFERENCES active_coverage(id) ON DELETE CASCADE,
+            file_name VARCHAR NOT NULL,
+            file_path VARCHAR NOT NULL,
+            file_type VARCHAR,
+            file_size INTEGER,
+            description TEXT,
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS coverage_model_snapshots (
+            id SERIAL PRIMARY KEY,
+            coverage_id INTEGER NOT NULL REFERENCES active_coverage(id) ON DELETE CASCADE,
+            snapshot_name VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ccm_fair_value FLOAT,
+            street_price_target FLOAT,
+            irr_3yr FLOAT,
+            revenue_ccm_1yr FLOAT,
+            revenue_ccm_2yr FLOAT,
+            revenue_ccm_3yr FLOAT,
+            ebitda_ccm_1yr FLOAT,
+            ebitda_ccm_2yr FLOAT,
+            ebitda_ccm_3yr FLOAT,
+            fcf_ccm_1yr FLOAT,
+            fcf_ccm_2yr FLOAT,
+            fcf_ccm_3yr FLOAT,
+            eps_ccm_1yr FLOAT,
+            eps_ccm_2yr FLOAT,
+            eps_ccm_3yr FLOAT
+        )
+        """,
+        # Create indexes for the new tables
+        "CREATE INDEX IF NOT EXISTS idx_coverage_documents_coverage_id ON coverage_documents(coverage_id)",
+        "CREATE INDEX IF NOT EXISTS idx_coverage_model_snapshots_coverage_id ON coverage_model_snapshots(coverage_id)",
+    ]
+
+    with engine.connect() as conn:
+        # Run column migrations
+        for table, column, sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                logger.info(f"Migration: Added column {column} to {table}")
+            except Exception as e:
+                logger.debug(f"Migration skipped for {table}.{column}: {e}")
+
+        # Create new tables
+        for sql in new_tables:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                logger.info(f"Migration: Executed table creation/index")
+            except Exception as e:
+                logger.debug(f"Migration skipped: {e}")
+
+
 def init_db():
-    """Initialize database - create all tables"""
+    """Initialize database - create all tables and update enums"""
+    # First create all tables
     Base.metadata.create_all(bind=engine)
+
+    # Run migrations for adding new columns to existing tables
+    try:
+        run_migrations()
+    except Exception as e:
+        logger.warning(f"Could not run migrations: {e}")
+
+    # Then update any enum types with new values
+    try:
+        update_enum_values()
+    except Exception as e:
+        logger.warning(f"Could not update enum values: {e}")

@@ -1,4 +1,5 @@
 import asyncio
+from typing import Dict, Any
 from sqlalchemy.orm import Session
 from datetime import date
 from app.core.database import SessionLocal
@@ -10,22 +11,223 @@ from app.services.benchmarks import BenchmarksEngine
 from app.services.baskets import BasketsEngine
 from app.services.factors import FactorsEngine
 from app.services.risk import RiskEngine
+from app.services.data_sourcing import BenchmarkService, ClassificationService
 from app.models import (
     Account, Group, ViewType, Transaction,
     PositionsEOD, PortfolioValueEOD, ReturnsEOD, RiskEOD,
-    BenchmarkMetric, FactorRegression
+    BenchmarkMetric, FactorRegression, AccountInception, InceptionPosition
 )
+from app.models.sector_models import BenchmarkConstituent, SectorClassification
+from sqlalchemy import func
+from datetime import date, datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
 
+# Flag to enable new incremental update system
+USE_INCREMENTAL_UPDATES = True
+
+# Cache freshness threshold in hours - skip refresh if data is newer than this
+DATA_FRESHNESS_HOURS = 12
+
+
+def is_benchmark_data_fresh(db: Session, benchmark_code: str = "SP500") -> bool:
+    """
+    Check if benchmark constituent data is fresh AND has adequate data.
+    Returns True if data is recent AND has enough constituents.
+    """
+    latest_update = db.query(func.max(BenchmarkConstituent.updated_at)).filter(
+        BenchmarkConstituent.benchmark_code == benchmark_code
+    ).scalar()
+
+    if not latest_update:
+        logger.info(f"No benchmark data found for {benchmark_code} - needs refresh")
+        return False
+
+    age_hours = (datetime.utcnow() - latest_update).total_seconds() / 3600
+
+    if age_hours >= DATA_FRESHNESS_HOURS:
+        logger.info(f"Benchmark {benchmark_code} data is stale ({age_hours:.1f}h old) - will refresh")
+        return False
+
+    # Check we have adequate constituent count (S&P 500 should have ~500)
+    constituent_count = db.query(func.count(BenchmarkConstituent.id)).filter(
+        BenchmarkConstituent.benchmark_code == benchmark_code
+    ).scalar() or 0
+
+    if constituent_count < 400:  # S&P 500 should have ~500
+        logger.info(f"Benchmark {benchmark_code} has too few constituents ({constituent_count}) - will refresh")
+        return False
+
+    logger.info(f"Benchmark {benchmark_code} data is fresh ({age_hours:.1f}h old, {constituent_count} constituents) - skipping refresh")
+    return True
+
+
+def is_classification_data_fresh(db: Session) -> bool:
+    """
+    Check if classification data is fresh AND complete.
+    Returns True only if data is recent AND covers most securities.
+    """
+    from app.models import Security
+
+    latest_update = db.query(func.max(SectorClassification.updated_at)).scalar()
+
+    if not latest_update:
+        logger.info("No classification data found - needs refresh")
+        return False
+
+    age_hours = (datetime.utcnow() - latest_update).total_seconds() / 3600
+
+    if age_hours >= DATA_FRESHNESS_HOURS:
+        logger.info(f"Classification data is stale ({age_hours:.1f}h old) - will refresh")
+        return False
+
+    # Also check coverage - ensure we have classifications for most securities
+    total_securities = db.query(func.count(Security.id)).scalar() or 0
+    classified_securities = db.query(func.count(SectorClassification.id)).scalar() or 0
+
+    if total_securities > 0:
+        coverage = classified_securities / total_securities
+        if coverage < 0.5:  # Less than 50% coverage
+            logger.info(f"Classification coverage too low ({coverage:.1%}) - will refresh")
+            return False
+
+    logger.info(f"Classification data is fresh ({age_hours:.1f}h old, {classified_securities}/{total_securities} securities) - skipping refresh")
+    return True
+
+
+def cleanup_orphaned_data(db: Session, delete_accounts: bool = False, delete_securities: bool = False) -> Dict[str, Any]:
+    """
+    Clean up orphaned data after transaction deletions.
+
+    Args:
+        db: Database session
+        delete_accounts: If True, delete Account records with no transactions
+        delete_securities: If True, delete Security records with no transactions
+
+    Returns:
+        Summary of cleanup operations
+    """
+    from app.models import Security, PricesEOD
+    from app.models.update_tracking import TickerProviderCoverage, DataUpdateState
+
+    logger.info("Starting orphaned data cleanup...")
+
+    results = {
+        'accounts_cleared': 0,
+        'accounts_deleted': 0,
+        'securities_deleted': 0,
+        'prices_deleted': 0,
+        'provider_coverage_deleted': 0,
+        'update_state_deleted': 0
+    }
+
+    # Get account IDs that have transactions
+    accounts_with_txns = set([
+        txn.account_id for txn in db.query(Transaction.account_id).distinct().all()
+    ])
+
+    # Get account IDs that have inception data (these are NOT orphaned)
+    accounts_with_inception = set([
+        inc.account_id for inc in db.query(AccountInception.account_id).all()
+    ])
+
+    # Get all account IDs
+    all_account_ids = [acc.id for acc in db.query(Account.id).all()]
+
+    # Find truly orphaned accounts (no transactions AND no inception data)
+    orphaned_account_ids = [
+        acc_id for acc_id in all_account_ids
+        if acc_id not in accounts_with_txns and acc_id not in accounts_with_inception
+    ]
+
+    if orphaned_account_ids:
+        logger.info(f"Found {len(orphaned_account_ids)} orphaned accounts (no transactions or inception)")
+
+        # Always clear analytics for orphaned accounts
+        clear_analytics_for_accounts_without_transactions(db)
+        results['accounts_cleared'] = len(orphaned_account_ids)
+
+        # Optionally delete account records
+        if delete_accounts:
+            deleted = db.query(Account).filter(
+                Account.id.in_(orphaned_account_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            results['accounts_deleted'] = deleted
+            logger.info(f"Deleted {deleted} orphaned account records")
+
+    # Get security IDs that have transactions
+    securities_with_txns = set([
+        txn.security_id for txn in db.query(Transaction.security_id).distinct().all()
+        if txn.security_id is not None
+    ])
+
+    # Get security IDs that have inception positions (these should not be deleted)
+    securities_with_inception = set([
+        pos.security_id for pos in db.query(InceptionPosition.security_id).distinct().all()
+    ])
+
+    # Get all security IDs (excluding ETFs used for benchmarks/factors)
+    benchmark_etf_symbols = ['SPY', 'QQQ', 'DIA', 'IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM', 'USMV']
+    all_securities = db.query(Security.id, Security.symbol).all()
+
+    # Find orphaned securities (not used in transactions, not in inception, and not benchmark/factor ETFs)
+    orphaned_security_ids = [
+        sec.id for sec in all_securities
+        if sec.id not in securities_with_txns
+        and sec.id not in securities_with_inception
+        and sec.symbol not in benchmark_etf_symbols
+    ]
+
+    if orphaned_security_ids and delete_securities:
+        logger.info(f"Found {len(orphaned_security_ids)} orphaned securities")
+
+        # Delete prices for orphaned securities
+        prices_deleted = db.query(PricesEOD).filter(
+            PricesEOD.security_id.in_(orphaned_security_ids)
+        ).delete(synchronize_session=False)
+        results['prices_deleted'] = prices_deleted
+
+        # Delete provider coverage for orphaned securities
+        orphaned_symbols = [sec.symbol for sec in all_securities if sec.id in orphaned_security_ids]
+        if orphaned_symbols:
+            try:
+                coverage_deleted = db.query(TickerProviderCoverage).filter(
+                    TickerProviderCoverage.symbol.in_(orphaned_symbols)
+                ).delete(synchronize_session=False)
+                results['provider_coverage_deleted'] = coverage_deleted
+            except Exception:
+                pass
+
+            try:
+                state_deleted = db.query(DataUpdateState).filter(
+                    DataUpdateState.entity_id.in_(orphaned_symbols)
+                ).delete(synchronize_session=False)
+                results['update_state_deleted'] = state_deleted
+            except Exception:
+                pass
+
+        # Delete security records
+        securities_deleted = db.query(Security).filter(
+            Security.id.in_(orphaned_security_ids)
+        ).delete(synchronize_session=False)
+        results['securities_deleted'] = securities_deleted
+
+        db.commit()
+        logger.info(f"Deleted {securities_deleted} orphaned securities and {prices_deleted} price records")
+
+    logger.info(f"Orphaned data cleanup complete: {results}")
+    return results
+
 
 def clear_analytics_for_accounts_without_transactions(db: Session):
     """
-    Clear all analytics data for accounts that have no transactions.
+    Clear all analytics data for accounts that have no transactions AND no inception data.
     This handles the case where all transactions for an account were deleted.
+    Accounts with inception data are preserved since they have valid starting positions.
     """
-    logger.info("Clearing analytics for accounts without transactions...")
+    logger.info("Clearing analytics for accounts without transactions or inception data...")
 
     # Get all account IDs
     all_account_ids = [acc.id for acc in db.query(Account.id).all()]
@@ -35,8 +237,16 @@ def clear_analytics_for_accounts_without_transactions(db: Session):
         txn.account_id for txn in db.query(Transaction.account_id).distinct().all()
     ])
 
-    # Find accounts with no transactions
-    accounts_to_clear = [acc_id for acc_id in all_account_ids if acc_id not in accounts_with_txns]
+    # Get account IDs that have inception data
+    accounts_with_inception = set([
+        inc.account_id for inc in db.query(AccountInception.account_id).all()
+    ])
+
+    # Find accounts with no transactions AND no inception data
+    accounts_to_clear = [
+        acc_id for acc_id in all_account_ids
+        if acc_id not in accounts_with_txns and acc_id not in accounts_with_inception
+    ]
 
     if not accounts_to_clear:
         logger.info("No accounts without transactions found")
@@ -135,6 +345,29 @@ def clear_analytics_for_account(db: Session, account_id: int):
     logger.info(f"Analytics cleared for account {account_id}")
 
 
+def clear_all_returns(db: Session):
+    """
+    Clear ALL returns data for fresh recomputation.
+    Use this when the TWR index convention has changed.
+    """
+    logger.info("Clearing ALL returns data for fresh recomputation...")
+
+    # Clear all account returns
+    deleted_account_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type == ViewType.ACCOUNT
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_account_returns} account returns")
+
+    # Clear all group/firm returns
+    deleted_group_returns = db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+    logger.info(f"Deleted {deleted_group_returns} group/firm returns")
+
+    db.commit()
+    logger.info("All returns data cleared")
+
+
 def clear_group_and_firm_analytics(db: Session):
     """
     Clear all group and firm level analytics.
@@ -205,8 +438,9 @@ async def market_data_update_job(db: Session = None):
         factors_engine.ensure_style7_factor_set()
         factors_engine.ensure_factor_etfs_exist()
 
-        # Factor ETFs will be updated as part of security prices
-        # since they're in the Security table
+        # Update factor ETF prices from Tiingo
+        factor_etf_results = await market_data.update_factor_etf_prices()
+        logger.info(f"Factor ETF prices updated: {factor_etf_results}")
 
         logger.info("Market data fetched successfully")
 
@@ -224,7 +458,7 @@ async def market_data_update_job(db: Session = None):
             db.close()
 
 
-async def recompute_analytics_job(db: Session = None):
+async def recompute_analytics_job(db: Session = None, use_batch_service: bool = True):
     """
     Daily job to recompute analytics:
     0. Clear old analytics for accounts without transactions and all group/firm data
@@ -235,6 +469,10 @@ async def recompute_analytics_job(db: Session = None):
     5. Compute basket returns
     6. Compute factor returns and regressions
     7. Compute risk metrics
+
+    Args:
+        db: Database session
+        use_batch_service: Use optimized BatchAnalyticsService for steps 1-2 (default True)
     """
     close_db = False
     if db is None:
@@ -243,6 +481,7 @@ async def recompute_analytics_job(db: Session = None):
 
     try:
         logger.info("Starting analytics recomputation job")
+        logger.info(f"Using batch service: {use_batch_service}")
 
         as_of_date = date.today()
 
@@ -251,23 +490,56 @@ async def recompute_analytics_job(db: Session = None):
         clear_analytics_for_accounts_without_transactions(db)
         clear_group_and_firm_analytics(db)
 
-        # 1. Build positions
-        logger.info("Building positions...")
-        positions_engine = PositionsEngine(db)
-        positions_results = positions_engine.build_positions_for_all_accounts()
-        logger.info(f"Positions built: {positions_results}")
-
-        # 2. Compute account values and returns
-        logger.info("Computing account analytics...")
-        returns_engine = ReturnsEngine(db)
-        accounts = db.query(Account).all()
-
-        for account in accounts:
+        # 0.5. Refresh benchmark constituents (SP500 holdings for sector comparison)
+        # Only refresh if data is stale (older than DATA_FRESHNESS_HOURS)
+        if not is_benchmark_data_fresh(db, "SP500"):
+            logger.info("Refreshing benchmark constituents (SP500)...")
             try:
-                returns_engine.compute_portfolio_values_for_account(account.id)
-                returns_engine.compute_returns_for_account(account.id)
+                benchmark_service = BenchmarkService(db)
+                benchmark_refresh_result = await benchmark_service.refresh_benchmark("SP500")
+                logger.info(f"Benchmark constituents refresh: {benchmark_refresh_result}")
             except Exception as e:
-                logger.error(f"Failed to compute analytics for account {account.id}: {e}")
+                logger.error(f"Failed to refresh benchmark constituents: {e}")
+
+        # 0.6. Refresh security classifications
+        # Only refresh if data is stale (older than DATA_FRESHNESS_HOURS)
+        if not is_classification_data_fresh(db):
+            logger.info("Refreshing security classifications...")
+            try:
+                classification_service = ClassificationService(db)
+                classification_result = await classification_service.refresh_all_classifications()
+                logger.info(f"Classifications refresh: {classification_result}")
+            except Exception as e:
+                logger.error(f"Failed to refresh classifications: {e}")
+
+        # Steps 1 & 2: Build positions, compute values and returns
+        if use_batch_service:
+            # Use optimized batch service (bulk upserts, vectorized computation)
+            logger.info("Using BatchAnalyticsService for positions/values/returns...")
+            from app.services.analytics_batch import BatchAnalyticsService
+
+            batch_service = BatchAnalyticsService(db)
+            batch_result = batch_service.run_full_analytics()
+            logger.info(f"Batch analytics result: {batch_result}")
+        else:
+            # Legacy path (individual queries - slower but more tested)
+            # 1. Build positions
+            logger.info("Building positions (legacy)...")
+            positions_engine = PositionsEngine(db)
+            positions_results = positions_engine.build_positions_for_all_accounts()
+            logger.info(f"Positions built: {positions_results}")
+
+            # 2. Compute account values and returns
+            logger.info("Computing account analytics (legacy)...")
+            returns_engine = ReturnsEngine(db)
+            accounts = db.query(Account).all()
+
+            for account in accounts:
+                try:
+                    returns_engine.compute_portfolio_values_for_account(account.id)
+                    returns_engine.compute_returns_for_account(account.id)
+                except Exception as e:
+                    logger.error(f"Failed to compute analytics for account {account.id}: {e}")
 
         # 3. Compute groups and firm
         logger.info("Computing group rollups...")
@@ -282,8 +554,18 @@ async def recompute_analytics_job(db: Session = None):
         benchmark_results = benchmarks_engine.compute_all_benchmark_returns()
         logger.info(f"Benchmarks computed: {benchmark_results}")
 
-        # Compute benchmark metrics for all views
+        # Compute benchmark metrics for all views (accounts with transactions or inception data)
         logger.info("Computing benchmark metrics...")
+        from sqlalchemy import or_
+        accounts_with_txns = db.query(Transaction.account_id).distinct().subquery()
+        accounts_with_inception = db.query(AccountInception.account_id).distinct().subquery()
+        accounts = db.query(Account).filter(
+            or_(
+                Account.id.in_(accounts_with_txns),
+                Account.id.in_(accounts_with_inception)
+            )
+        ).all()
+        logger.info(f"Computing benchmark metrics for {len(accounts)} accounts")
         for account in accounts:
             for benchmark_code in ['SPY', 'QQQ', 'INDU']:
                 try:
@@ -316,7 +598,7 @@ async def recompute_analytics_job(db: Session = None):
         factor_returns_count = factors_engine.compute_factor_returns()
         logger.info(f"Factor returns computed: {factor_returns_count}")
 
-        # Compute factor regressions for all views
+        # Compute factor regressions for all views (accounts already filtered above)
         logger.info("Computing factor regressions...")
         for account in accounts:
             try:
@@ -345,6 +627,297 @@ async def recompute_analytics_job(db: Session = None):
     except Exception as e:
         logger.error(f"Analytics recomputation job failed: {e}", exc_info=True)
         raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def force_refresh_prices_job(db: Session = None):
+    """
+    Force refresh all price data from Tiingo.
+    Use this when prices are stale, corrupt, or need to be completely refreshed.
+    This will delete existing prices and re-fetch from Tiingo.
+    """
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Starting force refresh prices job")
+
+        market_data = MarketDataProvider(db)
+
+        # Force refresh security prices
+        logger.info("Force refreshing security prices...")
+        security_results = await market_data.update_all_security_prices(force_refresh=True)
+        logger.info(f"Security prices refreshed: {security_results}")
+
+        # Force refresh factor ETF prices
+        logger.info("Force refreshing factor ETF prices...")
+        factor_etf_results = await market_data.update_factor_etf_prices()
+        logger.info(f"Factor ETF prices refreshed: {factor_etf_results}")
+
+        # Update benchmark prices
+        logger.info("Updating benchmark prices...")
+        benchmark_results = await market_data.update_benchmark_prices()
+        logger.info(f"Benchmark prices updated: {benchmark_results}")
+
+        logger.info("Force refresh prices job completed successfully")
+
+        # Recompute analytics with fresh data
+        logger.info("Recomputing analytics with fresh prices...")
+        await recompute_analytics_job(db)
+
+    except Exception as e:
+        logger.error(f"Force refresh prices job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+# =============================================================================
+# NEW INCREMENTAL UPDATE SYSTEM
+# =============================================================================
+
+async def incremental_update_job(db: Session = None, force_refresh: bool = False):
+    """
+    New incremental update job using UpdateOrchestrator.
+
+    Features:
+    - Only fetches missing dates
+    - Smart provider selection with coverage tracking
+    - Dependency-aware analytics computation
+    - Comprehensive metrics and observability
+
+    Args:
+        db: Database session (optional)
+        force_refresh: If True, re-fetch all data ignoring cache
+
+    Returns:
+        UpdateMetrics with detailed statistics
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("=" * 60)
+        logger.info("Starting INCREMENTAL update job")
+        logger.info(f"Force refresh: {force_refresh}")
+        logger.info("=" * 60)
+
+        orchestrator = UpdateOrchestrator(db)
+        metrics = await orchestrator.run_full_update(force_refresh=force_refresh)
+
+        return metrics.to_dict()
+
+    except Exception as e:
+        logger.error(f"Incremental update job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def incremental_market_data_job(db: Session = None, force_refresh: bool = False):
+    """
+    Incremental market data update only (no analytics recomputation).
+    Use this for quick price updates without full analytics refresh.
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Starting incremental market data update")
+
+        orchestrator = UpdateOrchestrator(db)
+        metrics = await orchestrator.run_market_data_update(force_refresh=force_refresh)
+
+        return metrics.to_dict()
+
+    except Exception as e:
+        logger.error(f"Incremental market data job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def incremental_analytics_job(db: Session = None):
+    """
+    Incremental analytics update only (no data fetching).
+    Use this after manual data imports or price corrections.
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Starting incremental analytics update")
+
+        orchestrator = UpdateOrchestrator(db)
+        metrics = await orchestrator.run_analytics_update()
+
+        return metrics.to_dict()
+
+    except Exception as e:
+        logger.error(f"Incremental analytics job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+async def smart_update_job(db: Session = None):
+    """
+    Smart update that chooses the most efficient update strategy based on state.
+
+    - If no recent updates: full incremental update
+    - If prices are stale but analytics fresh: market data only
+    - If prices fresh but analytics stale: analytics only
+    - If everything fresh: skip
+    """
+    from app.services.update_orchestrator import UpdateOrchestrator
+    from app.models.update_tracking import UpdateJobRun
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        logger.info("Running smart update job")
+
+        # Check last successful run
+        last_run = db.query(UpdateJobRun).filter(
+            UpdateJobRun.status == 'completed'
+        ).order_by(UpdateJobRun.completed_at.desc()).first()
+
+        if last_run and last_run.completed_at:
+            hours_since_last = (datetime.utcnow() - last_run.completed_at).total_seconds() / 3600
+
+            if hours_since_last < 4:  # Less than 4 hours ago
+                logger.info(f"Last update was {hours_since_last:.1f}h ago - running quick update")
+                return await incremental_market_data_job(db)
+            elif hours_since_last < 12:
+                logger.info(f"Last update was {hours_since_last:.1f}h ago - running standard update")
+                return await incremental_update_job(db)
+
+        # Default: full update
+        logger.info("Running full incremental update")
+        return await incremental_update_job(db)
+
+    except Exception as e:
+        logger.error(f"Smart update job failed: {e}", exc_info=True)
+        raise
+    finally:
+        if close_db:
+            db.close()
+
+
+def get_update_status(db: Session = None) -> dict:
+    """
+    Get current update status and statistics.
+
+    Returns dict with:
+    - last_successful_run: timestamp and metrics
+    - pending_updates: count of entities needing update
+    - provider_health: status of each data provider
+    - computation_status: status of analytics computations
+    """
+    from app.models.update_tracking import (
+        UpdateJobRun, DataUpdateState, TickerProviderCoverage,
+        ComputationDependency, DataProviderStatus, ComputationStatus
+    )
+
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        status = {}
+
+        # Last successful run
+        last_run = db.query(UpdateJobRun).filter(
+            UpdateJobRun.status == 'completed'
+        ).order_by(UpdateJobRun.completed_at.desc()).first()
+
+        if last_run:
+            status['last_successful_run'] = {
+                'completed_at': last_run.completed_at.isoformat() if last_run.completed_at else None,
+                'tickers_updated': last_run.tickers_updated,
+                'rows_inserted': last_run.rows_inserted,
+                'duration_seconds': (
+                    (last_run.completed_at - last_run.started_at).total_seconds()
+                    if last_run.completed_at else None
+                )
+            }
+        else:
+            status['last_successful_run'] = None
+
+        # Provider health
+        provider_stats = {}
+        for provider in ['tiingo', 'stooq', 'yfinance']:
+            active = db.query(func.count(TickerProviderCoverage.id)).filter(
+                TickerProviderCoverage.provider == provider,
+                TickerProviderCoverage.status == DataProviderStatus.ACTIVE
+            ).scalar() or 0
+
+            failed = db.query(func.count(TickerProviderCoverage.id)).filter(
+                TickerProviderCoverage.provider == provider,
+                TickerProviderCoverage.status == DataProviderStatus.FAILED
+            ).scalar() or 0
+
+            provider_stats[provider] = {'active': active, 'failed': failed}
+
+        status['provider_health'] = provider_stats
+
+        # Computation status
+        comp_stats = {}
+        for comp_type in ['positions', 'returns', 'risk', 'factors']:
+            completed = db.query(func.count(ComputationDependency.id)).filter(
+                ComputationDependency.computation_type == comp_type,
+                ComputationDependency.status == ComputationStatus.COMPLETED
+            ).scalar() or 0
+
+            pending = db.query(func.count(ComputationDependency.id)).filter(
+                ComputationDependency.computation_type == comp_type,
+                ComputationDependency.status.in_([
+                    ComputationStatus.PENDING, ComputationStatus.FAILED
+                ])
+            ).scalar() or 0
+
+            comp_stats[comp_type] = {'completed': completed, 'pending': pending}
+
+        status['computation_status'] = comp_stats
+
+        # Securities needing update
+        today = date.today()
+        stale_count = db.query(func.count(DataUpdateState.id)).filter(
+            DataUpdateState.entity_type == 'security_price',
+            or_(
+                DataUpdateState.last_update_date < today - timedelta(days=1),
+                DataUpdateState.last_update_date.is_(None)
+            )
+        ).scalar() or 0
+
+        status['pending_price_updates'] = stale_count
+
+        return status
+
     finally:
         if close_db:
             db.close()
