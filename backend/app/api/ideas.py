@@ -163,8 +163,11 @@ def _build_idea_response(db: Session, idea: IdeaPipeline) -> dict:
         "model_complete": idea.model_complete,
         "writeup_complete": idea.writeup_complete,
         "thesis": idea.thesis,
+        "bull_case": getattr(idea, 'bull_case', None),
+        "bear_case": getattr(idea, 'bear_case', None),
         "next_steps": idea.next_steps,
         "notes": idea.notes,
+        "has_next_steps": bool(idea.next_steps and idea.next_steps.strip()),
         "is_active": idea.is_active,
         "model_data": model_data,
         "documents": documents,
@@ -229,6 +232,8 @@ def create_idea(
         existing.model_path = data.model_path
         existing.model_share_link = data.model_share_link
         existing.thesis = data.thesis
+        existing.bull_case = data.bull_case
+        existing.bear_case = data.bear_case
         existing.next_steps = data.next_steps
         existing.notes = data.notes
         db.commit()
@@ -242,6 +247,8 @@ def create_idea(
             model_path=data.model_path,
             model_share_link=data.model_share_link,
             thesis=data.thesis,
+            bull_case=data.bull_case,
+            bear_case=data.bear_case,
             next_steps=data.next_steps,
             notes=data.notes
         )
@@ -283,6 +290,10 @@ def update_idea(
         idea.writeup_complete = data.writeup_complete
     if data.thesis is not None:
         idea.thesis = data.thesis
+    if data.bull_case is not None:
+        idea.bull_case = data.bull_case
+    if data.bear_case is not None:
+        idea.bear_case = data.bear_case
     if data.next_steps is not None:
         idea.next_steps = data.next_steps
     if data.notes is not None:

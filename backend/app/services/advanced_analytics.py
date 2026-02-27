@@ -173,9 +173,14 @@ class SectorAnalyzer:
         self,
         view_type: ViewType,
         view_id: int,
-        as_of_date: Optional[date] = None
+        as_of_date: Optional[date] = None,
+        group_by: str = 'sector'
     ) -> Dict:
-        """Get portfolio weights by sector"""
+        """Get portfolio weights grouped by sector, industry, or country.
+
+        Args:
+            group_by: 'sector' (default), 'industry', or 'country'
+        """
         if not as_of_date:
             as_of_date = date.today()
 
@@ -195,14 +200,16 @@ class SectorAnalyzer:
         if not latest_pos_date:
             return {'error': 'No positions found', 'sectors': []}
 
-        # Get positions using the latest available date across all accounts
+        # Get positions with all classification fields
         positions = self.db.query(
             PositionsEOD.security_id,
             func.sum(PositionsEOD.shares).label('shares'),
             Security.symbol,
             Security.asset_name,
             SectorClassification.sector,
-            SectorClassification.gics_sector
+            SectorClassification.gics_sector,
+            SectorClassification.gics_industry,
+            SectorClassification.country,
         ).select_from(PositionsEOD).join(
             Security, PositionsEOD.security_id == Security.id
         ).outerjoin(
@@ -218,7 +225,9 @@ class SectorAnalyzer:
             Security.symbol,
             Security.asset_name,
             SectorClassification.sector,
-            SectorClassification.gics_sector
+            SectorClassification.gics_sector,
+            SectorClassification.gics_industry,
+            SectorClassification.country,
         ).all()
 
         if not positions:
@@ -256,6 +265,8 @@ class SectorAnalyzer:
                 'asset_name': pos.asset_name,
                 'sector': pos.sector or 'Unclassified',
                 'gics_sector': pos.gics_sector or 'Unclassified',
+                'industry': pos.gics_industry or 'Unclassified',
+                'country': pos.country or 'Unclassified',
                 'shares': pos.shares,
                 'price': price_dict[pos.security_id],
                 'market_value': market_value
@@ -265,20 +276,27 @@ class SectorAnalyzer:
         for holding in holdings:
             holding['weight'] = holding['market_value'] / total_value if total_value > 0 else 0
 
-        # Aggregate by sector
+        # Determine which field to group by
+        group_field = {
+            'sector': 'sector',
+            'industry': 'industry',
+            'country': 'country',
+        }.get(group_by, 'sector')
+
+        # Aggregate by chosen field
         sector_weights = {}
         for holding in holdings:
-            sector = holding['sector']
-            if sector not in sector_weights:
-                sector_weights[sector] = {
-                    'sector': sector,
+            key = holding[group_field]
+            if key not in sector_weights:
+                sector_weights[key] = {
+                    'sector': key,
                     'weight': 0,
                     'market_value': 0,
                     'holdings_count': 0
                 }
-            sector_weights[sector]['weight'] += holding['weight']
-            sector_weights[sector]['market_value'] += holding['market_value']
-            sector_weights[sector]['holdings_count'] += 1
+            sector_weights[key]['weight'] += holding['weight']
+            sector_weights[key]['market_value'] += holding['market_value']
+            sector_weights[key]['holdings_count'] += 1
 
         return {
             'sectors': sorted(sector_weights.values(), key=lambda x: x['weight'], reverse=True),

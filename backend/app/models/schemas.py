@@ -141,7 +141,7 @@ class SummaryResponse(BaseModel):
     view_name: str
     total_value: float
     as_of_date: date
-    data_last_updated: datetime
+    data_last_updated: Optional[datetime] = None
     return_1m: Optional[float]
     return_3m: Optional[float]
     return_ytd: Optional[float]
@@ -420,6 +420,8 @@ class IdeaPipelineCreate(BaseModel):
     model_path: Optional[str] = None
     model_share_link: Optional[str] = None
     thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
     next_steps: Optional[str] = None
     notes: Optional[str] = None
 
@@ -436,6 +438,8 @@ class IdeaPipelineUpdate(BaseModel):
     model_complete: Optional[bool] = None
     writeup_complete: Optional[bool] = None
     thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
     next_steps: Optional[str] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
@@ -469,8 +473,11 @@ class IdeaPipelineResponse(BaseModel):
     writeup_complete: bool = False
     # Research content
     thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
     next_steps: Optional[str] = None
     notes: Optional[str] = None
+    has_next_steps: bool = False
     is_active: bool
     # Model data (same structure as coverage)
     model_data: Optional[CoverageModelDataResponse] = None

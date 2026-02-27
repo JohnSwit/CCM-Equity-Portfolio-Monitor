@@ -2,8 +2,59 @@ import axios, { AxiosInstance } from 'axios';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// Simple TTL cache for GET requests to avoid redundant API calls
+// when switching between views or re-rendering
+interface CacheEntry {
+  data: any;
+  expiry: number;
+}
+
+class RequestCache {
+  private cache = new Map<string, CacheEntry>();
+  private defaultTTL: number;
+
+  constructor(defaultTTLMs: number = 30000) {  // 30 second default
+    this.defaultTTL = defaultTTLMs;
+  }
+
+  get(key: string): any | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiry) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  set(key: string, data: any, ttlMs?: number): void {
+    this.cache.set(key, {
+      data,
+      expiry: Date.now() + (ttlMs ?? this.defaultTTL),
+    });
+    // Evict old entries if cache grows too large
+    if (this.cache.size > 200) {
+      const now = Date.now();
+      for (const [k, v] of this.cache) {
+        if (now > v.expiry) this.cache.delete(k);
+      }
+    }
+  }
+
+  invalidate(pattern?: string): void {
+    if (!pattern) {
+      this.cache.clear();
+      return;
+    }
+    for (const key of this.cache.keys()) {
+      if (key.includes(pattern)) this.cache.delete(key);
+    }
+  }
+}
+
 class APIClient {
   private client: AxiosInstance;
+  private requestCache = new RequestCache();
 
   constructor() {
     this.client = axios.create({
@@ -35,15 +86,31 @@ class APIClient {
     );
   }
 
+  // Cached GET helper - caches based on URL + params
+  private async cachedGet(url: string, params?: any, ttlMs?: number): Promise<any> {
+    const cacheKey = url + '?' + JSON.stringify(params || {});
+    const cached = this.requestCache.get(cacheKey);
+    if (cached) return cached;
+
+    const response = await this.client.get(url, { params });
+    this.requestCache.set(cacheKey, response.data, ttlMs);
+    return response.data;
+  }
+
+  // Invalidate cache (call after mutations that change analytics data)
+  invalidateCache(pattern?: string): void {
+    this.requestCache.invalidate(pattern);
+  }
+
   // Auth
   async login(email: string, password: string) {
     const response = await this.client.post('/auth/login', { email, password });
+    this.requestCache.invalidate('/auth/me');
     return response.data;
   }
 
   async getMe() {
-    const response = await this.client.get('/auth/me');
-    return response.data;
+    return this.cachedGet('/auth/me', undefined, 120000);  // 2 min cache
   }
 
   // Accounts & Groups
@@ -77,65 +144,43 @@ class APIClient {
   }
 
   async getAllViews() {
-    const response = await this.client.get('/views');
-    return response.data;
+    return this.cachedGet('/views', undefined, 60000);  // 1 min cache
   }
 
   // Analytics
   async getSummary(viewType: string, viewId: number) {
-    const response = await this.client.get('/analytics/summary', {
-      params: { view_type: viewType, view_id: viewId },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/summary', { view_type: viewType, view_id: viewId });
   }
 
   async getReturns(viewType: string, viewId: number, startDate?: string, endDate?: string) {
-    const response = await this.client.get('/analytics/returns', {
-      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/returns', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate });
   }
 
   async getHoldings(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/analytics/holdings', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/holdings', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
   }
 
   async getRisk(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/analytics/risk', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/risk', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
   }
 
   async getBenchmarkMetrics(viewType: string, viewId: number, benchmark: string, window: number = 252) {
-    const response = await this.client.get('/analytics/benchmark', {
-      params: { view_type: viewType, view_id: viewId, benchmark, window },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/benchmark', { view_type: viewType, view_id: viewId, benchmark, window }, 60000);
   }
 
   async getFactorExposures(viewType: string, viewId: number, factorSet: string = 'STYLE7', window: number = 252) {
-    const response = await this.client.get('/analytics/factors', {
-      params: { view_type: viewType, view_id: viewId, factor_set: factorSet, window },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/factors', { view_type: viewType, view_id: viewId, factor_set: factorSet, window }, 60000);
   }
 
   async getUnpricedInstruments(asOfDate?: string) {
-    const response = await this.client.get('/analytics/unpriced-instruments', {
-      params: { as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/unpriced-instruments', { as_of_date: asOfDate }, 60000);
   }
 
   async getBenchmarkReturns(benchmarkCodes: string[], startDate?: string, endDate?: string) {
-    const response = await this.client.get('/analytics/benchmark-returns', {
-      params: { benchmark_codes: benchmarkCodes.join(','), start_date: startDate, end_date: endDate },
-    });
-    return response.data;
+    return this.cachedGet('/analytics/benchmark-returns',
+      { benchmark_codes: benchmarkCodes.join(','), start_date: startDate, end_date: endDate },
+      60000  // 1 min cache - benchmarks change less frequently
+    );
   }
 
   // Imports
@@ -152,6 +197,7 @@ class APIClient {
         },
       }
     );
+    if (mode === 'commit') this.requestCache.invalidate();
     return response.data;
   }
 
@@ -186,6 +232,12 @@ class APIClient {
   // Jobs
   async runJob(jobName: string) {
     const response = await this.client.post(`/jobs/run?job_name=${jobName}`);
+    this.requestCache.invalidate();  // Clear all caches after jobs run
+    return response.data;
+  }
+
+  async classifySecurities() {
+    const response = await this.client.post('/jobs/classify-securities?unclassified_only=true');
     return response.data;
   }
 
@@ -204,8 +256,7 @@ class APIClient {
   }
 
   async getAccountsWithTransactionCounts() {
-    const response = await this.client.get('/transactions/accounts');
-    return response.data;
+    return this.cachedGet('/transactions/accounts', undefined, 60000);
   }
 
   async deleteTransaction(transactionId: number) {
@@ -234,60 +285,36 @@ class APIClient {
   }
 
   async getVolatilityMetrics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
-    const response = await this.client.get('/portfolio-stats/volatility-metrics', {
-      params: { view_type: viewType, view_id: viewId, benchmark, window },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/volatility-metrics', { view_type: viewType, view_id: viewId, benchmark, window }, 60000);
   }
 
   async getDrawdownAnalysis(viewType: string, viewId: number) {
-    const response = await this.client.get('/portfolio-stats/drawdown-analysis', {
-      params: { view_type: viewType, view_id: viewId },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/drawdown-analysis', { view_type: viewType, view_id: viewId }, 60000);
   }
 
   async getVarCvar(viewType: string, viewId: number, confidenceLevels: string = '95,99', window: number = 252) {
-    const response = await this.client.get('/portfolio-stats/var-cvar', {
-      params: { view_type: viewType, view_id: viewId, confidence_levels: confidenceLevels, window },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/var-cvar', { view_type: viewType, view_id: viewId, confidence_levels: confidenceLevels, window }, 60000);
   }
 
   async getFactorAnalysis(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/portfolio-stats/factor-analysis', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/factor-analysis', { view_type: viewType, view_id: viewId, as_of_date: asOfDate }, 60000);
   }
 
   async getComprehensiveStatistics(viewType: string, viewId: number, benchmark: string = 'SPY', window: number = 252) {
-    const response = await this.client.get('/portfolio-stats/comprehensive', {
-      params: { view_type: viewType, view_id: viewId, benchmark, window },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/comprehensive', { view_type: viewType, view_id: viewId, benchmark, window }, 60000);
   }
 
   // Phase 2: Advanced Analytics
   async getTurnoverAnalysis(viewType: string, viewId: number, startDate?: string, endDate?: string, period: string = 'monthly') {
-    const response = await this.client.get('/portfolio-stats/turnover', {
-      params: { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/turnover', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate, period }, 60000);
   }
 
-  async getSectorWeights(viewType: string, viewId: number, asOfDate?: string) {
-    const response = await this.client.get('/portfolio-stats/sector-weights', {
-      params: { view_type: viewType, view_id: viewId, as_of_date: asOfDate },
-    });
-    return response.data;
+  async getSectorWeights(viewType: string, viewId: number, asOfDate?: string, groupBy: string = 'sector') {
+    return this.cachedGet('/portfolio-stats/sector-weights', { view_type: viewType, view_id: viewId, as_of_date: asOfDate, group_by: groupBy });
   }
 
   async getSectorComparison(viewType: string, viewId: number, benchmark: string = 'SP500', asOfDate?: string) {
-    const response = await this.client.get('/portfolio-stats/sector-comparison', {
-      params: { view_type: viewType, view_id: viewId, benchmark, as_of_date: asOfDate },
-    });
-    return response.data;
+    return this.cachedGet('/portfolio-stats/sector-comparison', { view_type: viewType, view_id: viewId, benchmark, as_of_date: asOfDate }, 60000);
   }
 
   async getBrinsonAttribution(viewType: string, viewId: number, benchmark: string = 'SP500', startDate?: string, endDate?: string) {
@@ -326,39 +353,8 @@ class APIClient {
   }
 
   // Data Management
-  async refreshClassifications(limit?: number) {
-    const response = await this.client.post('/data-management/refresh-classifications', null, {
-      params: { limit },
-    });
-    return response.data;
-  }
-
   async refreshSingleClassification(securityId: number) {
     const response = await this.client.post(`/data-management/refresh-classification/${securityId}`);
-    return response.data;
-  }
-
-  async refreshSP500Benchmark() {
-    const response = await this.client.post('/data-management/refresh-benchmark');
-    return response.data;
-  }
-
-  async refreshFactorReturns(startDate?: string) {
-    const response = await this.client.post('/data-management/refresh-factor-returns', null, {
-      params: { start_date: startDate },
-    });
-    return response.data;
-  }
-
-  async getDataStatus() {
-    const response = await this.client.get('/data-management/status');
-    return response.data;
-  }
-
-  async getMissingClassifications(limit: number = 100) {
-    const response = await this.client.get('/data-management/missing-classifications', {
-      params: { limit },
-    });
     return response.data;
   }
 
@@ -671,6 +667,8 @@ class APIClient {
     model_complete?: boolean;
     writeup_complete?: boolean;
     thesis?: string;
+    bull_case?: string;
+    bear_case?: string;
     next_steps?: string;
     notes?: string;
     is_active?: boolean;
@@ -771,6 +769,11 @@ class APIClient {
 
   async getTaxAccounts() {
     const response = await this.client.get('/tax/accounts');
+    return response.data;
+  }
+
+  async simulateSelectedLots(lotIds: number[]) {
+    const response = await this.client.post('/tax/simulate-lots', { lot_ids: lotIds });
     return response.data;
   }
 
@@ -899,6 +902,21 @@ class APIClient {
 
   async deleteAccountInception(accountId: number) {
     const response = await this.client.delete(`/imports/inception/${accountId}`);
+    return response.data;
+  }
+
+  // Classification imports
+  async importClassifications(file: File, mode: 'preview' | 'commit') {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/imports/classifications?mode=${mode}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getClassificationSummary() {
+    const response = await this.client.get('/imports/classifications');
     return response.data;
   }
 }

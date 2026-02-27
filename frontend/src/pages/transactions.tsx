@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
 import { format } from 'date-fns';
-import Select from 'react-select';
+
+const Select = dynamic(() => import('react-select'), { ssr: false }) as any;
 
 const selectStyles = {
   control: (base: any, state: any) => ({

@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, useRef } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
@@ -59,16 +59,6 @@ interface ModelData {
   last_refreshed: string | null;
 }
 
-interface IdeaDocument {
-  id: number;
-  idea_id: number;
-  filename: string;
-  original_filename: string;
-  file_type: string | null;
-  file_size: number | null;
-  uploaded_at: string;
-}
-
 interface Idea {
   id: number;
   ticker: string;
@@ -81,11 +71,14 @@ interface Idea {
   model_complete: boolean;
   writeup_complete: boolean;
   thesis: string | null;
+  bull_case: string | null;
+  bear_case: string | null;
   next_steps: string | null;
   notes: string | null;
+  has_next_steps: boolean;
   is_active: boolean;
   model_data: ModelData | null;
-  documents: IdeaDocument[];
+  documents: any[];
   created_at: string;
   updated_at: string;
 }
@@ -97,7 +90,6 @@ export default function IdeasPage() {
   const [analysts, setAnalysts] = useState<Analyst[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Add idea form
   const [newTicker, setNewTicker] = useState('');
@@ -112,9 +104,6 @@ export default function IdeasPage() {
   const [editSecondaryAnalyst, setEditSecondaryAnalyst] = useState<number | null>(null);
   const [editModelPath, setEditModelPath] = useState('');
   const [editModelShareLink, setEditModelShareLink] = useState('');
-  const [editThesis, setEditThesis] = useState('');
-  const [editNextSteps, setEditNextSteps] = useState('');
-  const [editNotes, setEditNotes] = useState('');
   const [editInitialReview, setEditInitialReview] = useState(false);
   const [editDeepDive, setEditDeepDive] = useState(false);
   const [editModel, setEditModel] = useState(false);
@@ -123,9 +112,15 @@ export default function IdeasPage() {
   // Expanded detail view
   const [expandedTicker, setExpandedTicker] = useState<number | null>(null);
 
-  // Refresh and upload status
+  // Refresh status
   const [refreshing, setRefreshing] = useState<number | null>(null);
-  const [uploading, setUploading] = useState<number | null>(null);
+
+  // Inline editing for thesis/bull/bear/next steps
+  const [inlineThesis, setInlineThesis] = useState<Record<number, string>>({});
+  const [inlineBull, setInlineBull] = useState<Record<number, string>>({});
+  const [inlineBear, setInlineBear] = useState<Record<number, string>>({});
+  const [inlineNextSteps, setInlineNextSteps] = useState<Record<number, string>>({});
+  const [savingInline, setSavingInline] = useState<number | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -197,9 +192,6 @@ export default function IdeasPage() {
         secondary_analyst_id: editSecondaryAnalyst || undefined,
         model_path: editModelPath || undefined,
         model_share_link: editModelShareLink || undefined,
-        thesis: editThesis || undefined,
-        next_steps: editNextSteps || undefined,
-        notes: editNotes || undefined,
         initial_review_complete: editInitialReview,
         deep_dive_complete: editDeepDive,
         model_complete: editModel,
@@ -245,46 +237,78 @@ export default function IdeasPage() {
     }
   };
 
-  const handleFileUpload = async (ideaId: number, files: FileList | null) => {
-    if (!files || files.length === 0) return;
-
-    try {
-      setUploading(ideaId);
-      for (const file of Array.from(files)) {
-        await api.uploadIdeaDocument(ideaId, file);
-      }
-      await loadData();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to upload file');
-    } finally {
-      setUploading(null);
-    }
-  };
-
-  const handleDeleteDocument = async (ideaId: number, documentId: number) => {
-    if (!confirm('Are you sure you want to delete this document?')) return;
-
-    try {
-      await api.deleteIdeaDocument(ideaId, documentId);
-      await loadData();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to delete document');
-    }
-  };
-
   const openEditModal = (idea: Idea) => {
     setEditingIdea(idea);
     setEditPrimaryAnalyst(idea.primary_analyst?.id || null);
     setEditSecondaryAnalyst(idea.secondary_analyst?.id || null);
     setEditModelPath(idea.model_path || '');
     setEditModelShareLink(idea.model_share_link || '');
-    setEditThesis(idea.thesis || '');
-    setEditNextSteps(idea.next_steps || '');
-    setEditNotes(idea.notes || '');
     setEditInitialReview(idea.initial_review_complete);
     setEditDeepDive(idea.deep_dive_complete);
     setEditModel(idea.model_complete);
     setEditWriteup(idea.writeup_complete);
+  };
+
+  // Inline save - saves on blur
+  const handleInlineSave = async (ideaId: number, field: 'thesis' | 'bull_case' | 'bear_case' | 'next_steps', value: string) => {
+    const idea = ideas.find(i => i.id === ideaId);
+    if (!idea) return;
+
+    const original = idea[field] || '';
+    if (value === original) return;
+
+    try {
+      setSavingInline(ideaId);
+      await api.updateIdea(ideaId, { [field]: value || undefined });
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to save');
+    } finally {
+      setSavingInline(null);
+    }
+  };
+
+  // Initialize inline values when expanding a ticker
+  const handleExpandTicker = (ideaId: number) => {
+    if (expandedTicker === ideaId) {
+      setExpandedTicker(null);
+      return;
+    }
+    const idea = ideas.find(i => i.id === ideaId);
+    if (idea) {
+      setInlineThesis(prev => ({ ...prev, [ideaId]: idea.thesis || '' }));
+      setInlineBull(prev => ({ ...prev, [ideaId]: idea.bull_case || '' }));
+      setInlineBear(prev => ({ ...prev, [ideaId]: idea.bear_case || '' }));
+      setInlineNextSteps(prev => ({ ...prev, [ideaId]: idea.next_steps || '' }));
+    }
+    setExpandedTicker(ideaId);
+  };
+
+  // --- Formatting helpers ---
+  const formatPrice = (value: number | null | undefined) => {
+    if (value == null) return '-';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const formatEstimate = (value: number | null | undefined) => {
+    if (value == null) return '-';
+    return '$' + new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(Math.round(value));
+  };
+
+  const formatEps = (value: number | null | undefined) => {
+    if (value == null) return '-';
+    return '$' + new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
   };
 
   const formatPercent = (value: number | null | undefined) => {
@@ -292,16 +316,18 @@ export default function IdeasPage() {
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
 
-  const formatNumber = (value: number | null | undefined, decimals: number = 2) => {
-    if (value == null) return '-';
-    return value.toFixed(decimals);
+  const formatBps = (current: number | null | undefined, prior: number | null | undefined) => {
+    if (current == null || prior == null) return '-';
+    const bps = (current - prior) * 100;
+    return `${bps >= 0 ? '+' : ''}${bps.toFixed(0)} bps`;
   };
 
-  const formatFileSize = (bytes: number | null) => {
-    if (!bytes) return '-';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const getBpsClass = (current: number | null | undefined, prior: number | null | undefined) => {
+    if (current == null || prior == null) return 'text-zinc-400';
+    const diff = current - prior;
+    if (diff > 0) return 'value-positive';
+    if (diff < 0) return 'value-negative';
+    return 'text-zinc-400';
   };
 
   const getPipelineProgress = (idea: Idea) => {
@@ -442,10 +468,15 @@ export default function IdeasPage() {
                   <Fragment key={idea.id}>
                     <tr
                       className={`cursor-pointer transition-colors ${expandedTicker === idea.id ? 'bg-blue-50/50' : ''}`}
-                      onClick={() => setExpandedTicker(expandedTicker === idea.id ? null : idea.id)}
+                      onClick={() => handleExpandTicker(idea.id)}
                     >
                       <td className="font-semibold text-zinc-900">
                         <div className="flex items-center gap-2">
+                          {idea.has_next_steps && (
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-600 text-xs" title="Has next steps / action items">
+                              !
+                            </span>
+                          )}
                           <span>{idea.ticker}</span>
                           <svg className={`h-4 w-4 text-zinc-400 transition-transform ${expandedTicker === idea.id ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -480,12 +511,12 @@ export default function IdeasPage() {
                         </div>
                       </td>
                       <td className="text-right font-medium">
-                        {idea.model_data?.ccm_fair_value ? `$${idea.model_data.ccm_fair_value.toFixed(2)}` : '-'}
+                        {idea.model_data?.ccm_fair_value ? formatPrice(idea.model_data.ccm_fair_value) : '-'}
                       </td>
                       <td className="text-right font-medium">
-                        {idea.model_data?.street_price_target ? `$${idea.model_data.street_price_target.toFixed(2)}` : '-'}
+                        {idea.model_data?.street_price_target ? formatPrice(idea.model_data.street_price_target) : '-'}
                       </td>
-                      <td className="text-right font-medium">
+                      <td className={`text-right font-medium ${idea.model_data?.irr_3yr != null ? getValueClass(idea.model_data.irr_3yr) : ''}`}>
                         {idea.model_data?.irr_3yr != null ? `${(idea.model_data.irr_3yr * 100).toFixed(1)}%` : '-'}
                       </td>
                       <td className="text-center">
@@ -536,7 +567,7 @@ export default function IdeasPage() {
                       <tr>
                         <td colSpan={9} className="p-0">
                           <div className="bg-zinc-50/50 border-t border-zinc-100 p-6">
-                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                               {/* Research Pipeline */}
                               <div className="bg-white rounded-lg border border-zinc-200 p-5">
                                 <h3 className="text-sm font-semibold text-zinc-900 mb-4">Research Pipeline</h3>
@@ -572,80 +603,6 @@ export default function IdeasPage() {
                                 </div>
                               </div>
 
-                              {/* Thesis */}
-                              <div className="bg-white rounded-lg border border-zinc-200 p-5">
-                                <h3 className="text-sm font-semibold text-zinc-900 mb-3">Thesis</h3>
-                                <p className="text-sm text-zinc-700 whitespace-pre-wrap leading-relaxed">
-                                  {idea.thesis || <span className="text-zinc-400 italic">No thesis yet. Click Edit to add.</span>}
-                                </p>
-                              </div>
-
-                              {/* Next Steps */}
-                              <div className="bg-white rounded-lg border border-zinc-200 p-5">
-                                <h3 className="text-sm font-semibold text-zinc-900 mb-3">Next Steps</h3>
-                                <p className="text-sm text-zinc-700 whitespace-pre-wrap leading-relaxed">
-                                  {idea.next_steps || <span className="text-zinc-400 italic">No next steps yet. Click Edit to add.</span>}
-                                </p>
-                              </div>
-
-                              {/* Notes */}
-                              <div className="bg-white rounded-lg border border-zinc-200 p-5">
-                                <h3 className="text-sm font-semibold text-zinc-900 mb-3">Notes</h3>
-                                <p className="text-sm text-zinc-700 whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">
-                                  {idea.notes || <span className="text-zinc-400 italic">No notes yet. Click Edit to add.</span>}
-                                </p>
-                              </div>
-
-                              {/* Documents */}
-                              <div className="bg-white rounded-lg border border-zinc-200 p-5">
-                                <h3 className="text-sm font-semibold text-zinc-900 mb-3">Documents</h3>
-                                <div className="space-y-2 max-h-40 overflow-y-auto">
-                                  {idea.documents.length === 0 ? (
-                                    <p className="text-sm text-zinc-400 italic">No documents uploaded.</p>
-                                  ) : (
-                                    idea.documents.map((doc) => (
-                                      <div key={doc.id} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-zinc-50 transition-colors">
-                                        <a
-                                          href={api.getIdeaDocumentDownloadUrl(idea.id, doc.id)}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="text-blue-600 hover:text-blue-800 truncate max-w-[200px]"
-                                          title={doc.original_filename}
-                                        >
-                                          {doc.original_filename}
-                                        </a>
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-zinc-400 text-xs">{formatFileSize(doc.file_size)}</span>
-                                          <button
-                                            onClick={() => handleDeleteDocument(idea.id, doc.id)}
-                                            className="text-red-500 hover:text-red-700 font-medium"
-                                          >
-                                            x
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))
-                                  )}
-                                </div>
-                                <div className="mt-3">
-                                  <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    className="hidden"
-                                    multiple
-                                    accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-                                    onChange={(e) => handleFileUpload(idea.id, e.target.files)}
-                                  />
-                                  <button
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={uploading === idea.id}
-                                    className="w-full px-3 py-2 border-2 border-dashed border-zinc-300 rounded-lg text-sm text-zinc-600 hover:bg-zinc-50 hover:border-zinc-400 disabled:opacity-50 transition-colors"
-                                  >
-                                    {uploading === idea.id ? 'Uploading...' : 'Upload Documents'}
-                                  </button>
-                                </div>
-                              </div>
-
                               {/* Valuation (if model data exists) */}
                               {idea.model_data && (
                                 <div className="bg-white rounded-lg border border-zinc-200 p-5">
@@ -654,13 +611,13 @@ export default function IdeasPage() {
                                     <div className="metric-card metric-card-blue">
                                       <div className="metric-label">CCM Fair Value</div>
                                       <div className="metric-value">
-                                        {idea.model_data?.ccm_fair_value ? `$${idea.model_data.ccm_fair_value.toFixed(2)}` : '-'}
+                                        {idea.model_data?.ccm_fair_value ? formatPrice(idea.model_data.ccm_fair_value) : '-'}
                                       </div>
                                     </div>
                                     <div className="metric-card metric-card-purple">
                                       <div className="metric-label">Street Target</div>
                                       <div className="metric-value">
-                                        {idea.model_data?.street_price_target ? `$${idea.model_data.street_price_target.toFixed(2)}` : '-'}
+                                        {idea.model_data?.street_price_target ? formatPrice(idea.model_data.street_price_target) : '-'}
                                       </div>
                                     </div>
                                     <div className="metric-card metric-card-teal">
@@ -671,84 +628,173 @@ export default function IdeasPage() {
                                     </div>
                                     <div className="metric-card metric-card-green">
                                       <div className="metric-label">3-Year IRR</div>
-                                      <div className="metric-value text-blue-600">
+                                      <div className={`metric-value ${idea.model_data?.irr_3yr != null ? getValueClass(idea.model_data.irr_3yr) : ''}`}>
                                         {idea.model_data?.irr_3yr != null ? `${(idea.model_data.irr_3yr * 100).toFixed(1)}%` : '-'}
                                       </div>
                                     </div>
                                   </div>
                                 </div>
                               )}
-                            </div>
 
-                            {/* Financial Estimates (if model data exists) */}
-                            {idea.model_data && (
-                              <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                {['revenue', 'ebitda', 'eps', 'fcf'].map((metric) => {
-                                  const data = idea.model_data?.[metric as keyof ModelData] as MetricEstimates | null;
-                                  if (!data) return null;
-                                  const marginData = metric === 'ebitda' ? idea.model_data?.ebitda_margin :
-                                                     metric === 'fcf' ? idea.model_data?.fcf_margin : null;
-
-                                  return (
-                                    <div key={metric} className="bg-white rounded-lg border border-zinc-200 p-5">
-                                      <h3 className="text-sm font-semibold text-zinc-900 mb-3 uppercase">{metric}</h3>
-                                      <div className="overflow-x-auto">
-                                        <table className="w-full text-sm">
-                                          <thead>
-                                            <tr className="text-xs text-zinc-500 uppercase tracking-wider">
-                                              <th className="pb-2 text-left font-medium"></th>
-                                              <th className="pb-2 text-right font-medium">-1Y</th>
-                                              <th className="pb-2 text-right font-medium">1Y</th>
-                                              <th className="pb-2 text-right font-medium">2Y</th>
-                                              <th className="pb-2 text-right font-medium">3Y</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody className="tabular-nums">
-                                            <tr className="border-t border-zinc-100">
-                                              <td className="py-2 font-medium text-zinc-700">CCM</td>
-                                              <td className="py-2 text-right">{formatNumber(data.ccm_minus1yr)}</td>
-                                              <td className="py-2 text-right">{formatNumber(data.ccm_1yr)}</td>
-                                              <td className="py-2 text-right">{formatNumber(data.ccm_2yr)}</td>
-                                              <td className="py-2 text-right">{formatNumber(data.ccm_3yr)}</td>
-                                            </tr>
-                                            <tr className="border-t border-zinc-100">
-                                              <td className="py-2 font-medium text-zinc-700">Street</td>
-                                              <td className="py-2 text-right">{formatNumber(data.street_minus1yr)}</td>
-                                              <td className="py-2 text-right">{formatNumber(data.street_1yr)}</td>
-                                              <td className="py-2 text-right">{formatNumber(data.street_2yr)}</td>
-                                              <td className="py-2 text-right">{formatNumber(data.street_3yr)}</td>
-                                            </tr>
-                                            <tr className="border-t border-zinc-100 text-emerald-600">
-                                              <td className="py-2 font-medium">Growth (CCM)</td>
-                                              <td className="py-2 text-right">-</td>
-                                              <td className="py-2 text-right">{formatPercent(data.growth_ccm_1yr)}</td>
-                                              <td className="py-2 text-right">{formatPercent(data.growth_ccm_2yr)}</td>
-                                              <td className="py-2 text-right">{formatPercent(data.growth_ccm_3yr)}</td>
-                                            </tr>
-                                            <tr className="border-t border-zinc-100 text-blue-600">
-                                              <td className="py-2 font-medium">CCM vs Street</td>
-                                              <td className="py-2 text-right">-</td>
-                                              <td className="py-2 text-right">{formatPercent(data.diff_1yr_pct)}</td>
-                                              <td className="py-2 text-right">{formatPercent(data.diff_2yr_pct)}</td>
-                                              <td className="py-2 text-right">{formatPercent(data.diff_3yr_pct)}</td>
-                                            </tr>
-                                            {marginData && (
-                                              <tr className="border-t border-zinc-100 text-violet-600">
-                                                <td className="py-2 font-medium">Margin (CCM)</td>
-                                                <td className="py-2 text-right">{formatPercent(marginData.ccm_minus1yr)}</td>
-                                                <td className="py-2 text-right">{formatPercent(marginData.ccm_1yr)}</td>
-                                                <td className="py-2 text-right">{formatPercent(marginData.ccm_2yr)}</td>
-                                                <td className="py-2 text-right">{formatPercent(marginData.ccm_3yr)}</td>
-                                              </tr>
-                                            )}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
+                              {/* Thesis Section - always visible, inline-editable */}
+                              <div className="bg-white rounded-lg border border-zinc-200 p-5 lg:col-span-2">
+                                <div className="flex justify-between items-center mb-3">
+                                  <h3 className="text-sm font-semibold text-zinc-900">Investment Thesis</h3>
+                                  {savingInline === idea.id && (
+                                    <span className="text-xs text-zinc-400">Saving...</span>
+                                  )}
+                                </div>
+                                <textarea
+                                  value={inlineThesis[idea.id] ?? idea.thesis ?? ''}
+                                  onChange={(e) => setInlineThesis(prev => ({ ...prev, [idea.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(idea.id, 'thesis', inlineThesis[idea.id] ?? '')}
+                                  rows={3}
+                                  placeholder="Write your investment thesis here..."
+                                  className="w-full text-sm text-zinc-700 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
                               </div>
-                            )}
+
+                              {/* Bull/Bear Case - always visible, inline-editable */}
+                              <div className="bg-emerald-50 rounded-lg border border-emerald-200 p-5">
+                                <h3 className="text-sm font-semibold text-emerald-800 mb-3 flex items-center gap-2">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                                  </svg>
+                                  Bull Case
+                                </h3>
+                                <textarea
+                                  value={inlineBull[idea.id] ?? idea.bull_case ?? ''}
+                                  onChange={(e) => setInlineBull(prev => ({ ...prev, [idea.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(idea.id, 'bull_case', inlineBull[idea.id] ?? '')}
+                                  rows={3}
+                                  placeholder="Key bull arguments..."
+                                  className="w-full text-sm text-emerald-900 bg-white/60 border border-emerald-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                              <div className="bg-red-50 rounded-lg border border-red-200 p-5">
+                                <h3 className="text-sm font-semibold text-red-800 mb-3 flex items-center gap-2">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                                  </svg>
+                                  Bear Case
+                                </h3>
+                                <textarea
+                                  value={inlineBear[idea.id] ?? idea.bear_case ?? ''}
+                                  onChange={(e) => setInlineBear(prev => ({ ...prev, [idea.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(idea.id, 'bear_case', inlineBear[idea.id] ?? '')}
+                                  rows={3}
+                                  placeholder="Key bear arguments..."
+                                  className="w-full text-sm text-red-900 bg-white/60 border border-red-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+
+                              {/* Next Steps - always visible, inline-editable */}
+                              <div className="bg-amber-50 rounded-lg border border-amber-200 p-5 lg:col-span-2">
+                                <h3 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                                  </svg>
+                                  Next Steps
+                                  {(inlineNextSteps[idea.id] ?? idea.next_steps ?? '').trim() && (
+                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-200 text-amber-700 text-xs font-bold ml-1">!</span>
+                                  )}
+                                </h3>
+                                <textarea
+                                  value={inlineNextSteps[idea.id] ?? idea.next_steps ?? ''}
+                                  onChange={(e) => setInlineNextSteps(prev => ({ ...prev, [idea.id]: e.target.value }))}
+                                  onBlur={() => handleInlineSave(idea.id, 'next_steps', inlineNextSteps[idea.id] ?? '')}
+                                  rows={3}
+                                  placeholder="What needs to be done next..."
+                                  className="w-full text-sm text-amber-900 bg-white/60 border border-amber-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400 leading-relaxed"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+
+                              {/* Financial Estimates (if model data exists) */}
+                              {idea.model_data && ['revenue', 'ebitda', 'eps', 'fcf'].map((metric) => {
+                                const data = idea.model_data?.[metric as keyof ModelData] as MetricEstimates | null;
+                                if (!data) return null;
+                                const marginData = metric === 'ebitda' ? idea.model_data?.ebitda_margin :
+                                                   metric === 'fcf' ? idea.model_data?.fcf_margin : null;
+                                const fmt = metric === 'eps' ? formatEps : formatEstimate;
+
+                                return (
+                                  <div key={metric} className="bg-white rounded-lg border border-zinc-200 p-5">
+                                    <h3 className="text-sm font-semibold text-zinc-900 mb-3 uppercase">{metric}</h3>
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead>
+                                          <tr className="text-xs text-zinc-500 uppercase tracking-wider">
+                                            <th className="pb-2 text-left font-medium"></th>
+                                            <th className="pb-2 text-right font-medium">-1Y</th>
+                                            <th className="pb-2 text-right font-medium">1Y</th>
+                                            <th className="pb-2 text-right font-medium">2Y</th>
+                                            <th className="pb-2 text-right font-medium">3Y</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="tabular-nums">
+                                          <tr className="border-t border-zinc-100">
+                                            <td className="py-2 font-medium text-zinc-700">CCM</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_minus1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_2yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.ccm_3yr)}</td>
+                                          </tr>
+                                          <tr className="border-t border-zinc-100">
+                                            <td className="py-2 font-medium text-zinc-700">Street</td>
+                                            <td className="py-2 text-right">{fmt(data.street_minus1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_1yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_2yr)}</td>
+                                            <td className="py-2 text-right">{fmt(data.street_3yr)}</td>
+                                          </tr>
+                                          <tr className="border-t border-zinc-100">
+                                            <td className="py-2 font-medium text-zinc-700">Growth (CCM)</td>
+                                            <td className="py-2 text-right text-zinc-400">-</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.growth_ccm_1yr)}`}>{formatPercent(data.growth_ccm_1yr)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.growth_ccm_2yr)}`}>{formatPercent(data.growth_ccm_2yr)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.growth_ccm_3yr)}`}>{formatPercent(data.growth_ccm_3yr)}</td>
+                                          </tr>
+                                          <tr className="border-t border-zinc-100">
+                                            <td className="py-2 font-medium text-blue-600">CCM vs Street</td>
+                                            <td className="py-2 text-right text-zinc-400">-</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.diff_1yr_pct)}`}>{formatPercent(data.diff_1yr_pct)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.diff_2yr_pct)}`}>{formatPercent(data.diff_2yr_pct)}</td>
+                                            <td className={`py-2 text-right ${getValueClass(data.diff_3yr_pct)}`}>{formatPercent(data.diff_3yr_pct)}</td>
+                                          </tr>
+                                          {marginData && (
+                                            <>
+                                              <tr className="border-t border-zinc-100">
+                                                <td className="py-2 font-medium text-violet-600">Margin (CCM)</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_minus1yr)}</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_1yr)}</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_2yr)}</td>
+                                                <td className="py-2 text-right text-violet-600">{formatPercent(marginData.ccm_3yr)}</td>
+                                              </tr>
+                                              <tr className="border-t border-dashed border-zinc-100">
+                                                <td className="py-1 text-xs text-zinc-500 italic">YoY (bps)</td>
+                                                <td className="py-1 text-right text-xs text-zinc-400">-</td>
+                                                <td className={`py-1 text-right text-xs ${getBpsClass(marginData.ccm_1yr, marginData.ccm_minus1yr)}`}>
+                                                  {formatBps(marginData.ccm_1yr, marginData.ccm_minus1yr)}
+                                                </td>
+                                                <td className={`py-1 text-right text-xs ${getBpsClass(marginData.ccm_2yr, marginData.ccm_1yr)}`}>
+                                                  {formatBps(marginData.ccm_2yr, marginData.ccm_1yr)}
+                                                </td>
+                                                <td className={`py-1 text-right text-xs ${getBpsClass(marginData.ccm_3yr, marginData.ccm_2yr)}`}>
+                                                  {formatBps(marginData.ccm_3yr, marginData.ccm_2yr)}
+                                                </td>
+                                              </tr>
+                                            </>
+                                          )}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -869,36 +915,6 @@ export default function IdeasPage() {
                       <span className="text-sm">Writeup</span>
                     </label>
                   </div>
-                </div>
-                <div>
-                  <label className="label">Thesis</label>
-                  <textarea
-                    value={editThesis}
-                    onChange={(e) => setEditThesis(e.target.value)}
-                    rows={3}
-                    placeholder="Investment thesis..."
-                    className="input resize-none"
-                  />
-                </div>
-                <div>
-                  <label className="label">Next Steps</label>
-                  <textarea
-                    value={editNextSteps}
-                    onChange={(e) => setEditNextSteps(e.target.value)}
-                    rows={3}
-                    placeholder="What needs to be done next..."
-                    className="input resize-none"
-                  />
-                </div>
-                <div>
-                  <label className="label">Notes</label>
-                  <textarea
-                    value={editNotes}
-                    onChange={(e) => setEditNotes(e.target.value)}
-                    rows={4}
-                    placeholder="Research notes, observations, etc..."
-                    className="input resize-none"
-                  />
                 </div>
               </div>
               <div className="modal-footer">

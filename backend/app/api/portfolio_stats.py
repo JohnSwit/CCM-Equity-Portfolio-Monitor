@@ -206,16 +206,17 @@ def get_sector_weights(
     view_type: str,
     view_id: int,
     as_of_date: Optional[date] = None,
+    group_by: str = Query("sector", regex="^(sector|industry|country)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get portfolio sector weights.
-    Shows allocation across sectors.
+    Get portfolio allocation weights.
+    group_by: 'sector' (default), 'industry', or 'country'
     """
     vt = parse_view_type(view_type)
     analyzer = SectorAnalyzer(db)
-    return analyzer.get_portfolio_sector_weights(vt, view_id, as_of_date)
+    return analyzer.get_portfolio_sector_weights(vt, view_id, as_of_date, group_by)
 
 
 @router.get("/sector-comparison")

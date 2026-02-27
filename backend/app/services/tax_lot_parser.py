@@ -225,12 +225,23 @@ class TaxLotParser:
                 if not open_date:
                     self.errors.append({'row': row_num, 'error': 'Invalid or missing open date'})
                     continue
-                if units is None or units == 0:
-                    self.errors.append({'row': row_num, 'error': 'Invalid or missing units'})
+                if units is None:
+                    self.errors.append({'row': row_num, 'error': 'Missing units'})
+                    continue
+                if units == 0:
+                    self.warnings.append({'row': row_num, 'warning': 'Skipped closed lot (0 units)'})
                     continue
                 if unit_cost is None:
                     self.errors.append({'row': row_num, 'error': 'Invalid or missing unit cost'})
                     continue
+
+                # Normalize negative values (some systems use negatives for short positions)
+                if units < 0:
+                    self.warnings.append({'row': row_num, 'warning': f'Negative units ({units}) converted to positive'})
+                    units = abs(units)
+                if unit_cost < 0:
+                    self.warnings.append({'row': row_num, 'warning': f'Negative unit cost ({unit_cost}) converted to positive'})
+                    unit_cost = abs(unit_cost)
 
                 # Parse optional fields
                 account_name = str(row[col_account_name]).strip() if col_account_name and pd.notna(row[col_account_name]) else None
@@ -309,6 +320,10 @@ class TaxLotParser:
         account_cache: Dict[str, Account] = {}
         security_cache: Dict[str, Security] = {}
 
+        # Track lots already seen in THIS import to detect true duplicates
+        # vs separate lots that happen to share (account, security, date, units, cost)
+        seen_in_import: Dict[Tuple, int] = {}
+
         for row in parsed_rows:
             try:
                 # Get or create account
@@ -326,25 +341,47 @@ class TaxLotParser:
                     security_cache
                 )
 
-                # Check for duplicate (same account, security, date, units, cost)
-                existing = self.db.query(TaxLot).filter(
+                # Build dedup key from all distinguishing fields
+                dedup_key = (
+                    account.id, security.id, row['open_date'],
+                    row['units'], row['unit_cost']
+                )
+
+                # Count how many times we've seen this exact combination in this import
+                seen_count = seen_in_import.get(dedup_key, 0)
+
+                # Check for duplicates from PREVIOUS imports only
+                # Count existing lots with the same key
+                existing_count = self.db.query(TaxLot).filter(
                     TaxLot.account_id == account.id,
                     TaxLot.security_id == security.id,
                     TaxLot.purchase_date == row['open_date'],
                     TaxLot.original_shares == row['units'],
                     TaxLot.cost_basis_per_share == row['unit_cost']
-                ).first()
+                ).count()
 
-                if existing:
-                    # Update existing lot with new values
+                if seen_count < existing_count:
+                    # This is a duplicate of an already-imported lot - update it
+                    existing_lots = self.db.query(TaxLot).filter(
+                        TaxLot.account_id == account.id,
+                        TaxLot.security_id == security.id,
+                        TaxLot.purchase_date == row['open_date'],
+                        TaxLot.original_shares == row['units'],
+                        TaxLot.cost_basis_per_share == row['unit_cost']
+                    ).order_by(TaxLot.id).all()
+
+                    existing = existing_lots[seen_count]
                     existing.market_value = row['market_value']
                     existing.short_term_gain_loss = row['short_term_gain_loss']
                     existing.long_term_gain_loss = row['long_term_gain_loss']
                     existing.total_gain_loss = row['total_gain_loss']
                     existing.import_log_id = import_log.id
                     existing.updated_at = datetime.utcnow()
+                    seen_in_import[dedup_key] = seen_count + 1
                     skipped += 1
                     continue
+
+                seen_in_import[dedup_key] = seen_count + 1
 
                 # Create new tax lot
                 tax_lot = TaxLot(

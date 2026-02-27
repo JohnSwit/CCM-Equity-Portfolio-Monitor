@@ -66,20 +66,33 @@ class TaxService:
     def _process_security_transactions(
         self, account_id: int, security_id: int, transactions: List[Transaction]
     ) -> int:
-        """Process transactions for a single security, creating lots and realized gains."""
-        # Delete existing lots and gains for this account/security
-        self.db.query(RealizedGain).filter(
-            and_(
-                RealizedGain.account_id == account_id,
-                RealizedGain.security_id == security_id
-            )
-        ).delete()
-        self.db.query(TaxLot).filter(
-            and_(
-                TaxLot.account_id == account_id,
-                TaxLot.security_id == security_id
-            )
-        ).delete()
+        """Process transactions for a single security, creating lots and realized gains.
+        Only rebuilds transaction-built lots; imported lots are preserved."""
+        # Get IDs of transaction-built lots (import_log_id IS NULL) to scope deletion
+        txn_built_lot_ids = [
+            lot_id for (lot_id,) in self.db.query(TaxLot.id).filter(
+                and_(
+                    TaxLot.account_id == account_id,
+                    TaxLot.security_id == security_id,
+                    TaxLot.import_log_id.is_(None)
+                )
+            ).all()
+        ]
+
+        if txn_built_lot_ids:
+            # Delete realized gains only for transaction-built lots
+            self.db.query(RealizedGain).filter(
+                and_(
+                    RealizedGain.account_id == account_id,
+                    RealizedGain.security_id == security_id,
+                    RealizedGain.tax_lot_id.in_(txn_built_lot_ids)
+                )
+            ).delete(synchronize_session=False)
+
+            # Delete only transaction-built lots (preserve imported lots)
+            self.db.query(TaxLot).filter(
+                TaxLot.id.in_(txn_built_lot_ids)
+            ).delete(synchronize_session=False)
 
         open_lots: List[TaxLot] = []
         lots_created = 0

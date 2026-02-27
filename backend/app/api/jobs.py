@@ -616,6 +616,202 @@ async def cleanup_orphaned_data_endpoint(
         )
 
 
+@router.post("/classify-securities")
+async def classify_securities(
+    unclassified_only: bool = Query(True, description="Only classify securities without existing classification"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Classify unclassified securities using Tiingo, yfinance, and static mapping.
+
+    This endpoint specifically targets securities that don't have a sector classification yet.
+    It uses multiple data sources in order: static mapping -> Tiingo -> yfinance.
+    """
+    from app.services.data_sourcing import ClassificationService
+
+    logger.info(f"Starting security classification (unclassified_only={unclassified_only})")
+
+    try:
+        service = ClassificationService(db)
+        result = await service.refresh_all_classifications(unclassified_only=unclassified_only)
+        return {
+            "status": "completed",
+            "message": f"Classified {result['success']} of {result['total']} securities",
+            **result
+        }
+    except Exception as e:
+        logger.error(f"Classification job failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/debug/data-state")
+async def get_data_state(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_admin_user)
+):
+    """
+    Comprehensive diagnostic endpoint showing the state of all data tables.
+    Use this to diagnose why portfolio values are $0 or securities are unpriced.
+
+    Key things to check:
+    - prices_eod_count: If 0, no prices have been fetched (check Tiingo API key)
+    - inception_positions_count: If 0, inception data hasn't been loaded
+    - inception_prices_seeded: If 0, inception prices haven't been seeded into PricesEOD
+    - latest_price_date: Should be recent (within 1-2 business days)
+    - portfolio_values_nonzero: Should be > 0 for accounts to show values
+    """
+    from app.models import (
+        Account, Security, Transaction, PositionsEOD, PricesEOD,
+        PortfolioValueEOD, ReturnsEOD, AccountInception, InceptionPosition, ViewType
+    )
+    from sqlalchemy import func
+
+    today = date.today()
+
+    # Prices state
+    prices_count = db.query(func.count(PricesEOD.id)).scalar() or 0
+    prices_earliest = db.query(func.min(PricesEOD.date)).scalar()
+    prices_latest = db.query(func.max(PricesEOD.date)).scalar()
+    prices_sources = db.query(
+        PricesEOD.source, func.count(PricesEOD.id)
+    ).group_by(PricesEOD.source).all()
+    securities_with_prices = db.query(
+        func.count(func.distinct(PricesEOD.security_id))
+    ).scalar() or 0
+    prices_for_today = db.query(func.count(PricesEOD.id)).filter(
+        PricesEOD.date == today
+    ).scalar() or 0
+
+    # Positions state
+    positions_count = db.query(func.count(PositionsEOD.id)).scalar() or 0
+    positions_latest = db.query(func.max(PositionsEOD.date)).scalar()
+    securities_with_positions_today = db.query(
+        func.count(func.distinct(PositionsEOD.security_id))
+    ).filter(PositionsEOD.date == today).scalar() or 0
+
+    # Portfolio values state
+    values_count = db.query(func.count(PortfolioValueEOD.id)).scalar() or 0
+    values_nonzero = db.query(func.count(PortfolioValueEOD.id)).filter(
+        PortfolioValueEOD.total_value > 0
+    ).scalar() or 0
+    latest_nonzero_value = db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.total_value > 0
+    ).order_by(PortfolioValueEOD.date.desc()).first()
+
+    # Returns state
+    returns_count = db.query(func.count(ReturnsEOD.id)).scalar() or 0
+
+    # Inception state
+    inception_count = db.query(func.count(AccountInception.id)).scalar() or 0
+    inception_positions_count = db.query(func.count(InceptionPosition.id)).scalar() or 0
+    inception_positions_with_prices = db.query(func.count(InceptionPosition.id)).filter(
+        InceptionPosition.price > 0
+    ).scalar() or 0
+
+    # Check if inception prices are seeded into PricesEOD
+    inception_prices_seeded = db.query(func.count(PricesEOD.id)).filter(
+        PricesEOD.source == 'inception'
+    ).scalar() or 0
+
+    # Entity counts
+    accounts_count = db.query(func.count(Account.id)).scalar() or 0
+    securities_count = db.query(func.count(Security.id)).scalar() or 0
+    transactions_count = db.query(func.count(Transaction.id)).scalar() or 0
+
+    # Tiingo API key status
+    from app.core.config import settings
+    tiingo_configured = bool(settings.TIINGO_API_KEY) and settings.TIINGO_API_KEY != 'your-tiingo-api-key-here'
+
+    return {
+        "as_of": str(today),
+        "tiingo_api_key_configured": tiingo_configured,
+        "entities": {
+            "accounts": accounts_count,
+            "securities": securities_count,
+            "transactions": transactions_count,
+        },
+        "inception": {
+            "inception_records": inception_count,
+            "inception_positions": inception_positions_count,
+            "inception_positions_with_prices": inception_positions_with_prices,
+            "inception_prices_seeded_to_prices_eod": inception_prices_seeded,
+        },
+        "prices_eod": {
+            "total_records": prices_count,
+            "securities_with_prices": securities_with_prices,
+            "earliest_date": str(prices_earliest) if prices_earliest else None,
+            "latest_date": str(prices_latest) if prices_latest else None,
+            "prices_for_today": prices_for_today,
+            "sources": {src: cnt for src, cnt in prices_sources},
+        },
+        "positions_eod": {
+            "total_records": positions_count,
+            "latest_date": str(positions_latest) if positions_latest else None,
+            "securities_with_positions_today": securities_with_positions_today,
+        },
+        "portfolio_values": {
+            "total_records": values_count,
+            "nonzero_records": values_nonzero,
+            "latest_nonzero_value": latest_nonzero_value.total_value if latest_nonzero_value else None,
+            "latest_nonzero_date": str(latest_nonzero_value.date) if latest_nonzero_value else None,
+        },
+        "returns": {
+            "total_records": returns_count,
+        },
+        "diagnosis": _diagnose_issues(
+            tiingo_configured, prices_count, inception_prices_seeded,
+            inception_positions_with_prices, values_nonzero, prices_for_today,
+            securities_with_positions_today
+        )
+    }
+
+
+def _diagnose_issues(
+    tiingo_configured, prices_count, inception_prices_seeded,
+    inception_positions_with_prices, values_nonzero, prices_for_today,
+    securities_with_positions_today
+) -> list:
+    """Generate diagnostic messages based on data state."""
+    issues = []
+
+    if not tiingo_configured:
+        issues.append("CRITICAL: Tiingo API key not configured. Set TIINGO_API_KEY in .env file.")
+
+    if inception_positions_with_prices > 0 and inception_prices_seeded == 0:
+        issues.append(
+            "CRITICAL: Inception positions have prices but they haven't been seeded into PricesEOD. "
+            "This means portfolio values will be $0. Make sure Docker containers are rebuilt "
+            "with latest code (cd infra && docker-compose up --build)."
+        )
+
+    if prices_count == 0:
+        issues.append(
+            "CRITICAL: No price records exist in PricesEOD table. "
+            "Either Tiingo is not configured, or the market data update hasn't run, "
+            "or inception prices haven't been seeded."
+        )
+
+    if prices_count > 0 and values_nonzero == 0:
+        issues.append(
+            "WARNING: Prices exist but all portfolio values are $0. "
+            "This could mean positions don't align with price dates."
+        )
+
+    if securities_with_positions_today > 0 and prices_for_today == 0:
+        issues.append(
+            f"INFO: {securities_with_positions_today} securities have positions for today "
+            "but no prices for today. This is normal if the market hasn't closed yet "
+            "or the data provider hasn't updated. The dashboard now shows the last "
+            "available date with prices instead."
+        )
+
+    if not issues:
+        issues.append("OK: No issues detected. Data pipeline appears healthy.")
+
+    return issues
+
+
 @router.get("/debug/account-transaction-counts")
 async def get_account_transaction_counts(
     db: Session = Depends(get_db),

@@ -26,6 +26,9 @@ class SectorClassification(Base):
     # Market cap classification
     market_cap_category = Column(String)  # "Large", "Mid", "Small"
 
+    # Geography
+    country = Column(String)  # e.g., "United States", "Taiwan"
+
     # Custom tags
     custom_sector = Column(String)  # User-defined sector
 

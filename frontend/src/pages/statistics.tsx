@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import Layout from '@/components/Layout';
 import { api } from '@/lib/api';
 import { format, subDays, subMonths, startOfYear } from 'date-fns';
-import Select from 'react-select';
+
+const Select = dynamic(() => import('react-select'), { ssr: false }) as any;
 
 // Custom styles for react-select to match the design system
 const selectStyles = {
@@ -110,13 +112,8 @@ export default function PortfolioStatisticsPage() {
   const [expandedSectors, setExpandedSectors] = useState<Set<string>>(new Set());
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
-  // Data status
-  const [dataStatus, setDataStatus] = useState<any>(null);
-  const [refreshingData, setRefreshingData] = useState<string | null>(null);
-
   useEffect(() => {
     loadViews();
-    loadDataStatus();
     loadAvailableBenchmarks();
   }, []);
 
@@ -320,44 +317,6 @@ export default function PortfolioStatisticsPage() {
     }
   };
 
-  const loadDataStatus = async () => {
-    try {
-      const status = await api.getDataStatus();
-      setDataStatus(status);
-    } catch (error) {
-      console.error('Failed to load data status:', error);
-    }
-  };
-
-  const handleRefreshClassifications = async () => {
-    setRefreshingData('classifications');
-    try {
-      const result = await api.refreshClassifications();
-      alert(`Classification refresh complete: ${result.success}/${result.total} succeeded`);
-      loadDataStatus();
-      if (selectedView) loadStatistics();
-    } catch (error) {
-      console.error('Failed to refresh classifications:', error);
-      alert('Failed to refresh classifications. See console for details.');
-    } finally {
-      setRefreshingData(null);
-    }
-  };
-
-  const handleRefreshBenchmarks = async () => {
-    setRefreshingData('benchmarks');
-    try {
-      const result = await api.refreshSP500Benchmark();
-      alert(`S&P 500 refreshed: ${result.count} constituents loaded`);
-      loadDataStatus();
-      if (selectedView) loadStatistics();
-    } catch (error) {
-      console.error('Failed to refresh S&P 500:', error);
-      alert('Failed to refresh S&P 500. See console for details.');
-    } finally {
-      setRefreshingData(null);
-    }
-  };
 
   const formatPercent = (value: number | null | undefined) => {
     if (value === null || value === undefined) return 'N/A';
@@ -430,107 +389,6 @@ export default function PortfolioStatisticsPage() {
           </div>
         </div>
 
-        {/* Data Status */}
-        {dataStatus && (
-          <div className="card">
-            <div className="card-header">
-              <h2 className="card-title">Data Status & Management</h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Classifications Status */}
-              <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/50">
-                <h3 className="text-sm font-semibold text-zinc-700 mb-3">Security Classifications</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">Coverage:</span>
-                    <span className="font-medium text-zinc-800 tabular-nums">
-                      {dataStatus.classifications.classified_securities} / {dataStatus.classifications.total_securities} ({dataStatus.classifications.coverage_percent}%)
-                    </span>
-                  </div>
-                  {dataStatus.classifications.last_updated && (
-                    <div className="flex justify-between">
-                      <span className="text-zinc-500">Last Updated:</span>
-                      <span className="font-medium text-xs text-zinc-700">{new Date(dataStatus.classifications.last_updated).toLocaleString()}</span>
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-zinc-500">Sources:</span>
-                    <div className="text-xs mt-1 space-y-0.5">
-                      {Object.entries(dataStatus.classifications.sources || {}).map(([source, count]: [string, any]) => (
-                        <div key={source} className="flex justify-between">
-                          <span className="text-zinc-600">{source}:</span>
-                          <span className="font-medium tabular-nums">{count}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleRefreshClassifications}
-                    disabled={refreshingData === 'classifications'}
-                    className="btn btn-primary w-full mt-3"
-                  >
-                    {refreshingData === 'classifications' ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Refreshing...
-                      </>
-                    ) : 'Refresh Classifications'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Benchmark Status */}
-              <div className="border border-zinc-200 rounded-lg p-4 bg-zinc-50/50">
-                <h3 className="text-sm font-semibold text-zinc-700 mb-3">S&P 500 Benchmark</h3>
-                <div className="space-y-2 text-sm">
-                  {Object.entries(dataStatus.benchmarks || {}).map(([code, data]: [string, any]) => (
-                    <div key={code} className="border-b border-zinc-200 pb-2 last:border-b-0">
-                      <div className="font-medium text-zinc-800">{code}</div>
-                      <div className="text-xs text-zinc-500">
-                        {data.constituent_count} constituents
-                      </div>
-                      {data.as_of_date && (
-                        <div className="text-xs text-zinc-500">
-                          As of: {data.as_of_date}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    onClick={handleRefreshBenchmarks}
-                    disabled={refreshingData === 'benchmarks'}
-                    className="btn btn-primary w-full mt-3"
-                  >
-                    {refreshingData === 'benchmarks' ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Refreshing...
-                      </>
-                    ) : 'Refresh S&P 500'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Data Readiness Indicators */}
-            <div className="mt-6 p-4 bg-zinc-50 rounded-lg border border-zinc-100">
-              <h3 className="text-sm font-semibold text-zinc-700 mb-3">Feature Readiness</h3>
-              <div className="flex flex-wrap gap-4">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${dataStatus.data_readiness.brinson_attribution_ready ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-                  <span className="text-sm text-zinc-700">Brinson Attribution</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {loading && (
           <div className="card">
@@ -736,7 +594,7 @@ export default function PortfolioStatisticsPage() {
                       <div className="flex flex-wrap gap-4 text-sm">
                         <span>
                           <span className="font-semibold">Total Return:</span>{' '}
-                          <span className={`font-bold ${contributionData.total_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <span className={`font-bold ${contributionData.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {formatPercent(contributionData.total_return)}
                           </span>
                         </span>
@@ -948,14 +806,14 @@ export default function PortfolioStatisticsPage() {
                         {/* Portfolio Return */}
                         <div className="text-center md:text-left">
                           <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Portfolio Return</div>
-                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.portfolio_return || 0) >= 0 ? 'text-zinc-800' : 'text-red-600'}`}>
+                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.portfolio_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.portfolio_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.portfolio_return)}
                           </div>
                         </div>
                         {/* Active Return (center, larger) */}
                         <div className="text-center">
                           <div className="text-sm text-zinc-600 mb-1">Active Return vs {brinsonData.benchmark || 'Benchmark'}</div>
-                          <div className={`text-4xl font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-4xl font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
                           <div className="text-xs text-zinc-500 mt-2">
@@ -965,7 +823,7 @@ export default function PortfolioStatisticsPage() {
                         {/* Benchmark Return */}
                         <div className="text-center md:text-right">
                           <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">{brinsonData.benchmark || 'Benchmark'} Return</div>
-                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.benchmark_return || 0) >= 0 ? 'text-zinc-600' : 'text-red-600'}`}>
+                          <div className={`text-2xl font-bold tabular-nums ${(brinsonData.benchmark_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.benchmark_return || 0) >= 0 ? '+' : ''}{formatPercent(brinsonData.benchmark_return)}
                           </div>
                         </div>
@@ -976,21 +834,21 @@ export default function PortfolioStatisticsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                       <div className="metric-card metric-card-blue">
                         <div className="metric-label">Allocation Effect</div>
-                        <div className={`metric-value-lg ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <div className={`metric-value-lg ${(brinsonData.allocation_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                           {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                         </div>
                         <div className="text-xs text-zinc-500 mt-1">Sector weighting decisions</div>
                       </div>
                       <div className="metric-card metric-card-green">
                         <div className="metric-label">Selection Effect</div>
-                        <div className={`metric-value-lg ${(brinsonData.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <div className={`metric-value-lg ${(brinsonData.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                           {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                         </div>
                         <div className="text-xs text-zinc-500 mt-1">Security selection within sectors</div>
                       </div>
                       <div className="metric-card metric-card-purple">
                         <div className="metric-label">Interaction Effect</div>
-                        <div className={`metric-value-lg ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <div className={`metric-value-lg ${(brinsonData.interaction_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                           {(brinsonData.interaction_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.interaction_effect)}
                         </div>
                         <div className="text-xs text-zinc-500 mt-1">Combined allocation & selection</div>
@@ -1037,7 +895,7 @@ export default function PortfolioStatisticsPage() {
                                   }}
                                 ></div>
                               </div>
-                              <div className={`w-24 text-right text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                              <div className={`w-24 text-right text-sm font-semibold tabular-nums ${isPositive ? 'value-positive' : 'value-negative'}`}>
                                 {isPositive ? '+' : ''}{formatBps(value)}
                               </div>
                             </div>
@@ -1047,7 +905,7 @@ export default function PortfolioStatisticsPage() {
                         <div className="flex items-center gap-3 pt-3 border-t border-zinc-200 mt-3">
                           <div className="w-24 text-sm font-bold text-zinc-900">Total Active</div>
                           <div className="flex-1"></div>
-                          <div className={`w-24 text-right text-sm font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`w-24 text-right text-sm font-bold tabular-nums ${(brinsonData.total_active_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                           </div>
                         </div>
@@ -1094,7 +952,7 @@ export default function PortfolioStatisticsPage() {
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Active Weight:</span>
-                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                           {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
                                         </span>
                                       </div>
@@ -1113,7 +971,7 @@ export default function PortfolioStatisticsPage() {
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Selection:</span>
-                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>{formatBps(sector.selection_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Interaction:</span>
@@ -1169,7 +1027,7 @@ export default function PortfolioStatisticsPage() {
                                       </div>
                                       <div className="flex justify-between">
                                         <span>Active Weight:</span>
-                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                        <span className={`font-medium tabular-nums ${(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                           {(sector.portfolio_weight - sector.benchmark_weight) >= 0 ? '+' : ''}{formatPercent(sector.portfolio_weight - sector.benchmark_weight)}
                                         </span>
                                       </div>
@@ -1188,7 +1046,7 @@ export default function PortfolioStatisticsPage() {
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Selection:</span>
-                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>{formatBps(sector.selection_effect)}</span>
+                                          <span className={`font-medium tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>{formatBps(sector.selection_effect)}</span>
                                         </div>
                                         <div className="flex justify-between">
                                           <span>Interaction:</span>
@@ -1243,7 +1101,7 @@ export default function PortfolioStatisticsPage() {
                                     <td className={`text-right tabular-nums ${(sector.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
                                       {(sector.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.allocation_effect)}
                                     </td>
-                                    <td className={`text-right tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>
+                                    <td className={`text-right tabular-nums ${(sector.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {(sector.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.selection_effect)}
                                     </td>
                                     <td className={`text-right tabular-nums ${(sector.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>
@@ -1267,7 +1125,7 @@ export default function PortfolioStatisticsPage() {
                                 <td className={`text-right tabular-nums ${(brinsonData.allocation_effect || 0) >= 0 ? 'text-blue-600' : 'text-blue-400'}`}>
                                   {(brinsonData.allocation_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.allocation_effect)}
                                 </td>
-                                <td className={`text-right tabular-nums ${(brinsonData.selection_effect || 0) >= 0 ? 'text-emerald-600' : 'text-emerald-400'}`}>
+                                <td className={`text-right tabular-nums ${(brinsonData.selection_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                   {(brinsonData.selection_effect || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.selection_effect)}
                                 </td>
                                 <td className={`text-right tabular-nums ${(brinsonData.interaction_effect || 0) >= 0 ? 'text-violet-600' : 'text-violet-400'}`}>
@@ -1396,13 +1254,13 @@ export default function PortfolioStatisticsPage() {
                       <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">
                         {useExcessReturns ? 'Excess Return' : 'Total Return'}
                       </div>
-                      <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                         {factorBenchmarking.total_return_pct?.toFixed(2)}%
                       </div>
                     </div>
                     <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
                       <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Alpha (Ann.)</div>
-                      <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                         {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
                       </div>
                       <div className="text-xs text-zinc-400 mt-1">
@@ -1567,26 +1425,26 @@ export default function PortfolioStatisticsPage() {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Portfolio Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.portfolio_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Benchmark Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.benchmark_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.active_return >= 0 ? '+' : ''}
                             {factorBenchmarking.benchmark_attribution.active_return?.toFixed(2)}%
                           </div>
                         </div>
                         <div>
                           <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Alpha</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'value-positive' : 'value-negative'}`}>
                             {factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? '+' : ''}
                             {factorBenchmarking.benchmark_attribution.active_alpha?.toFixed(2)}%
                           </div>
@@ -1859,11 +1717,11 @@ export default function PortfolioStatisticsPage() {
                                       {period.portfolio_return?.toFixed(2)}%
                                     </td>
                                     {factorContribOverTime.factors?.map((f: string) => (
-                                      <td key={f} className={`text-right tabular-nums ${(period.factor_contributions?.[f] || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                      <td key={f} className={`text-right tabular-nums ${(period.factor_contributions?.[f] || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                         {period.factor_contributions?.[f]?.toFixed(2)}%
                                       </td>
                                     ))}
-                                    <td className={`text-right tabular-nums ${period.alpha_contribution >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    <td className={`text-right tabular-nums ${period.alpha_contribution >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {period.alpha_contribution?.toFixed(2)}%
                                     </td>
                                   </tr>

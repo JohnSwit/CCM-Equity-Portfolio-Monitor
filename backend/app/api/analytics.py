@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, List
+from functools import lru_cache
+import time
 from app.core.database import get_db
 from app.api.auth import get_current_user
+
+
+# Simple time-based cache for expensive, rarely-changing queries
+_benchmark_cache: dict = {}
+_BENCHMARK_CACHE_TTL = 300  # 5 minutes
 from app.models import (
     User, PortfolioValueEOD, ReturnsEOD, RiskEOD,
     BenchmarkMetric, BenchmarkReturn, FactorRegression, ViewType, Account, Group,
@@ -19,6 +27,54 @@ from app.services.returns import ReturnsEngine
 from app.services.positions import PositionsEngine
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+def _get_group_account_ids(db: Session, group_id: int) -> List[int]:
+    """Get member account IDs for a group. Cached per request via helper."""
+    from app.services.groups import GroupsEngine
+    return GroupsEngine(db).get_group_account_ids(group_id)
+
+
+def _get_group_latest_value(db: Session, view_id: int):
+    """
+    For group/firm views without direct PortfolioValueEOD rows,
+    aggregate from member accounts' PortfolioValueEOD.
+    Returns (total_value, as_of_date, created_at) or None.
+    """
+    account_ids = _get_group_account_ids(db, view_id)
+    if not account_ids:
+        return None
+
+    # Find the latest date with data across member accounts (prefer non-zero)
+    latest_date = db.query(func.max(PortfolioValueEOD.date)).filter(
+        and_(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+            PortfolioValueEOD.view_id.in_(account_ids),
+            PortfolioValueEOD.total_value > 0,
+        )
+    ).scalar()
+
+    if not latest_date:
+        latest_date = db.query(func.max(PortfolioValueEOD.date)).filter(
+            and_(
+                PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+                PortfolioValueEOD.view_id.in_(account_ids),
+            )
+        ).scalar()
+
+    if not latest_date:
+        return None
+
+    # Sum the member accounts' values on that date
+    total = db.query(func.sum(PortfolioValueEOD.total_value)).filter(
+        and_(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+            PortfolioValueEOD.view_id.in_(account_ids),
+            PortfolioValueEOD.date == latest_date,
+        )
+    ).scalar() or 0.0
+
+    return total, latest_date
 
 
 def parse_view_type(view_type_str: str) -> ViewType:
@@ -50,13 +106,53 @@ def get_summary(
     vt = parse_view_type(view_type)
     db_vt = get_db_view_type(vt)
 
-    # Get latest value
+    # Get latest value - prefer the most recent date with a non-zero value.
+    # This avoids showing $0 when today's market data hasn't been fetched yet
+    # (positions exist for today but prices don't, resulting in a $0 value).
     latest_value = db.query(PortfolioValueEOD).filter(
         and_(
             PortfolioValueEOD.view_type == db_vt,
-            PortfolioValueEOD.view_id == view_id
+            PortfolioValueEOD.view_id == view_id,
+            PortfolioValueEOD.total_value > 0
         )
     ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    # Fall back to any value if all are zero (e.g., truly empty portfolio)
+    if not latest_value:
+        latest_value = db.query(PortfolioValueEOD).filter(
+            and_(
+                PortfolioValueEOD.view_type == db_vt,
+                PortfolioValueEOD.view_id == view_id
+            )
+        ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    # For group/firm views, fall back to aggregating member accounts' values
+    if not latest_value and vt in (ViewType.GROUP, ViewType.FIRM):
+        agg = _get_group_latest_value(db, view_id)
+        if agg:
+            total_value, as_of_date = agg
+            # Build a synthetic response from aggregated data
+            view_name = ""
+            group = db.query(Group).filter(Group.id == view_id).first()
+            view_name = group.name if group else f"Group {view_id}"
+
+            returns_engine = ReturnsEngine(db)
+            period_returns = returns_engine.compute_period_returns(db_vt, view_id, as_of_date)
+
+            return SummaryResponse(
+                view_type=view_type,
+                view_id=view_id,
+                view_name=view_name,
+                total_value=total_value,
+                as_of_date=as_of_date,
+                data_last_updated=None,
+                return_1m=period_returns.get('1M'),
+                return_3m=period_returns.get('3M'),
+                return_ytd=period_returns.get('YTD'),
+                return_1y=period_returns.get('1Y'),
+                return_3y=period_returns.get('3Y'),
+                return_inception=period_returns.get('inception')
+            )
 
     if not latest_value:
         raise HTTPException(status_code=404, detail="No data found for this view")
@@ -103,7 +199,10 @@ def get_returns(
     vt = parse_view_type(view_type)
     db_vt = get_db_view_type(vt)
 
-    query = db.query(ReturnsEOD).filter(
+    # Select only needed columns for faster query and less memory
+    query = db.query(
+        ReturnsEOD.date, ReturnsEOD.twr_return, ReturnsEOD.twr_index
+    ).filter(
         and_(
             ReturnsEOD.view_type == db_vt,
             ReturnsEOD.view_id == view_id
@@ -119,11 +218,11 @@ def get_returns(
 
     return [
         ReturnDataPoint(
-            date=r.date,
-            return_value=r.twr_return,
-            index_value=r.twr_index
+            date=r_date,
+            return_value=r_twr_return,
+            index_value=r_twr_index
         )
-        for r in returns
+        for r_date, r_twr_return, r_twr_index in returns
     ]
 
 
@@ -142,8 +241,21 @@ def get_benchmark_returns(
     codes = [c.strip() for c in benchmark_codes.split(',')]
     result = {}
 
+    # Check server-side cache for each benchmark code
+    now = time.time()
+    cache_key_parts = f"{start_date}_{end_date}"
+
     for code in codes:
-        query = db.query(BenchmarkReturn).filter(BenchmarkReturn.code == code)
+        code_cache_key = f"{code}_{cache_key_parts}"
+        cached = _benchmark_cache.get(code_cache_key)
+        if cached and (now - cached['ts']) < _BENCHMARK_CACHE_TTL:
+            result[code] = cached['data']
+            continue
+
+        # Fetch only (code, date, return_value) columns instead of full ORM objects
+        query = db.query(BenchmarkReturn.date, BenchmarkReturn.return_value).filter(
+            BenchmarkReturn.code == code
+        )
 
         if start_date:
             query = query.filter(BenchmarkReturn.date >= start_date)
@@ -155,15 +267,16 @@ def get_benchmark_returns(
         # Compute cumulative index starting at 1.0
         cumulative_index = 1.0
         data_points = []
-        for r in returns:
-            cumulative_index *= (1 + r.return_value)
+        for r_date, r_value in returns:
+            cumulative_index *= (1 + r_value)
             data_points.append({
-                'date': r.date,
-                'return_value': r.return_value,
+                'date': r_date,
+                'return_value': r_value,
                 'index_value': cumulative_index
             })
 
         result[code] = data_points
+        _benchmark_cache[code_cache_key] = {'data': data_points, 'ts': now}
 
     return result
 
@@ -181,80 +294,55 @@ def get_holdings(
     db_vt = get_db_view_type(vt)
 
     if not as_of_date:
-        # Get latest date
+        # Get latest date with a non-zero value (avoids using today when prices
+        # haven't been fetched yet, which would show $0 for everything)
         latest = db.query(PortfolioValueEOD.date).filter(
             and_(
                 PortfolioValueEOD.view_type == db_vt,
-                PortfolioValueEOD.view_id == view_id
+                PortfolioValueEOD.view_id == view_id,
+                PortfolioValueEOD.total_value > 0
             )
         ).order_by(desc(PortfolioValueEOD.date)).first()
 
+        # Fall back to any date if all values are zero
         if not latest:
+            latest = db.query(PortfolioValueEOD.date).filter(
+                and_(
+                    PortfolioValueEOD.view_type == db_vt,
+                    PortfolioValueEOD.view_id == view_id
+                )
+            ).order_by(desc(PortfolioValueEOD.date)).first()
+
+        # For group/firm views, fall back to member accounts' data
+        if not latest and vt in (ViewType.GROUP, ViewType.FIRM):
+            account_ids = _get_group_account_ids(db, view_id)
+            if account_ids:
+                latest = db.query(func.max(PortfolioValueEOD.date)).filter(
+                    and_(
+                        PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+                        PortfolioValueEOD.view_id.in_(account_ids),
+                        PortfolioValueEOD.total_value > 0,
+                    )
+                ).scalar()
+                if latest:
+                    as_of_date = latest
+
+        if not as_of_date and not latest:
             raise HTTPException(status_code=404, detail="No data found")
 
-        as_of_date = latest[0]
+        if not as_of_date:
+            as_of_date = latest[0]
 
     # Get holdings
     if vt == ViewType.ACCOUNT:
         engine = PositionsEngine(db)
         holdings_data = engine.get_holdings_as_of(view_id, as_of_date)
     else:
-        # For groups, aggregate holdings from member accounts
-        from app.services.groups import GroupsEngine
-        groups_engine = GroupsEngine(db)
-        account_ids = groups_engine.get_group_account_ids(view_id)
+        # For groups, use batch query to get all holdings in one go
+        account_ids = _get_group_account_ids(db, view_id)
 
-        # Aggregate positions
         positions_engine = PositionsEngine(db)
-        all_holdings = {}
-
-        for account_id in account_ids:
-            holdings = positions_engine.get_holdings_as_of(account_id, as_of_date)
-            for holding in holdings:
-                symbol = holding['symbol']
-                if symbol not in all_holdings:
-                    all_holdings[symbol] = holding.copy()
-                    # Track total cost for weighted average across accounts
-                    if holding['avg_cost'] is not None:
-                        all_holdings[symbol]['_total_cost'] = holding['avg_cost'] * holding['shares']
-                        all_holdings[symbol]['_total_cost_shares'] = holding['shares']
-                    else:
-                        all_holdings[symbol]['_total_cost'] = 0
-                        all_holdings[symbol]['_total_cost_shares'] = 0
-                else:
-                    all_holdings[symbol]['shares'] += holding['shares']
-                    all_holdings[symbol]['market_value'] += holding['market_value']
-                    # Aggregate 1D gains
-                    if holding['gain_1d'] is not None:
-                        if all_holdings[symbol]['gain_1d'] is not None:
-                            all_holdings[symbol]['gain_1d'] += holding['gain_1d']
-                        else:
-                            all_holdings[symbol]['gain_1d'] = holding['gain_1d']
-                    # Aggregate unrealized gains
-                    if holding['unr_gain'] is not None:
-                        if all_holdings[symbol]['unr_gain'] is not None:
-                            all_holdings[symbol]['unr_gain'] += holding['unr_gain']
-                        else:
-                            all_holdings[symbol]['unr_gain'] = holding['unr_gain']
-                    # Track cost basis for weighted average
-                    if holding['avg_cost'] is not None:
-                        all_holdings[symbol]['_total_cost'] += holding['avg_cost'] * holding['shares']
-                        all_holdings[symbol]['_total_cost_shares'] += holding['shares']
-
-        # Recalculate avg_cost and percentage gains for aggregated holdings
-        for symbol, h in all_holdings.items():
-            if h['_total_cost_shares'] > 0:
-                h['avg_cost'] = h['_total_cost'] / h['_total_cost_shares']
-                if h['price'] is not None and h['avg_cost'] > 0:
-                    h['unr_gain_pct'] = (h['price'] - h['avg_cost']) / h['avg_cost']
-            # Recalculate 1D gain pct based on aggregated values
-            if h.get('gain_1d') is not None and h['market_value'] > 0:
-                # Estimate based on market value change
-                prev_value = h['market_value'] - h['gain_1d']
-                if prev_value > 0:
-                    h['gain_1d_pct'] = h['gain_1d'] / prev_value
-
-        holdings_data = list(all_holdings.values())
+        holdings_data = positions_engine.get_holdings_for_accounts(account_ids, as_of_date)
 
     # Compute total and weights
     total_value = sum(h['market_value'] for h in holdings_data if h['has_price'])
