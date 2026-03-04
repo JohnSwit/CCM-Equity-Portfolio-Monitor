@@ -251,7 +251,7 @@ class GroupsEngine:
 
         # Compute group returns
         group_returns = []
-        index_value = 100.0
+        index_value = 1.0  # Match account-level convention (1.0 = start)
 
         for i, current_date in enumerate(all_dates):
             if i == 0:
@@ -313,8 +313,32 @@ class GroupsEngine:
         logger.info(f"Created {count} returns for group {group_id}")
         return count
 
+    def _clear_group_analytics(self, group_id: int):
+        """Clear portfolio values and returns for a single group.
+
+        Called just before rebuild so the data gap is minimal.
+        The delete + rebuild + commit happens as one atomic unit per group.
+        """
+        self.db.query(PortfolioValueEOD).filter(
+            and_(
+                PortfolioValueEOD.view_type == ViewType.GROUP,
+                PortfolioValueEOD.view_id == group_id,
+            )
+        ).delete(synchronize_session=False)
+
+        self.db.query(ReturnsEOD).filter(
+            and_(
+                ReturnsEOD.view_type == ViewType.GROUP,
+                ReturnsEOD.view_id == group_id,
+            )
+        ).delete(synchronize_session=False)
+
     def compute_all_groups(self) -> Dict[str, int]:
-        """Compute values and returns for all groups including firm"""
+        """Compute values and returns for all groups including firm.
+
+        Each group's old data is cleared and rebuilt atomically to avoid
+        serving empty responses during the update window.
+        """
         # Ensure firm group exists
         self.ensure_firm_group()
 
@@ -328,11 +352,16 @@ class GroupsEngine:
 
         for group in groups:
             try:
+                # Clear old data for this group, then rebuild immediately.
+                # The commit inside compute_group_values/compute_group_returns
+                # makes the delete+insert appear atomic to concurrent readers.
+                self._clear_group_analytics(group.id)
                 self.compute_group_values(group.id)
                 self.compute_group_returns(group.id)
                 results['updated'] += 1
             except Exception as e:
                 logger.error(f"Failed to compute group {group.id}: {e}")
+                self.db.rollback()
                 results['failed'] += 1
 
         return results

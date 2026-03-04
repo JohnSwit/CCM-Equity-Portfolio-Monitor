@@ -128,6 +128,8 @@ class BDParser:
             return TransactionType.BUY
         elif 'sell' in raw_lower or 'sale' in raw_lower:
             return TransactionType.SELL
+        elif 'reinvest' in raw_lower or 'div reinvest' in raw_lower or 'dividend reinvest' in raw_lower:
+            return TransactionType.DIVIDEND_REINVEST
         elif 'dividend' in raw_lower or 'div' in raw_lower:
             return TransactionType.DIVIDEND
         elif 'transfer in' in raw_lower or 'deposit' in raw_lower:

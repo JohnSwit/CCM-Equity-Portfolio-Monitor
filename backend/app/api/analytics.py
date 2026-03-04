@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, List
+from functools import lru_cache
+import time
 from app.core.database import get_db
 from app.api.auth import get_current_user
+
+
+# Simple time-based cache for expensive, rarely-changing queries
+_benchmark_cache: dict = {}
+_BENCHMARK_CACHE_TTL = 300  # 5 minutes
 from app.models import (
     User, PortfolioValueEOD, ReturnsEOD, RiskEOD,
     BenchmarkMetric, BenchmarkReturn, FactorRegression, ViewType, Account, Group,
@@ -19,6 +27,54 @@ from app.services.returns import ReturnsEngine
 from app.services.positions import PositionsEngine
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+def _get_group_account_ids(db: Session, group_id: int) -> List[int]:
+    """Get member account IDs for a group. Cached per request via helper."""
+    from app.services.groups import GroupsEngine
+    return GroupsEngine(db).get_group_account_ids(group_id)
+
+
+def _get_group_latest_value(db: Session, view_id: int):
+    """
+    For group/firm views without direct PortfolioValueEOD rows,
+    aggregate from member accounts' PortfolioValueEOD.
+    Returns (total_value, as_of_date, created_at) or None.
+    """
+    account_ids = _get_group_account_ids(db, view_id)
+    if not account_ids:
+        return None
+
+    # Find the latest date with data across member accounts (prefer non-zero)
+    latest_date = db.query(func.max(PortfolioValueEOD.date)).filter(
+        and_(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+            PortfolioValueEOD.view_id.in_(account_ids),
+            PortfolioValueEOD.total_value > 0,
+        )
+    ).scalar()
+
+    if not latest_date:
+        latest_date = db.query(func.max(PortfolioValueEOD.date)).filter(
+            and_(
+                PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+                PortfolioValueEOD.view_id.in_(account_ids),
+            )
+        ).scalar()
+
+    if not latest_date:
+        return None
+
+    # Sum the member accounts' values on that date
+    total = db.query(func.sum(PortfolioValueEOD.total_value)).filter(
+        and_(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+            PortfolioValueEOD.view_id.in_(account_ids),
+            PortfolioValueEOD.date == latest_date,
+        )
+    ).scalar() or 0.0
+
+    return total, latest_date
 
 
 def parse_view_type(view_type_str: str) -> ViewType:
@@ -50,13 +106,53 @@ def get_summary(
     vt = parse_view_type(view_type)
     db_vt = get_db_view_type(vt)
 
-    # Get latest value
+    # Get latest value - prefer the most recent date with a non-zero value.
+    # This avoids showing $0 when today's market data hasn't been fetched yet
+    # (positions exist for today but prices don't, resulting in a $0 value).
     latest_value = db.query(PortfolioValueEOD).filter(
         and_(
             PortfolioValueEOD.view_type == db_vt,
-            PortfolioValueEOD.view_id == view_id
+            PortfolioValueEOD.view_id == view_id,
+            PortfolioValueEOD.total_value > 0
         )
     ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    # Fall back to any value if all are zero (e.g., truly empty portfolio)
+    if not latest_value:
+        latest_value = db.query(PortfolioValueEOD).filter(
+            and_(
+                PortfolioValueEOD.view_type == db_vt,
+                PortfolioValueEOD.view_id == view_id
+            )
+        ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    # For group/firm views, fall back to aggregating member accounts' values
+    if not latest_value and vt in (ViewType.GROUP, ViewType.FIRM):
+        agg = _get_group_latest_value(db, view_id)
+        if agg:
+            total_value, as_of_date = agg
+            # Build a synthetic response from aggregated data
+            view_name = ""
+            group = db.query(Group).filter(Group.id == view_id).first()
+            view_name = group.name if group else f"Group {view_id}"
+
+            returns_engine = ReturnsEngine(db)
+            period_returns = returns_engine.compute_period_returns(db_vt, view_id, as_of_date)
+
+            return SummaryResponse(
+                view_type=view_type,
+                view_id=view_id,
+                view_name=view_name,
+                total_value=total_value,
+                as_of_date=as_of_date,
+                data_last_updated=None,
+                return_1m=period_returns.get('1M'),
+                return_3m=period_returns.get('3M'),
+                return_ytd=period_returns.get('YTD'),
+                return_1y=period_returns.get('1Y'),
+                return_3y=period_returns.get('3Y'),
+                return_inception=period_returns.get('inception')
+            )
 
     if not latest_value:
         raise HTTPException(status_code=404, detail="No data found for this view")
@@ -103,7 +199,10 @@ def get_returns(
     vt = parse_view_type(view_type)
     db_vt = get_db_view_type(vt)
 
-    query = db.query(ReturnsEOD).filter(
+    # Select only needed columns for faster query and less memory
+    query = db.query(
+        ReturnsEOD.date, ReturnsEOD.twr_return, ReturnsEOD.twr_index
+    ).filter(
         and_(
             ReturnsEOD.view_type == db_vt,
             ReturnsEOD.view_id == view_id
@@ -119,11 +218,11 @@ def get_returns(
 
     return [
         ReturnDataPoint(
-            date=r.date,
-            return_value=r.twr_return,
-            index_value=r.twr_index
+            date=r_date,
+            return_value=r_twr_return,
+            index_value=r_twr_index
         )
-        for r in returns
+        for r_date, r_twr_return, r_twr_index in returns
     ]
 
 
@@ -142,8 +241,21 @@ def get_benchmark_returns(
     codes = [c.strip() for c in benchmark_codes.split(',')]
     result = {}
 
+    # Check server-side cache for each benchmark code
+    now = time.time()
+    cache_key_parts = f"{start_date}_{end_date}"
+
     for code in codes:
-        query = db.query(BenchmarkReturn).filter(BenchmarkReturn.code == code)
+        code_cache_key = f"{code}_{cache_key_parts}"
+        cached = _benchmark_cache.get(code_cache_key)
+        if cached and (now - cached['ts']) < _BENCHMARK_CACHE_TTL:
+            result[code] = cached['data']
+            continue
+
+        # Fetch only (code, date, return_value) columns instead of full ORM objects
+        query = db.query(BenchmarkReturn.date, BenchmarkReturn.return_value).filter(
+            BenchmarkReturn.code == code
+        )
 
         if start_date:
             query = query.filter(BenchmarkReturn.date >= start_date)
@@ -155,15 +267,16 @@ def get_benchmark_returns(
         # Compute cumulative index starting at 1.0
         cumulative_index = 1.0
         data_points = []
-        for r in returns:
-            cumulative_index *= (1 + r.return_value)
+        for r_date, r_value in returns:
+            cumulative_index *= (1 + r_value)
             data_points.append({
-                'date': r.date,
-                'return_value': r.return_value,
+                'date': r_date,
+                'return_value': r_value,
                 'index_value': cumulative_index
             })
 
         result[code] = data_points
+        _benchmark_cache[code_cache_key] = {'data': data_points, 'ts': now}
 
     return result
 
@@ -181,44 +294,55 @@ def get_holdings(
     db_vt = get_db_view_type(vt)
 
     if not as_of_date:
-        # Get latest date
+        # Get latest date with a non-zero value (avoids using today when prices
+        # haven't been fetched yet, which would show $0 for everything)
         latest = db.query(PortfolioValueEOD.date).filter(
             and_(
                 PortfolioValueEOD.view_type == db_vt,
-                PortfolioValueEOD.view_id == view_id
+                PortfolioValueEOD.view_id == view_id,
+                PortfolioValueEOD.total_value > 0
             )
         ).order_by(desc(PortfolioValueEOD.date)).first()
 
+        # Fall back to any date if all values are zero
         if not latest:
+            latest = db.query(PortfolioValueEOD.date).filter(
+                and_(
+                    PortfolioValueEOD.view_type == db_vt,
+                    PortfolioValueEOD.view_id == view_id
+                )
+            ).order_by(desc(PortfolioValueEOD.date)).first()
+
+        # For group/firm views, fall back to member accounts' data
+        if not latest and vt in (ViewType.GROUP, ViewType.FIRM):
+            account_ids = _get_group_account_ids(db, view_id)
+            if account_ids:
+                latest = db.query(func.max(PortfolioValueEOD.date)).filter(
+                    and_(
+                        PortfolioValueEOD.view_type == ViewType.ACCOUNT,
+                        PortfolioValueEOD.view_id.in_(account_ids),
+                        PortfolioValueEOD.total_value > 0,
+                    )
+                ).scalar()
+                if latest:
+                    as_of_date = latest
+
+        if not as_of_date and not latest:
             raise HTTPException(status_code=404, detail="No data found")
 
-        as_of_date = latest[0]
+        if not as_of_date:
+            as_of_date = latest[0]
 
     # Get holdings
     if vt == ViewType.ACCOUNT:
         engine = PositionsEngine(db)
         holdings_data = engine.get_holdings_as_of(view_id, as_of_date)
     else:
-        # For groups, aggregate holdings from member accounts
-        from app.services.groups import GroupsEngine
-        groups_engine = GroupsEngine(db)
-        account_ids = groups_engine.get_group_account_ids(view_id)
+        # For groups, use batch query to get all holdings in one go
+        account_ids = _get_group_account_ids(db, view_id)
 
-        # Aggregate positions
         positions_engine = PositionsEngine(db)
-        all_holdings = {}
-
-        for account_id in account_ids:
-            holdings = positions_engine.get_holdings_as_of(account_id, as_of_date)
-            for holding in holdings:
-                symbol = holding['symbol']
-                if symbol not in all_holdings:
-                    all_holdings[symbol] = holding.copy()
-                else:
-                    all_holdings[symbol]['shares'] += holding['shares']
-                    all_holdings[symbol]['market_value'] += holding['market_value']
-
-        holdings_data = list(all_holdings.values())
+        holdings_data = positions_engine.get_holdings_for_accounts(account_ids, as_of_date)
 
     # Compute total and weights
     total_value = sum(h['market_value'] for h in holdings_data if h['has_price'])
@@ -233,7 +357,12 @@ def get_holdings(
                 shares=h['shares'],
                 price=h['price'],
                 market_value=h['market_value'],
-                weight=weight
+                weight=weight,
+                avg_cost=h.get('avg_cost'),
+                gain_1d_pct=h.get('gain_1d_pct'),
+                gain_1d=h.get('gain_1d'),
+                unr_gain_pct=h.get('unr_gain_pct'),
+                unr_gain=h.get('unr_gain')
             ))
 
     return HoldingsResponse(
@@ -392,3 +521,380 @@ def get_unpriced_instruments(
         )
         for u in unpriced
     ]
+
+
+# ============================================================================
+# Factor Benchmarking + Attribution Endpoints
+# ============================================================================
+
+@router.get("/factor-models")
+def get_factor_models(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get available factor models"""
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    return service.get_available_models()
+
+
+@router.get("/factor-benchmarking")
+def get_factor_benchmarking(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),  # 1M, 3M, 6M, YTD, 1Y, ALL
+    use_excess_returns: bool = Query(False),
+    use_robust: bool = Query(False),
+    benchmark_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get factor benchmarking and attribution analysis.
+
+    Returns:
+    - Factor betas (exposures) with confidence intervals
+    - Alpha (daily and annualized) with CI and Information Ratio
+    - R-squared and adjusted R-squared
+    - Diagnostics (VIF, correlations, residual tests)
+    - Return attribution by factor
+    - Optional benchmark-relative attribution
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == 'ALL':
+        # Get earliest portfolio data
+        earliest = db.query(PortfolioValueEOD.date).filter(
+            and_(
+                PortfolioValueEOD.view_type == db_vt,
+                PortfolioValueEOD.view_id == view_id
+            )
+        ).order_by(PortfolioValueEOD.date).first()
+        start_date = earliest[0] if earliest else end_date - timedelta(days=365)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Check if we need to refresh factor data
+    # For now, always try to get latest data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        # Log but continue - we might have cached data
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+        # Rollback the session to clear any pending errors
+        db.rollback()
+
+    # Check factor data status first
+    data_status = service.check_factor_data_status(model_code, start_date, end_date)
+
+    # Compute attribution with new parameters
+    result = service.compute_attribution(
+        db_vt, view_id, model_code, start_date, end_date,
+        use_excess_returns=use_excess_returns,
+        use_robust=use_robust,
+        benchmark_code=benchmark_code
+    )
+
+    if not result:
+        # Provide detailed error message
+        if not data_status['available']:
+            detail = data_status.get('message', 'Factor data unavailable')
+            missing_symbols = [
+                s for s, info in data_status.get('symbols', {}).items()
+                if not info.get('has_data', False)
+            ]
+            if missing_symbols:
+                detail += f" Missing data for: {', '.join(missing_symbols[:5])}"
+                if len(missing_symbols) > 5:
+                    detail += f" and {len(missing_symbols) - 5} more."
+            raise HTTPException(
+                status_code=503,  # Service Unavailable
+                detail=detail
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not compute factor analysis. Portfolio may have insufficient return data (need at least 30 trading days)."
+            )
+
+    # Add data status info to result for transparency
+    result['data_status'] = {
+        'symbols_with_data': data_status['symbols_with_data'],
+        'symbols_total': data_status['symbols_total'],
+        'min_coverage_pct': data_status['min_coverage_pct'],
+        'status_message': data_status['message']
+    }
+
+    return result
+
+
+@router.post("/refresh-factor-data")
+def refresh_factor_data(
+    model_code: str = Query("US_CORE"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Refresh factor proxy data from external sources.
+    Only fetches missing dates.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    if not end_date:
+        end_date = date.today()
+    if not start_date:
+        start_date = end_date - timedelta(days=365 * 2)  # Default 2 years
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    try:
+        results = service.refresh_factor_data(model_code, start_date, end_date)
+        return {
+            "status": "success",
+            "model_code": model_code,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "rows_fetched": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/factor-rolling-analysis")
+def get_factor_rolling_analysis(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    window_days: int = Query(63),  # 30, 63, 126, 252
+    use_excess_returns: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get rolling factor analysis (betas, alpha, R-squared over time).
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period (need extra for rolling window)
+    if period == '1M':
+        start_date = end_date - timedelta(days=30 + window_days)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90 + window_days)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180 + window_days)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1) - timedelta(days=window_days)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365 + window_days)
+    else:
+        start_date = end_date - timedelta(days=365 + window_days)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Refresh factor data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+        db.rollback()
+
+    result = service.compute_rolling_analysis(
+        db_vt, view_id, model_code, start_date, end_date,
+        window_days=window_days,
+        use_excess_returns=use_excess_returns
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not compute rolling analysis. Ensure sufficient data is available."
+        )
+
+    return result
+
+
+@router.get("/factor-contribution-over-time")
+def get_factor_contribution_over_time(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    frequency: str = Query("M"),  # M=monthly, Q=quarterly
+    use_excess_returns: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get factor contributions over time (monthly or quarterly breakdown).
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    # Get latest portfolio data date
+    latest = db.query(PortfolioValueEOD.date).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id
+        )
+    ).order_by(desc(PortfolioValueEOD.date)).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No portfolio data found")
+
+    end_date = latest[0]
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == '2Y':
+        start_date = end_date - timedelta(days=365 * 2)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    # Refresh factor data
+    try:
+        service.refresh_factor_data(model_code, start_date, end_date)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to refresh factor data: {e}")
+        db.rollback()
+
+    result = service.compute_contribution_over_time(
+        db_vt, view_id, model_code, start_date, end_date,
+        frequency=frequency,
+        use_excess_returns=use_excess_returns
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not compute contribution analysis. Ensure sufficient data is available."
+        )
+
+    return result
+
+
+@router.get("/available-benchmarks")
+def get_available_benchmarks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get list of available benchmarks for comparison.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+
+    service = FactorBenchmarkingService(db)
+    return service.get_available_benchmarks()
+
+
+@router.get("/factor-data-status")
+def get_factor_data_status(
+    model_code: str = Query("US_CORE"),
+    period: str = Query("1Y"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check factor data availability and status.
+    Useful for diagnosing why factor analysis may not be working.
+    """
+    from app.services.factor_benchmarking import FactorBenchmarkingService
+    from datetime import timedelta
+
+    end_date = date.today()
+
+    # Calculate start date based on period
+    if period == '1M':
+        start_date = end_date - timedelta(days=30)
+    elif period == '3M':
+        start_date = end_date - timedelta(days=90)
+    elif period == '6M':
+        start_date = end_date - timedelta(days=180)
+    elif period == 'YTD':
+        start_date = date(end_date.year, 1, 1)
+    elif period == '1Y':
+        start_date = end_date - timedelta(days=365)
+    elif period == '2Y':
+        start_date = end_date - timedelta(days=365 * 2)
+    else:
+        start_date = end_date - timedelta(days=365)
+
+    service = FactorBenchmarkingService(db)
+    service.ensure_default_models()
+
+    return service.check_factor_data_status(model_code, start_date, end_date)

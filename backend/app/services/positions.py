@@ -2,10 +2,11 @@ import pandas as pd
 from typing import List, Dict, Optional
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, desc
 from app.models import (
     Transaction, PositionsEOD, PricesEOD, Security,
-    TransactionType, Account
+    TransactionType, Account, AccountInception, InceptionPosition,
+    TaxLot
 )
 import logging
 
@@ -20,9 +21,9 @@ class PositionsEngine:
 
     def get_transaction_unit_delta(self, txn_type: TransactionType, units: float) -> float:
         """Get share delta for a transaction type"""
-        if txn_type == TransactionType.BUY or txn_type == TransactionType.TRANSFER_IN:
+        if txn_type in (TransactionType.BUY, TransactionType.TRANSFER_IN, TransactionType.DIVIDEND_REINVEST):
             return units
-        elif txn_type == TransactionType.SELL or txn_type == TransactionType.TRANSFER_OUT:
+        elif txn_type in (TransactionType.SELL, TransactionType.TRANSFER_OUT):
             return -units
         else:
             return 0.0
@@ -33,37 +34,74 @@ class PositionsEngine:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None
     ) -> int:
-        """Build daily positions for an account"""
+        """
+        Build daily positions for an account.
+
+        If the account has inception data, uses inception positions as the starting
+        point and only processes transactions after the inception date.
+        """
         if not end_date:
             end_date = date.today()
 
-        if not start_date:
-            # Get first transaction date for this account
+        # Check for inception data
+        inception = self.db.query(AccountInception).filter(
+            AccountInception.account_id == account_id
+        ).first()
+
+        inception_positions = {}  # security_id -> shares at inception
+        effective_start_date = start_date
+
+        if inception:
+            # Load inception positions as starting point
+            for pos in inception.positions:
+                inception_positions[pos.security_id] = pos.shares
+
+            # Start from the day after inception for transactions
+            # (inception date already has positions set)
+            if not start_date or start_date < inception.inception_date:
+                effective_start_date = inception.inception_date + timedelta(days=1)
+
+            logger.info(f"Account {account_id} has inception data from {inception.inception_date} with {len(inception_positions)} positions")
+
+        if not effective_start_date:
+            # No inception - get first transaction date
             first_txn = self.db.query(Transaction).filter(
                 Transaction.account_id == account_id
             ).order_by(Transaction.trade_date).first()
 
             if not first_txn:
+                # No transactions and no inception - nothing to build
+                if inception:
+                    # But we have inception, so ensure inception positions exist
+                    return self._ensure_inception_positions_eod(account_id, inception)
                 return 0
 
-            start_date = first_txn.trade_date
+            effective_start_date = first_txn.trade_date
 
-        # Get all transactions for this account
+        # Get all transactions for this account from start date
         transactions = self.db.query(Transaction).filter(
             and_(
                 Transaction.account_id == account_id,
                 Transaction.trade_date.isnot(None),
-                Transaction.trade_date >= start_date,
+                Transaction.trade_date >= effective_start_date,
                 Transaction.trade_date <= end_date,
                 Transaction.security_id.isnot(None)
             )
         ).order_by(Transaction.trade_date, Transaction.id).all()
 
-        if not transactions:
+        # If no transactions and no inception, nothing to build
+        if not transactions and not inception:
             return 0
+
+        # Note: Even if no transactions, we continue if we have inception data
+        # The inception positions will be forward-filled to all trading dates
 
         # Group by security and build cumulative positions
         security_positions = {}
+
+        # Initialize with inception positions (these are carried forward)
+        for security_id, shares in inception_positions.items():
+            security_positions[security_id] = []
 
         for txn in transactions:
             security_id = txn.security_id
@@ -77,27 +115,60 @@ class PositionsEngine:
                 'delta': delta
             })
 
+        # Determine calendar start date
+        calendar_start = effective_start_date
+        if inception:
+            # Include inception date in calendar
+            calendar_start = inception.inception_date
+
         # Get trading calendar from prices
-        trading_dates = self._get_trading_calendar(start_date, end_date)
+        trading_dates = self._get_trading_calendar(calendar_start, end_date)
+
+        # Ensure we have at least some trading dates
+        if not trading_dates:
+            logger.warning(f"No trading dates found for account {account_id} from {calendar_start} to {end_date}")
+            # Fallback: use end_date at minimum so positions exist for today
+            trading_dates = [end_date]
+
+        logger.info(f"Building positions for account {account_id}: {len(inception_positions)} inception securities, {len(trading_dates)} trading dates")
 
         # Build EOD positions for each security
         positions_created = 0
 
         for security_id, txn_list in security_positions.items():
-            # Convert to DataFrame
-            df = pd.DataFrame(txn_list)
-            df = df.groupby('date')['delta'].sum().reset_index()
-            df = df.sort_values('date')
+            # Get starting shares (from inception if available)
+            starting_shares = inception_positions.get(security_id, 0.0)
 
-            # Compute cumulative shares
-            df['shares'] = df['delta'].cumsum()
+            if txn_list:
+                # Convert to DataFrame
+                df = pd.DataFrame(txn_list)
+                df = df.groupby('date')['delta'].sum().reset_index()
+                df = df.sort_values('date')
 
-            # Create date index covering all trading dates
-            date_index = pd.DataFrame({'date': trading_dates})
-            df = date_index.merge(df[['date', 'shares']], on='date', how='left')
+                # Compute cumulative shares starting from inception
+                df['shares'] = starting_shares + df['delta'].cumsum()
 
-            # Forward fill shares
-            df['shares'] = df['shares'].fillna(method='ffill').fillna(0)
+                # Create date index covering all trading dates
+                date_index = pd.DataFrame({'date': trading_dates})
+                df = date_index.merge(df[['date', 'shares']], on='date', how='left')
+
+                # Set inception date shares if we have inception
+                if inception and trading_dates and inception.inception_date in trading_dates:
+                    inception_idx = df[df['date'] == inception.inception_date].index
+                    if len(inception_idx) > 0:
+                        df.loc[inception_idx[0], 'shares'] = starting_shares
+
+                # Forward fill shares from inception value
+                df['shares'] = df['shares'].ffill()
+
+                # Fill any remaining NaN before inception date with 0
+                df['shares'] = df['shares'].fillna(0 if not starting_shares else starting_shares)
+
+            else:
+                # No transactions for this security, just inception position
+                date_index = pd.DataFrame({'date': trading_dates})
+                date_index['shares'] = starting_shares
+                df = date_index
 
             # Store positions
             for _, row in df.iterrows():
@@ -128,6 +199,47 @@ class PositionsEngine:
         self.db.commit()
         logger.info(f"Created {positions_created} positions for account {account_id}")
         return positions_created
+
+    def _ensure_inception_positions_eod(self, account_id: int, inception: AccountInception) -> int:
+        """
+        Ensure PositionsEOD records exist for inception positions.
+        Creates positions for ALL trading dates from inception to today.
+        """
+        end_date = date.today()
+        trading_dates = self._get_trading_calendar(inception.inception_date, end_date)
+
+        if not trading_dates:
+            # Fallback: at minimum create for inception date and today
+            trading_dates = [inception.inception_date, end_date]
+
+        created = 0
+        for pos in inception.positions:
+            if pos.shares <= 0:
+                continue
+
+            for trade_date in trading_dates:
+                existing = self.db.query(PositionsEOD).filter(
+                    and_(
+                        PositionsEOD.account_id == account_id,
+                        PositionsEOD.security_id == pos.security_id,
+                        PositionsEOD.date == trade_date
+                    )
+                ).first()
+
+                if not existing:
+                    position = PositionsEOD(
+                        account_id=account_id,
+                        security_id=pos.security_id,
+                        date=trade_date,
+                        shares=pos.shares
+                    )
+                    self.db.add(position)
+                    created += 1
+
+        if created > 0:
+            self.db.commit()
+            logger.info(f"Created {created} positions for account {account_id} from inception data")
+        return created
 
     def build_positions_for_all_accounts(self) -> Dict[str, int]:
         """Build positions for all accounts"""
@@ -163,17 +275,165 @@ class PositionsEngine:
 
         trading_dates = [d[0] for d in dates]
 
-        # If no prices yet, use all dates (will be filtered later)
+        # If no prices yet, use business days (weekdays) instead of all calendar days.
+        # This is more correct and avoids creating positions for weekends/holidays.
         if not trading_dates:
-            all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            all_dates = pd.bdate_range(start=start_date, end=end_date)
             trading_dates = [d.date() for d in all_dates]
+        else:
+            # Always ensure end_date is included so positions exist for "today"
+            # even if today's prices haven't been fetched yet
+            if end_date not in trading_dates:
+                trading_dates.append(end_date)
 
         return trading_dates
+
+    def get_average_costs(
+        self,
+        account_id: int,
+        security_ids: List[int],
+        as_of_date: date
+    ) -> Dict[int, float]:
+        """
+        Compute weighted average cost per share for securities in an account.
+        Uses all BUY and TRANSFER_IN transactions up to as_of_date.
+        """
+        if not security_ids:
+            return {}
+
+        # Get all buy-type transactions for these securities
+        transactions = self.db.query(Transaction).filter(
+            and_(
+                Transaction.account_id == account_id,
+                Transaction.security_id.in_(security_ids),
+                Transaction.trade_date <= as_of_date,
+                Transaction.transaction_type.in_([TransactionType.BUY, TransactionType.TRANSFER_IN]),
+                Transaction.units.isnot(None),
+                Transaction.units > 0
+            )
+        ).all()
+
+        # Group by security and compute weighted average cost
+        security_costs: Dict[int, Dict] = {}
+        for txn in transactions:
+            if txn.security_id not in security_costs:
+                security_costs[txn.security_id] = {'total_cost': 0.0, 'total_units': 0.0}
+
+            # Use price * units if available, otherwise market_value
+            if txn.price is not None and txn.units:
+                cost = txn.price * txn.units
+            elif txn.market_value is not None:
+                cost = abs(txn.market_value)
+            else:
+                continue
+
+            security_costs[txn.security_id]['total_cost'] += cost
+            security_costs[txn.security_id]['total_units'] += txn.units
+
+        # Compute average cost per share
+        avg_costs = {}
+        for sec_id, data in security_costs.items():
+            if data['total_units'] > 0:
+                avg_costs[sec_id] = data['total_cost'] / data['total_units']
+
+        return avg_costs
+
+    def _get_tax_lot_avg_costs(
+        self,
+        account_id: int,
+        security_ids: List[int],
+    ) -> Dict[int, float]:
+        """
+        Get weighted average cost per share from TaxLot table for a single account.
+        Used as fallback when transaction-based avg_cost is not available.
+        Only includes open lots (remaining_shares > 0).
+        """
+        if not security_ids:
+            return {}
+
+        lots = self.db.query(
+            TaxLot.security_id,
+            TaxLot.remaining_shares,
+            TaxLot.remaining_cost_basis,
+        ).filter(
+            and_(
+                TaxLot.account_id == account_id,
+                TaxLot.security_id.in_(security_ids),
+                TaxLot.is_closed == False,
+                TaxLot.remaining_shares > 0,
+            )
+        ).all()
+
+        # Aggregate across lots for the same security
+        sec_data: Dict[int, Dict] = {}
+        for sec_id, shares, cost_basis in lots:
+            if sec_id not in sec_data:
+                sec_data[sec_id] = {'total_cost': 0.0, 'total_shares': 0.0}
+            sec_data[sec_id]['total_cost'] += cost_basis if cost_basis else 0
+            sec_data[sec_id]['total_shares'] += shares
+
+        result = {}
+        for sec_id, data in sec_data.items():
+            if data['total_shares'] > 0:
+                result[sec_id] = data['total_cost'] / data['total_shares']
+
+        return result
+
+    def _get_tax_lot_avg_costs_for_accounts(
+        self,
+        account_ids: List[int],
+        security_ids: List[int],
+    ) -> Dict[int, float]:
+        """
+        Get weighted average cost per share from TaxLot table across multiple accounts.
+        Used as fallback when transaction-based avg_cost is not available.
+        Only includes open lots (remaining_shares > 0).
+        """
+        if not security_ids or not account_ids:
+            return {}
+
+        lots = self.db.query(
+            TaxLot.security_id,
+            TaxLot.remaining_shares,
+            TaxLot.remaining_cost_basis,
+        ).filter(
+            and_(
+                TaxLot.account_id.in_(account_ids),
+                TaxLot.security_id.in_(security_ids),
+                TaxLot.is_closed == False,
+                TaxLot.remaining_shares > 0,
+            )
+        ).all()
+
+        # Aggregate across all accounts and lots for the same security
+        sec_data: Dict[int, Dict] = {}
+        for sec_id, shares, cost_basis in lots:
+            if sec_id not in sec_data:
+                sec_data[sec_id] = {'total_cost': 0.0, 'total_shares': 0.0}
+            sec_data[sec_id]['total_cost'] += cost_basis if cost_basis else 0
+            sec_data[sec_id]['total_shares'] += shares
+
+        result = {}
+        for sec_id, data in sec_data.items():
+            if data['total_shares'] > 0:
+                result[sec_id] = data['total_cost'] / data['total_shares']
+
+        return result
+
+    def get_previous_trading_date(self, as_of_date: date) -> Optional[date]:
+        """Get the previous trading date from available prices"""
+        prev_date = self.db.query(PricesEOD.date).filter(
+            PricesEOD.date < as_of_date
+        ).order_by(PricesEOD.date.desc()).first()
+
+        return prev_date[0] if prev_date else None
 
     def get_holdings_as_of(
         self,
         account_id: int,
-        as_of_date: date
+        as_of_date: date,
+        include_cost_basis: bool = True,
+        include_1d_gain: bool = True
     ) -> List[Dict]:
         """Get holdings for an account as of a date"""
         positions = self.db.query(
@@ -196,6 +456,43 @@ class PositionsEngine:
             )
         ).all()
 
+        if not positions:
+            return []
+
+        # Get security IDs for cost and previous price lookups
+        security_ids = [pos.security_id for pos, _, _ in positions]
+
+        # Get average costs if requested
+        avg_costs = {}
+        if include_cost_basis:
+            avg_costs = self.get_average_costs(account_id, security_ids, as_of_date)
+
+        # Get tax lot cost basis as fallback for securities without transaction-based avg_cost
+        tax_lot_costs = {}
+        missing_cost_ids = [sid for sid in security_ids if sid not in avg_costs]
+        if missing_cost_ids:
+            tax_lot_costs = self._get_tax_lot_avg_costs(account_id, missing_cost_ids)
+            if tax_lot_costs:
+                logger.info(f"Tax lot fallback provided avg_cost for {len(tax_lot_costs)} securities in account {account_id}")
+            else:
+                logger.debug(f"No tax lot avg_cost found for {len(missing_cost_ids)} missing securities in account {account_id}")
+
+        # Get previous day prices for 1D gain if requested
+        prev_prices = {}
+        if include_1d_gain:
+            prev_date = self.get_previous_trading_date(as_of_date)
+            if prev_date:
+                prev_price_rows = self.db.query(
+                    PricesEOD.security_id,
+                    PricesEOD.close
+                ).filter(
+                    and_(
+                        PricesEOD.security_id.in_(security_ids),
+                        PricesEOD.date == prev_date
+                    )
+                ).all()
+                prev_prices = {row.security_id: row.close for row in prev_price_rows}
+
         holdings = []
         total_value = 0
 
@@ -204,16 +501,45 @@ class PositionsEngine:
             if price is not None:
                 market_value = position.shares * price
 
-            holdings.append({
+            holding = {
                 'symbol': security.symbol,
                 'asset_name': security.asset_name,
                 'asset_class': security.asset_class.value,
                 'shares': position.shares,
                 'price': price,
                 'market_value': market_value,
-                'has_price': price is not None
-            })
+                'has_price': price is not None,
+                'security_id': security.id,
+            }
 
+            # Add average cost and unrealized gain
+            avg_cost = avg_costs.get(security.id)
+
+            # Fallback to tax lot data if no avg_cost from transactions
+            if avg_cost is None:
+                tax_lot_cost = tax_lot_costs.get(security.id)
+                if tax_lot_cost is not None:
+                    avg_cost = tax_lot_cost
+
+            if avg_cost is not None and price is not None:
+                holding['avg_cost'] = avg_cost
+                holding['unr_gain'] = (price - avg_cost) * position.shares
+                holding['unr_gain_pct'] = (price - avg_cost) / avg_cost if avg_cost > 0 else 0
+            else:
+                holding['avg_cost'] = None
+                holding['unr_gain'] = None
+                holding['unr_gain_pct'] = None
+
+            # Add 1D gain
+            prev_price = prev_prices.get(security.id)
+            if prev_price is not None and price is not None:
+                holding['gain_1d'] = (price - prev_price) * position.shares
+                holding['gain_1d_pct'] = (price - prev_price) / prev_price if prev_price > 0 else 0
+            else:
+                holding['gain_1d'] = None
+                holding['gain_1d_pct'] = None
+
+            holdings.append(holding)
             total_value += market_value
 
         # Add weights
@@ -222,10 +548,174 @@ class PositionsEngine:
 
         return holdings
 
+    def get_holdings_for_accounts(
+        self,
+        account_ids: List[int],
+        as_of_date: date,
+    ) -> List[Dict]:
+        """Get aggregated holdings across multiple accounts in a single query.
+        Used for group/firm views to avoid N+1 queries per account.
+        """
+        if not account_ids:
+            return []
+
+        # Single query: get all positions across all accounts for this date
+        positions = self.db.query(
+            PositionsEOD.account_id,
+            PositionsEOD.security_id,
+            PositionsEOD.shares,
+            Security.symbol,
+            Security.asset_name,
+            Security.asset_class,
+            PricesEOD.close,
+        ).join(
+            Security, PositionsEOD.security_id == Security.id
+        ).outerjoin(
+            PricesEOD,
+            and_(
+                PricesEOD.security_id == PositionsEOD.security_id,
+                PricesEOD.date == as_of_date
+            )
+        ).filter(
+            and_(
+                PositionsEOD.account_id.in_(account_ids),
+                PositionsEOD.date == as_of_date,
+                PositionsEOD.shares > 0
+            )
+        ).all()
+
+        if not positions:
+            return []
+
+        # Aggregate by security across all accounts
+        security_map: Dict[int, Dict] = {}
+        all_security_ids = set()
+        for acct_id, sec_id, shares, symbol, asset_name, asset_class, price in positions:
+            all_security_ids.add(sec_id)
+            if sec_id not in security_map:
+                security_map[sec_id] = {
+                    'symbol': symbol,
+                    'asset_name': asset_name,
+                    'asset_class': asset_class.value,
+                    'shares': 0.0,
+                    'price': price,
+                    'market_value': 0.0,
+                    'has_price': price is not None,
+                    'security_id': sec_id,
+                    '_acct_shares': {},  # track per-account shares for cost basis
+                }
+            security_map[sec_id]['shares'] += shares
+            if price is not None:
+                security_map[sec_id]['market_value'] += shares * price
+            security_map[sec_id]['_acct_shares'].setdefault(acct_id, 0.0)
+            security_map[sec_id]['_acct_shares'][acct_id] += shares
+
+        security_ids_list = list(all_security_ids)
+
+        # Batch get previous day prices
+        prev_date = self.get_previous_trading_date(as_of_date)
+        prev_prices = {}
+        if prev_date:
+            prev_rows = self.db.query(
+                PricesEOD.security_id, PricesEOD.close
+            ).filter(
+                and_(
+                    PricesEOD.security_id.in_(security_ids_list),
+                    PricesEOD.date == prev_date
+                )
+            ).all()
+            prev_prices = {r.security_id: r.close for r in prev_rows}
+
+        # Batch get average costs across all accounts
+        buy_txns = self.db.query(
+            Transaction.account_id,
+            Transaction.security_id,
+            Transaction.price,
+            Transaction.units,
+            Transaction.market_value,
+        ).filter(
+            and_(
+                Transaction.account_id.in_(account_ids),
+                Transaction.security_id.in_(security_ids_list),
+                Transaction.trade_date <= as_of_date,
+                Transaction.transaction_type.in_([TransactionType.BUY, TransactionType.TRANSFER_IN]),
+                Transaction.units.isnot(None),
+                Transaction.units > 0,
+            )
+        ).all()
+
+        # Compute weighted average cost per security across all accounts
+        sec_cost_data: Dict[int, Dict] = {}
+        for acct_id, sec_id, price_val, units, mkt_val in buy_txns:
+            if sec_id not in sec_cost_data:
+                sec_cost_data[sec_id] = {'total_cost': 0.0, 'total_units': 0.0}
+            if price_val is not None and units:
+                sec_cost_data[sec_id]['total_cost'] += price_val * units
+                sec_cost_data[sec_id]['total_units'] += units
+            elif mkt_val is not None:
+                sec_cost_data[sec_id]['total_cost'] += abs(mkt_val)
+                sec_cost_data[sec_id]['total_units'] += units
+
+        # Get tax lot cost basis as fallback for securities without transaction-based avg_cost
+        missing_cost_ids = [sid for sid in security_ids_list if sid not in sec_cost_data]
+        tax_lot_costs = {}
+        if missing_cost_ids:
+            tax_lot_costs = self._get_tax_lot_avg_costs_for_accounts(account_ids, missing_cost_ids)
+            if tax_lot_costs:
+                logger.info(f"Tax lot fallback provided avg_cost for {len(tax_lot_costs)} securities across {len(account_ids)} accounts")
+            else:
+                logger.debug(f"No tax lot avg_cost found for {len(missing_cost_ids)} missing securities across accounts")
+
+        # Build holdings list
+        holdings = []
+        for sec_id, h in security_map.items():
+            price = h['price']
+            avg_cost = None
+            cost_data = sec_cost_data.get(sec_id)
+            if cost_data and cost_data['total_units'] > 0:
+                avg_cost = cost_data['total_cost'] / cost_data['total_units']
+
+            # Fallback to tax lot data if no avg_cost from transactions
+            if avg_cost is None:
+                tax_lot_cost = tax_lot_costs.get(sec_id)
+                if tax_lot_cost is not None:
+                    avg_cost = tax_lot_cost
+
+            if avg_cost is not None and price is not None:
+                h['avg_cost'] = avg_cost
+                h['unr_gain'] = (price - avg_cost) * h['shares']
+                h['unr_gain_pct'] = (price - avg_cost) / avg_cost if avg_cost > 0 else 0
+            else:
+                h['avg_cost'] = None
+                h['unr_gain'] = None
+                h['unr_gain_pct'] = None
+
+            prev_price = prev_prices.get(sec_id)
+            if prev_price is not None and price is not None:
+                h['gain_1d'] = (price - prev_price) * h['shares']
+                h['gain_1d_pct'] = (price - prev_price) / prev_price if prev_price > 0 else 0
+            else:
+                h['gain_1d'] = None
+                h['gain_1d_pct'] = None
+
+            # Remove internal tracking field
+            h.pop('_acct_shares', None)
+            holdings.append(h)
+
+        return holdings
+
     def get_unpriced_securities(self, as_of_date: Optional[date] = None) -> List[Dict]:
-        """Get securities with positions but no prices"""
+        """Get securities with positions but no prices on the given date.
+
+        If no as_of_date is provided, uses the last date that has prices in PricesEOD
+        rather than today. This prevents showing all securities as "unpriced" when
+        today's market data hasn't been fetched yet (e.g., during market hours or
+        if the data provider hasn't updated).
+        """
         if not as_of_date:
-            as_of_date = date.today()
+            # Use the last date with actual price data, not today
+            latest_price_date = self.db.query(func.max(PricesEOD.date)).scalar()
+            as_of_date = latest_price_date if latest_price_date else date.today()
 
         # Get securities with positions but no price on as_of_date
         subq = self.db.query(PositionsEOD.security_id).filter(

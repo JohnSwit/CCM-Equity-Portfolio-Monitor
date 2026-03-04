@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+from pydantic import BaseModel
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, ImportLog, Transaction
+from app.models import User, ImportLog, Transaction, AccountInception, Account, Security
 from app.models.schemas import ImportPreviewResponse, ImportCommitResponse
+from app.models.sector_models import SectorClassification
 from app.services.bd_parser import BDParser, calculate_file_hash
+from app.services.inception_parser import InceptionParser, get_accounts_with_inception
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -98,7 +101,8 @@ async def delete_import(
 ):
     """
     Delete an import and all its transactions.
-    Automatically recomputes analytics after deletion.
+    Clears analytics for affected accounts but does NOT recompute.
+    Use the analytics endpoints to rebuild if needed.
     WARNING: This will delete all transactions from this import.
     """
     # Find the import
@@ -118,31 +122,667 @@ async def delete_import(
         Transaction.import_log_id == import_id
     ).count()
 
+    file_name = import_log.file_name
+
+    # Nullify ALL FK references before deleting transactions
+    from app.api.transactions import _nullify_transaction_references
+    txn_ids = [t.id for t in db.query(Transaction.id).filter(Transaction.import_log_id == import_id).all()]
+    _nullify_transaction_references(db, txn_ids)
+
     # Delete all transactions from this import
     db.query(Transaction).filter(
         Transaction.import_log_id == import_id
-    ).delete()
+    ).delete(synchronize_session=False)
 
     # Delete the import log
     db.delete(import_log)
     db.commit()
 
-    # Clear analytics for all affected accounts
-    from app.workers.jobs import recompute_analytics_job, clear_analytics_for_account
+    # Clear analytics for all affected accounts (each call commits automatically)
+    from app.workers.jobs import clear_analytics_for_account
     for account_id in affected_account_ids:
         clear_analytics_for_account(db, account_id)
 
-    # Automatically recompute analytics after deletion
-    try:
-        await recompute_analytics_job(db)
-    except Exception as e:
-        # Don't fail the deletion if analytics recomputation fails
-        import logging
-        logging.error(f"Failed to recompute analytics after deletion: {e}")
+    # Clean up accounts that now have no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    accounts_deleted = cleanup_orphaned_accounts(db)
 
     return {
         'deleted': True,
         'import_id': import_id,
         'transactions_deleted': txn_count,
-        'message': f'Deleted import {import_log.file_name} and {txn_count} transactions. Analytics have been recomputed.'
+        'accounts_affected': len(affected_account_ids),
+        'accounts_deleted': accounts_deleted,
+        'message': f'Deleted import {file_name} and {txn_count} transactions. Analytics cleared for {len(affected_account_ids)} accounts. {accounts_deleted} orphaned accounts removed.'
+    }
+
+
+# ==================== HISTORICAL INCEPTION ENDPOINTS ====================
+
+@router.post("/inception")
+async def import_inception_positions(
+    file: UploadFile = File(...),
+    mode: str = Query("preview", regex="^(preview|commit)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Import historical portfolio inception positions CSV.
+    This establishes a starting point for portfolio tracking from a past date.
+
+    Expected CSV columns:
+    - Account Number
+    - Account Display Name
+    - Class (asset class)
+    - Asset Name
+    - Symbol
+    - Units (shares)
+    - Price
+    - Market Value
+    - Inception Date (e.g., 12/31/2020)
+
+    - mode=preview: Parse and show preview with validation
+    - mode=commit: Import the inception positions
+    """
+    file_content = await file.read()
+    parser = InceptionParser(db)
+
+    if mode == "preview":
+        result = parser.parse_csv(file_content, preview=True)
+
+        if result.get('error'):
+            raise HTTPException(status_code=400, detail=result['error'])
+
+        return {
+            'mode': 'preview',
+            'total_rows': result.get('total_rows', 0),
+            'inception_date': result.get('inception_date'),
+            'accounts_summary': result.get('accounts_summary', []),
+            'preview_rows': result.get('preview_rows', []),
+            'has_errors': result.get('has_errors', False),
+            'multiple_dates_warning': result.get('multiple_dates_warning', False)
+        }
+
+    else:  # commit
+        result = parser.parse_csv(file_content, preview=False)
+
+        if result.get('error'):
+            raise HTTPException(status_code=400, detail=result['error'])
+
+        df = result['dataframe']
+
+        # Commit inception positions
+        commit_result = parser.commit_inception(df, user_id=current_user.id)
+
+        if commit_result.get('error'):
+            raise HTTPException(status_code=400, detail=commit_result['error'])
+
+        # Create PositionsEOD records for all affected accounts
+        from app.models import AccountInception
+        inceptions = db.query(AccountInception).filter(
+            AccountInception.import_log_id == commit_result.get('import_log_id')
+        ).all()
+
+        for inception in inceptions:
+            parser.create_inception_positions_eod(inception.account_id)
+
+        return {
+            'mode': 'commit',
+            'success': True,
+            'inception_date': commit_result.get('inception_date'),
+            'accounts_created': commit_result.get('accounts_created', 0),
+            'accounts_updated': commit_result.get('accounts_updated', 0),
+            'securities_created': commit_result.get('securities_created', 0),
+            'positions_created': commit_result.get('positions_created', 0),
+            'total_value': commit_result.get('total_value', 0),
+            'import_log_id': commit_result.get('import_log_id'),
+            'errors': commit_result.get('errors', []),
+            'message': f"Successfully imported {commit_result.get('positions_created', 0)} inception positions across {commit_result.get('accounts_created', 0) + commit_result.get('accounts_updated', 0)} accounts"
+        }
+
+
+@router.get("/inception")
+def get_inception_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all accounts with inception data.
+    Returns summary of inception positions for each account.
+    """
+    return {
+        'accounts': get_accounts_with_inception(db)
+    }
+
+
+@router.get("/inception/{account_id}")
+def get_account_inception(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get inception details for a specific account"""
+    inception = db.query(AccountInception).filter(
+        AccountInception.account_id == account_id
+    ).first()
+
+    if not inception:
+        raise HTTPException(status_code=404, detail="No inception data found for this account")
+
+    return {
+        'account_id': account_id,
+        'account_number': inception.account.account_number,
+        'display_name': inception.account.display_name,
+        'inception_date': inception.inception_date.isoformat(),
+        'total_value': inception.total_value,
+        'positions': [
+            {
+                'security_id': pos.security_id,
+                'symbol': pos.security.symbol,
+                'asset_name': pos.security.asset_name,
+                'shares': pos.shares,
+                'price': pos.price,
+                'market_value': pos.market_value
+            }
+            for pos in inception.positions
+        ]
+    }
+
+
+class BulkInceptionDeleteRequest(BaseModel):
+    account_ids: List[int]
+
+
+@router.delete("/inception/bulk")
+async def delete_inception_bulk(
+    request: BulkInceptionDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete inception data for multiple accounts at once.
+    Pass account_ids=[] (empty list) to delete ALL inception data.
+    """
+    from app.workers.jobs import clear_analytics_for_account
+
+    account_ids = request.account_ids
+
+    if len(account_ids) == 0:
+        # Empty list = delete ALL inception data
+        inceptions = db.query(AccountInception).all()
+    else:
+        inceptions = db.query(AccountInception).filter(
+            AccountInception.account_id.in_(account_ids)
+        ).all()
+
+    if not inceptions:
+        raise HTTPException(status_code=404, detail="No inception data found for the specified accounts")
+
+    deleted_accounts = []
+    for inception in inceptions:
+        account_number = inception.account.account_number
+        acc_id = inception.account_id
+        db.delete(inception)
+        deleted_accounts.append({'account_id': acc_id, 'account_number': account_number})
+
+    db.commit()
+
+    # Clear analytics for all affected accounts
+    for item in deleted_accounts:
+        clear_analytics_for_account(db, item['account_id'])
+
+    # Clean up accounts that now have no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    orphaned_deleted = cleanup_orphaned_accounts(db)
+
+    return {
+        'deleted': True,
+        'accounts_deleted': len(deleted_accounts),
+        'deleted_accounts': deleted_accounts,
+        'orphaned_accounts_deleted': orphaned_deleted,
+        'message': f'Deleted inception data for {len(deleted_accounts)} accounts. '
+                   f'{orphaned_deleted} orphaned accounts removed. Analytics cleared.'
+    }
+
+
+@router.delete("/inception/{account_id}")
+async def delete_account_inception(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete inception data for a specific account.
+    This will reset the account to only use transaction-based position tracking.
+    """
+    inception = db.query(AccountInception).filter(
+        AccountInception.account_id == account_id
+    ).first()
+
+    if not inception:
+        raise HTTPException(status_code=404, detail="No inception data found for this account")
+
+    account_number = inception.account.account_number
+    inception_date = inception.inception_date
+    position_count = len(inception.positions)
+
+    # Delete the inception (cascade deletes positions)
+    db.delete(inception)
+    db.commit()
+
+    # Clear analytics for the account
+    from app.workers.jobs import clear_analytics_for_account
+    clear_analytics_for_account(db, account_id)
+
+    # Clean up account if it now has no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    orphaned_deleted = cleanup_orphaned_accounts(db)
+
+    return {
+        'deleted': True,
+        'account_id': account_id,
+        'account_number': account_number,
+        'inception_date': inception_date.isoformat(),
+        'positions_deleted': position_count,
+        'account_removed': orphaned_deleted > 0,
+        'message': f'Deleted inception data for account {account_number}. Analytics cleared.'
+                   + (f' Account removed (no remaining data).' if orphaned_deleted > 0 else '')
+    }
+
+
+# ==================== CLASSIFICATION IMPORT ENDPOINTS ====================
+
+@router.post("/classifications")
+async def import_classifications(
+    file: UploadFile = File(...),
+    mode: str = Query("preview", regex="^(preview|commit)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Import ticker classifications from CSV.
+
+    Expected CSV columns (case-insensitive, flexible naming):
+    - Symbol / Ticker (required)
+    - Sector (required)
+    - Industry (optional)
+    - Country (optional)
+    - GICS Sector (optional - if different from simplified sector)
+    - GICS Industry (optional)
+    - Market Cap (optional - Large/Mid/Small)
+
+    Uploaded classifications are stored with source='upload' and take
+    priority over API-fetched classifications during refresh.
+
+    - mode=preview: Parse CSV and show match summary
+    - mode=commit: Save classifications to database
+    """
+    import csv
+    import io
+    from datetime import date, datetime
+
+    file_content = await file.read()
+
+    try:
+        text = file_content.decode('utf-8-sig')  # Handle BOM
+    except UnicodeDecodeError:
+        text = file_content.decode('latin-1')
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV file is empty or has no headers")
+
+    # Normalize headers to lowercase for flexible matching
+    raw_headers = [h.strip() for h in reader.fieldnames]
+    header_map = {h.lower().replace(' ', '_'): h for h in raw_headers}
+
+    # Find required columns
+    symbol_col = None
+    for key in ['symbol', 'ticker', 'symbols', 'tickers']:
+        if key in header_map:
+            symbol_col = header_map[key]
+            break
+    if not symbol_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must have a 'Symbol' or 'Ticker' column. Found: {raw_headers}"
+        )
+
+    sector_col = None
+    for key in ['sector', 'sectors']:
+        if key in header_map:
+            sector_col = header_map[key]
+            break
+    if not sector_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must have a 'Sector' column. Found: {raw_headers}"
+        )
+
+    # Find optional columns
+    def find_col(*candidates):
+        for c in candidates:
+            if c in header_map:
+                return header_map[c]
+        return None
+
+    industry_col = find_col('industry', 'gics_industry', 'industries')
+    country_col = find_col('country', 'countries', 'domicile')
+    gics_sector_col = find_col('gics_sector')
+    gics_industry_col = find_col('gics_industry') if not industry_col else None
+    market_cap_col = find_col('market_cap', 'market_cap_category', 'cap', 'size')
+
+    # Parse rows
+    rows = []
+    errors = []
+    for i, row in enumerate(reader, start=2):  # start=2 because row 1 is header
+        symbol = (row.get(symbol_col) or '').strip().upper()
+        sector = (row.get(sector_col) or '').strip()
+
+        if not symbol:
+            errors.append(f"Row {i}: Missing symbol")
+            continue
+        if not sector:
+            errors.append(f"Row {i}: Missing sector for {symbol}")
+            continue
+
+        parsed = {
+            'symbol': symbol,
+            'sector': sector,
+            'industry': (row.get(industry_col) or '').strip() if industry_col else None,
+            'country': (row.get(country_col) or '').strip() if country_col else None,
+            'gics_sector': (row.get(gics_sector_col) or '').strip() if gics_sector_col else None,
+            'gics_industry': (row.get(gics_industry_col) or '').strip() if gics_industry_col else None,
+            'market_cap': (row.get(market_cap_col) or '').strip() if market_cap_col else None,
+        }
+        rows.append(parsed)
+
+    if not rows and not errors:
+        raise HTTPException(status_code=400, detail="CSV contains no data rows")
+
+    # Look up which symbols exist in the securities table
+    all_symbols = list({r['symbol'] for r in rows})
+    existing_securities = db.query(Security).filter(
+        Security.symbol.in_(all_symbols)
+    ).all()
+    security_map = {s.symbol.upper(): s for s in existing_securities}
+
+    # Symbols not yet in the securities table — will be auto-created on commit
+    new_security_symbols = [r['symbol'] for r in rows if r['symbol'] not in security_map]
+    new_security_symbols_unique = list(dict.fromkeys(new_security_symbols))  # dedupe, preserve order
+
+    # For preview/counting, treat ALL rows as "matched" (will be after auto-create)
+    matched = rows  # all rows will be classified
+    unmatched = []  # nothing is skipped
+
+    # Check which existing securities already have classifications
+    existing_ids = [security_map[r['symbol']].id for r in rows if r['symbol'] in security_map]
+    existing_classifications = {
+        c.security_id: c.source
+        for c in db.query(SectorClassification).filter(
+            SectorClassification.security_id.in_(existing_ids)
+        ).all()
+    } if existing_ids else {}
+
+    will_create = sum(
+        1 for r in rows
+        if r['symbol'] not in security_map or security_map[r['symbol']].id not in existing_classifications
+    )
+    will_update = sum(
+        1 for r in rows
+        if r['symbol'] in security_map and security_map[r['symbol']].id in existing_classifications
+    )
+
+    if mode == "preview":
+        # Build preview showing what will happen
+        preview_rows = []
+        for r in rows[:50]:  # Show first 50
+            sec = security_map.get(r['symbol'])
+            if sec is None:
+                status = "new (security will be created)"
+            elif sec.id not in existing_classifications:
+                status = "new"
+            else:
+                status = "update"
+            existing_source = existing_classifications.get(sec.id) if sec else None
+            preview_rows.append({
+                'symbol': r['symbol'],
+                'sector': r['sector'],
+                'industry': r['industry'],
+                'country': r['country'],
+                'status': status,
+                'existing_source': existing_source,
+            })
+
+        return {
+            'mode': 'preview',
+            'total_rows': len(rows),
+            'matched': len(matched),
+            'unmatched': len(unmatched),
+            'will_create': will_create,
+            'will_update': will_update,
+            'new_securities': len(new_security_symbols_unique),
+            'new_security_symbols': new_security_symbols_unique[:30],
+            'preview_rows': preview_rows,
+            'errors': errors[:20],
+            'columns_detected': {
+                'symbol': symbol_col,
+                'sector': sector_col,
+                'industry': industry_col,
+                'country': country_col,
+                'gics_sector': gics_sector_col,
+                'market_cap': market_cap_col,
+            },
+        }
+
+    else:  # commit
+        from app.models.sector_models import BenchmarkConstituent
+
+        # Auto-create Security entries for tickers not yet in the DB
+        securities_created = 0
+        for symbol in new_security_symbols_unique:
+            # Check again in case of race condition or case mismatch
+            existing_sec = db.query(Security).filter(Security.symbol == symbol).first()
+            if existing_sec:
+                security_map[symbol] = existing_sec
+            else:
+                new_sec = Security(
+                    symbol=symbol,
+                    asset_name=symbol,
+                    is_option=False,
+                )
+                db.add(new_sec)
+                db.flush()  # get the id
+                security_map[symbol] = new_sec
+                securities_created += 1
+
+        created = 0
+        updated = 0
+
+        for r in rows:
+            sec = security_map[r['symbol']]
+            existing = db.query(SectorClassification).filter(
+                SectorClassification.security_id == sec.id
+            ).first()
+
+            classification_data = {
+                'sector': r['sector'],
+                'gics_sector': r['gics_sector'] or r['sector'],
+                'gics_industry': r['gics_industry'] or r['industry'],
+                'market_cap_category': r['market_cap'],
+            }
+
+            if existing:
+                existing.sector = classification_data['sector']
+                existing.gics_sector = classification_data['gics_sector']
+                existing.gics_industry = classification_data['gics_industry']
+                if classification_data['market_cap_category']:
+                    existing.market_cap_category = classification_data['market_cap_category']
+                if r.get('country'):
+                    existing.country = r['country']
+                existing.source = 'upload'
+                existing.as_of_date = date.today()
+                existing.updated_at = datetime.utcnow()
+                updated += 1
+            else:
+                new_class = SectorClassification(
+                    security_id=sec.id,
+                    sector=classification_data['sector'],
+                    gics_sector=classification_data['gics_sector'],
+                    gics_industry=classification_data['gics_industry'],
+                    market_cap_category=classification_data['market_cap_category'],
+                    country=r.get('country'),
+                    source='upload',
+                    as_of_date=date.today(),
+                )
+                db.add(new_class)
+                created += 1
+
+        # Also update S&P 500 benchmark constituent sectors for classified tickers
+        sp500_updated = 0
+        classified_symbols = {r['symbol']: r['sector'] for r in rows}
+        sp500_constituents = db.query(BenchmarkConstituent).filter(
+            BenchmarkConstituent.benchmark_code == "SP500",
+            BenchmarkConstituent.symbol.in_(list(classified_symbols.keys())),
+        ).all()
+        for constituent in sp500_constituents:
+            new_sector = classified_symbols.get(constituent.symbol)
+            if new_sector and constituent.sector != new_sector:
+                constituent.sector = new_sector
+                sp500_updated += 1
+
+        db.commit()
+
+        return {
+            'mode': 'commit',
+            'success': True,
+            'total_rows': len(rows),
+            'matched': len(matched),
+            'unmatched': len(unmatched),
+            'created': created,
+            'updated': updated,
+            'securities_created': securities_created,
+            'sp500_sectors_updated': sp500_updated,
+            'errors': errors[:20],
+            'message': f"Classified {created + updated} tickers ({created} new, {updated} updated). "
+                       f"{securities_created} new securities created. "
+                       f"{sp500_updated} S&P 500 constituent sectors updated."
+        }
+
+
+@router.get("/classifications")
+def get_classification_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get summary of current classifications by source.
+
+    Only shows unclassified securities that are currently held in the portfolio
+    (have positions), not all securities in the database.
+    Also includes S&P 500 constituent classification coverage.
+    """
+    from sqlalchemy import func
+    from app.models import PositionsEOD
+    from app.models.sector_models import BenchmarkConstituent
+
+    total = db.query(func.count(Security.id)).scalar() or 0
+    classified = db.query(func.count(SectorClassification.id)).scalar() or 0
+
+    # Count by source
+    source_counts = dict(
+        db.query(SectorClassification.source, func.count(SectorClassification.id))
+        .group_by(SectorClassification.source)
+        .all()
+    )
+
+    # Get securities currently held in the portfolio (latest position date, shares > 0)
+    latest_date = db.query(func.max(PositionsEOD.date)).scalar()
+    if latest_date:
+        held_security_ids = db.query(PositionsEOD.security_id).filter(
+            PositionsEOD.date == latest_date,
+            PositionsEOD.shares > 0,
+        ).distinct().subquery()
+    else:
+        held_security_ids = db.query(Security.id).filter(False).subquery()
+
+    # Only show unclassified securities that are currently held
+    classified_ids = db.query(SectorClassification.security_id).subquery()
+    unclassified = db.query(Security.symbol).filter(
+        Security.id.in_(held_security_ids),
+        ~Security.id.in_(classified_ids),
+        Security.is_option == False,
+    ).order_by(Security.symbol).all()
+
+    unclassified_count = len(unclassified)
+
+    # Count held securities for coverage
+    held_total = db.query(func.count(Security.id)).filter(
+        Security.id.in_(held_security_ids),
+        Security.is_option == False,
+    ).scalar() or 0
+
+    held_classified = db.query(func.count(SectorClassification.id)).filter(
+        SectorClassification.security_id.in_(held_security_ids),
+    ).scalar() or 0
+
+    # S&P 500 constituent classification coverage
+    sp500_latest_date = db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
+        BenchmarkConstituent.benchmark_code == "SP500"
+    ).scalar()
+
+    sp500_info = None
+    if sp500_latest_date:
+        sp500_symbols = [
+            r[0] for r in db.query(BenchmarkConstituent.symbol).filter(
+                BenchmarkConstituent.benchmark_code == "SP500",
+                BenchmarkConstituent.as_of_date == sp500_latest_date,
+            ).all()
+        ]
+        sp500_total = len(sp500_symbols)
+
+        # Find which S&P names have classifications via security table
+        sp500_classified_count = 0
+        sp500_unclassified_symbols = []
+        if sp500_symbols:
+            # Match S&P symbols to securities, then check classification
+            sp500_securities = db.query(Security.id, Security.symbol).filter(
+                Security.symbol.in_(sp500_symbols),
+            ).all()
+            sp500_sec_map = {s.symbol: s.id for s in sp500_securities}
+
+            sp500_sec_ids = [s.id for s in sp500_securities]
+            sp500_classified_ids = set()
+            if sp500_sec_ids:
+                sp500_classified_ids = {
+                    r[0] for r in db.query(SectorClassification.security_id).filter(
+                        SectorClassification.security_id.in_(sp500_sec_ids),
+                    ).all()
+                }
+
+            sp500_classified_count = len(sp500_classified_ids)
+            # Unclassified = S&P symbols not in securities table OR in securities but without classification
+            for sym in sorted(sp500_symbols):
+                sec_id = sp500_sec_map.get(sym)
+                if sec_id is None or sec_id not in sp500_classified_ids:
+                    sp500_unclassified_symbols.append(sym)
+
+        sp500_info = {
+            'total': sp500_total,
+            'classified': sp500_classified_count,
+            'unclassified': len(sp500_unclassified_symbols),
+            'coverage_percent': round(sp500_classified_count / sp500_total * 100, 1) if sp500_total > 0 else 0,
+            'as_of_date': sp500_latest_date.isoformat(),
+            'unclassified_symbols': sp500_unclassified_symbols[:50],
+        }
+
+    return {
+        'total_securities': total,
+        'classified': classified,
+        'held_securities': held_total,
+        'held_classified': held_classified,
+        'unclassified': unclassified_count,
+        'coverage_percent': round(held_classified / held_total * 100, 1) if held_total > 0 else 0,
+        'by_source': source_counts,
+        'unclassified_symbols': [s[0] for s in unclassified[:50]],
+        'sp500': sp500_info,
     }
