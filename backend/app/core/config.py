@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     TIINGO_API_KEY: str = ""
     ENABLE_YFINANCE_FALLBACK: bool = True  # Legacy fallback if Tiingo fails
 
+    # Azure AD - for OneDrive/SharePoint file access via Microsoft Graph API
+    AZURE_TENANT_ID: str = ""
+    AZURE_CLIENT_ID: str = ""
+    AZURE_CLIENT_SECRET: str = ""
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000"
 

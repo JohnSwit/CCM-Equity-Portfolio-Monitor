@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, Fragment, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
@@ -113,8 +113,11 @@ export default function IdeasPage() {
   // Expanded detail view
   const [expandedTicker, setExpandedTicker] = useState<number | null>(null);
 
-  // Refresh status
+  // Refresh & upload status
   const [refreshing, setRefreshing] = useState<number | null>(null);
+  const [uploading, setUploading] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTargetId, setUploadTargetId] = useState<number | null>(null);
 
   // Inline editing for thesis/bull/bear/next steps
   const [inlineThesis, setInlineThesis] = useState<Record<number, string>>({});
@@ -228,6 +231,31 @@ export default function IdeasPage() {
       setError(err.response?.data?.detail || 'Failed to refresh model data');
     } finally {
       setRefreshing(null);
+    }
+  };
+
+  const handleUploadModel = async (id: number) => {
+    setUploadTargetId(id);
+    fileInputRef.current?.click();
+  };
+
+  const onFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadTargetId) return;
+
+    try {
+      setUploading(uploadTargetId);
+      await api.uploadIdeaModel(uploadTargetId, file);
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to upload model');
+    } finally {
+      setUploading(null);
+      setUploadTargetId(null);
+      // Reset file input so same file can be re-selected
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -366,6 +394,14 @@ export default function IdeasPage() {
 
   return (
     <Layout>
+      {/* Hidden file input for model upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".xlsx,.xls"
+        className="hidden"
+        onChange={onFileSelected}
+      />
       <div className="space-y-6">
         {/* Page Header */}
         <div>
@@ -547,6 +583,13 @@ export default function IdeasPage() {
                             className="btn btn-ghost btn-xs"
                           >
                             Edit
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleUploadModel(idea.id); }}
+                            disabled={uploading === idea.id}
+                            className="btn btn-ghost btn-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                          >
+                            {uploading === idea.id ? '...' : 'Upload'}
                           </button>
                           {(idea.model_path || idea.model_share_link) && (
                             <button

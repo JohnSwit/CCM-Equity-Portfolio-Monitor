@@ -46,6 +46,7 @@ def parse_excel_model(file_path: str) -> Dict[str, Any]:
 def parse_excel_model_from_url(share_url: str) -> Dict[str, Any]:
     """
     Download an Excel model from a OneDrive/SharePoint share link and parse it.
+    Uses the Microsoft Graph API with Azure AD client credentials for authentication.
 
     Args:
         share_url: OneDrive or SharePoint sharing URL
@@ -58,26 +59,34 @@ def parse_excel_model_from_url(share_url: str) -> Dict[str, Any]:
         ValueError: If the API tab is missing or malformed
     """
     import httpx
+    from app.core.config import settings
 
-    # Convert share link to direct download URL
-    download_url = _share_link_to_download_url(share_url)
-
-    logger.info(f"Downloading Excel model from share link...")
+    logger.info("Downloading Excel model from share link via Graph API...")
 
     tmp_path = None
     try:
-        # Download the file with redirect following
+        # Get OAuth token for Microsoft Graph API
+        access_token = _get_graph_access_token(settings)
+
+        # Encode the sharing URL for Graph API
+        encoded_url = _encode_sharing_url(share_url)
+
+        # Download via Graph API: /shares/{encoded}/driveItem/content
+        graph_url = f"https://graph.microsoft.com/v1.0/shares/{encoded_url}/driveItem/content"
+
         with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-            response = client.get(download_url)
+            response = client.get(
+                graph_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
             response.raise_for_status()
 
-        # Verify we got an Excel file (not an HTML login page)
+        # Verify we got an Excel file (not an error page)
         content_type = response.headers.get('content-type', '')
-        if 'text/html' in content_type and len(response.content) < 50000:
+        if 'text/html' in content_type or 'application/json' in content_type:
             raise ConnectionError(
-                "Share link requires authentication. "
-                "Ensure the link is set to 'Anyone with the link' or "
-                "'People in your organization' with no sign-in required."
+                f"Graph API returned unexpected content type: {content_type}. "
+                "Check that the share link is valid and the app has Files.Read.All permission."
             )
 
         # Save to temp file
@@ -85,12 +94,23 @@ def parse_excel_model_from_url(share_url: str) -> Dict[str, Any]:
         with os.fdopen(tmp_fd, 'wb') as f:
             f.write(response.content)
 
-        logger.info(f"Downloaded {len(response.content)} bytes to temp file")
+        logger.info(f"Downloaded {len(response.content)} bytes via Graph API")
 
         return _parse_workbook(tmp_path)
 
     except httpx.HTTPStatusError as e:
-        raise ConnectionError(f"Failed to download model: HTTP {e.response.status_code}")
+        error_body = e.response.text[:300] if e.response else ""
+        if e.response.status_code == 401:
+            raise ConnectionError(
+                "Graph API authentication failed (401). "
+                "Check AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET."
+            )
+        elif e.response.status_code == 403:
+            raise ConnectionError(
+                "Graph API access denied (403). "
+                "Ensure the Azure AD app has 'Files.Read.All' application permission with admin consent."
+            )
+        raise ConnectionError(f"Failed to download model: HTTP {e.response.status_code} - {error_body}")
     except httpx.RequestError as e:
         raise ConnectionError(f"Failed to download model: {str(e)}")
     finally:
@@ -102,22 +122,63 @@ def parse_excel_model_from_url(share_url: str) -> Dict[str, Any]:
                 pass
 
 
-def _share_link_to_download_url(share_url: str) -> str:
+def _get_graph_access_token(settings) -> str:
     """
-    Convert a OneDrive/SharePoint share link to a direct download URL.
-
-    Handles common SharePoint URL patterns:
-    - https://company-my.sharepoint.com/:x:/g/personal/user/ENCODED
-    - https://company.sharepoint.com/sites/SITE/:x:/g/ENCODED
-    - https://1drv.ms/x/ENCODED (personal OneDrive)
+    Get an OAuth2 access token for Microsoft Graph API using client credentials flow.
+    Requires AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET in settings.
     """
-    url = share_url.strip().rstrip('/')
+    import httpx
 
-    # Append download=1 parameter to force file download
-    if '?' in url:
-        return url + '&download=1'
-    else:
-        return url + '?download=1'
+    if not settings.AZURE_TENANT_ID or not settings.AZURE_CLIENT_ID or not settings.AZURE_CLIENT_SECRET:
+        raise ConnectionError(
+            "Azure AD credentials not configured. "
+            "Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET in .env "
+            "to enable OneDrive/SharePoint model downloads."
+        )
+
+    token_url = f"https://login.microsoftonline.com/{settings.AZURE_TENANT_ID}/oauth2/v2.0/token"
+
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(
+            token_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": settings.AZURE_CLIENT_ID,
+                "client_secret": settings.AZURE_CLIENT_SECRET,
+                "scope": "https://graph.microsoft.com/.default",
+            },
+        )
+        response.raise_for_status()
+
+    token_data = response.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise ConnectionError("Failed to obtain Graph API access token")
+
+    return access_token
+
+
+def _encode_sharing_url(share_url: str) -> str:
+    """
+    Encode a OneDrive/SharePoint sharing URL for use with the Graph API /shares endpoint.
+
+    Microsoft Graph requires sharing URLs to be encoded as:
+    1. Base64 encode the URL
+    2. Replace '/' with '_', '+' with '-'
+    3. Trim trailing '='
+    4. Prepend 'u!'
+
+    See: https://learn.microsoft.com/en-us/graph/api/shares-get
+    """
+    import base64
+
+    url = share_url.strip()
+    # Base64 encode
+    encoded = base64.b64encode(url.encode('utf-8')).decode('utf-8')
+    # Make URL-safe: replace + with -, / with _, trim =
+    encoded = encoded.replace('+', '-').replace('/', '_').rstrip('=')
+    # Prepend u!
+    return f"u!{encoded}"
 
 
 def _parse_workbook(file_path: str) -> Dict[str, Any]:

@@ -325,6 +325,82 @@ def delete_idea(
 
 # ============== Model Data Endpoints ==============
 
+MODEL_UPLOAD_DIR = "/app/uploads/models/ideas"
+os.makedirs(MODEL_UPLOAD_DIR, exist_ok=True)
+
+
+@router.post("/{idea_id}/upload-model")
+async def upload_model(
+    idea_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upload an Excel model file for an idea.
+    Stores the file server-side and auto-parses the API tab.
+    """
+    idea = db.query(IdeaPipeline).filter(IdeaPipeline.id == idea_id).first()
+    if not idea:
+        raise HTTPException(status_code=404, detail="Idea not found")
+
+    # Validate file type
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in {'.xlsx', '.xls'}:
+        raise HTTPException(status_code=400, detail="Only .xlsx and .xls files are allowed")
+
+    # Create idea-specific upload directory
+    upload_dir = os.path.join(MODEL_UPLOAD_DIR, str(idea_id))
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # Save as model.xlsx (overwrite on re-upload)
+    file_path = os.path.join(upload_dir, f"model{file_ext}")
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving file: {str(e)}")
+
+    # Update idea record with the stored path
+    idea.model_path = file_path
+
+    # Auto-parse the uploaded model
+    from app.services.excel_model_parser import parse_excel_model
+
+    try:
+        model_data = parse_excel_model(file_path)
+
+        cached = db.query(IdeaPipelineModelData).filter(
+            IdeaPipelineModelData.idea_id == idea_id
+        ).first()
+
+        if not cached:
+            cached = IdeaPipelineModelData(idea_id=idea_id)
+            db.add(cached)
+
+        for key, value in model_data.items():
+            if hasattr(cached, key):
+                setattr(cached, key, value)
+
+        cached.last_refreshed = datetime.utcnow()
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Model uploaded and parsed ({os.path.getsize(file_path)} bytes)",
+            "filename": file.filename,
+        }
+
+    except Exception as e:
+        db.commit()  # Still save the file path even if parsing fails
+        return {
+            "status": "partial",
+            "message": f"Model uploaded but parsing failed: {str(e)}",
+            "filename": file.filename,
+        }
+
+
 @router.post("/{idea_id}/refresh-model-data")
 def refresh_model_data(
     idea_id: int,

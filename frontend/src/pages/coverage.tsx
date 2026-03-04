@@ -132,9 +132,12 @@ export default function CoveragePage() {
   // Expanded detail view
   const [expandedTicker, setExpandedTicker] = useState<number | null>(null);
 
-  // Refresh status
+  // Refresh & upload status
   const [refreshing, setRefreshing] = useState<number | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
+  const [uploading, setUploading] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTargetId, setUploadTargetId] = useState<number | null>(null);
 
   // Inline editing for thesis/bull/bear
   const [inlineThesis, setInlineThesis] = useState<Record<number, string>>({});
@@ -251,6 +254,31 @@ export default function CoveragePage() {
       setError(err.response?.data?.detail || 'Failed to refresh model data');
     } finally {
       setRefreshing(null);
+    }
+  };
+
+  const handleUploadModel = async (id: number) => {
+    setUploadTargetId(id);
+    fileInputRef.current?.click();
+  };
+
+  const onFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadTargetId) return;
+
+    try {
+      setUploading(uploadTargetId);
+      await api.uploadCoverageModel(uploadTargetId, file);
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to upload model');
+    } finally {
+      setUploading(null);
+      setUploadTargetId(null);
+      // Reset file input so same file can be re-selected
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -455,6 +483,14 @@ export default function CoveragePage() {
 
   return (
     <Layout>
+      {/* Hidden file input for model upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".xlsx,.xls"
+        className="hidden"
+        onChange={onFileSelected}
+      />
       <div className="space-y-6">
         {/* Page Header */}
         <div className="flex justify-between items-start">
@@ -704,6 +740,13 @@ export default function CoveragePage() {
                             className="btn btn-ghost btn-xs"
                           >
                             Edit
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleUploadModel(coverage.id); }}
+                            disabled={uploading === coverage.id}
+                            className="btn btn-ghost btn-xs text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                          >
+                            {uploading === coverage.id ? '...' : 'Upload'}
                           </button>
                           {(coverage.model_path || coverage.model_share_link) && (
                             <button

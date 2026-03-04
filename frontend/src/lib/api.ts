@@ -600,6 +600,15 @@ class APIClient {
     return response.data;
   }
 
+  async uploadCoverageModel(coverageId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/coverage/${coverageId}/upload-model`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
   async refreshAllModels() {
     const response = await this.client.post('/coverage/refresh-all-models');
     return response.data;
@@ -699,6 +708,15 @@ class APIClient {
 
   async refreshIdeaModelData(ideaId: number) {
     const response = await this.client.post(`/ideas/${ideaId}/refresh-model-data`);
+    return response.data;
+  }
+
+  async uploadIdeaModel(ideaId: number, file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await this.client.post(`/ideas/${ideaId}/upload-model`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return response.data;
   }
 

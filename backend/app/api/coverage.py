@@ -1,7 +1,9 @@
 """
 Active Coverage API endpoints - manage analyst coverage and Excel model integration
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+import os
+import shutil
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from typing import List, Optional
@@ -501,6 +503,84 @@ def delete_coverage(
     coverage.is_active = False
     db.commit()
     return {"status": "success"}
+
+
+MODEL_UPLOAD_DIR = "/app/uploads/models/coverage"
+os.makedirs(MODEL_UPLOAD_DIR, exist_ok=True)
+
+
+@router.post("/{coverage_id}/upload-model")
+async def upload_model(
+    coverage_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upload an Excel model file for a coverage item.
+    Stores the file server-side and auto-parses the API tab.
+    """
+    coverage = db.query(ActiveCoverage).filter(ActiveCoverage.id == coverage_id).first()
+    if not coverage:
+        raise HTTPException(status_code=404, detail="Coverage not found")
+
+    # Validate file type
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in {'.xlsx', '.xls'}:
+        raise HTTPException(status_code=400, detail="Only .xlsx and .xls files are allowed")
+
+    # Create coverage-specific upload directory
+    upload_dir = os.path.join(MODEL_UPLOAD_DIR, str(coverage_id))
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # Save as model.xlsx (overwrite on re-upload)
+    file_path = os.path.join(upload_dir, f"model{file_ext}")
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving file: {str(e)}")
+
+    # Update coverage record with the stored path
+    coverage.model_path = file_path
+    db.commit()
+
+    # Auto-parse the uploaded model
+    from app.services.excel_model_parser import parse_excel_model
+    from datetime import datetime
+
+    try:
+        model_data = parse_excel_model(file_path)
+
+        cached = db.query(CoverageModelData).filter(
+            CoverageModelData.coverage_id == coverage_id
+        ).first()
+
+        if not cached:
+            cached = CoverageModelData(coverage_id=coverage_id)
+            db.add(cached)
+
+        for key, value in model_data.items():
+            if hasattr(cached, key):
+                setattr(cached, key, value)
+
+        cached.last_refreshed = datetime.utcnow()
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Model uploaded and parsed ({os.path.getsize(file_path)} bytes)",
+            "filename": file.filename,
+        }
+
+    except Exception as e:
+        # File saved successfully but parsing failed — still useful
+        return {
+            "status": "partial",
+            "message": f"Model uploaded but parsing failed: {str(e)}",
+            "filename": file.filename,
+        }
 
 
 @router.post("/{coverage_id}/refresh-model-data")
