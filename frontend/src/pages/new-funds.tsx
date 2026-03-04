@@ -325,45 +325,66 @@ export default function NewFundsPage() {
     setTickerAllocations([...tickerAllocations, newAllocation]);
   };
 
-  // Update ticker allocation
-  const updateTickerAllocation = async (id: string, field: string, value: any) => {
-    const allocation = tickerAllocations.find(a => a.id === id);
-    if (!allocation) return;
+  // Update ticker text only (no API call) — used by onChange for typing
+  const handleTickerTextChange = (id: string, value: string) => {
+    setTickerAllocations(prev => prev.map(a => a.id === id ? { ...a, ticker: value } : a));
+  };
 
-    const industry = industries.find(i => i.industry === allocation.industry);
-    if (!industry) return;
+  // Fetch price on blur (when user finishes typing the ticker)
+  const handleTickerBlur = async (id: string, ticker: string) => {
+    if (!ticker || ticker.length < 1) return;
 
-    let updatedAllocation = { ...allocation, [field]: value };
+    try {
+      const priceData = await api.getTickerPrice(ticker);
 
-    // If ticker changed, fetch price
-    if (field === 'ticker' && value) {
-      try {
-        const priceData = await api.getTickerPrice(value);
-        updatedAllocation.price = priceData.price;
-        updatedAllocation.security_name = priceData.security_name;
+      // Use functional state update to avoid stale closure issues
+      setTickerAllocations(prev => prev.map(a => {
+        if (a.id !== id) return a;
 
-        // Recalculate shares if we have a dollar amount
-        if (updatedAllocation.dollar_amount > 0) {
-          updatedAllocation.shares = Math.floor(updatedAllocation.dollar_amount / priceData.price);
-        }
-      } catch (err) {
-        setError(`Ticker ${value} not found`);
-        setTimeout(() => setError(null), 3000);
-      }
+        const ind = industries.find(i => i.industry === a.industry);
+        const dollarAmount = ind && a.pct_of_industry > 0
+          ? ind.dollar_allocation * (a.pct_of_industry / 100)
+          : a.dollar_amount;
+
+        const shares = priceData.price > 0 && dollarAmount > 0
+          ? Math.floor(dollarAmount / priceData.price)
+          : 0;
+
+        return {
+          ...a,
+          ticker,
+          price: priceData.price,
+          security_name: priceData.security_name,
+          dollar_amount: dollarAmount,
+          shares,
+        };
+      }));
+    } catch (err) {
+      setError(`Ticker ${ticker} not found or no price data available`);
+      setTimeout(() => setError(null), 3000);
     }
+  };
 
-    // If percentage changed, recalculate dollar amount and shares
-    if (field === 'pct_of_industry') {
-      const pct = parseFloat(value) || 0;
-      updatedAllocation.pct_of_industry = pct;
-      updatedAllocation.dollar_amount = industry.dollar_allocation * (pct / 100);
+  // Update percentage of industry allocation
+  const updateTickerPct = (id: string, value: string) => {
+    const pct = parseFloat(value) || 0;
 
-      if (updatedAllocation.price > 0) {
-        updatedAllocation.shares = Math.floor(updatedAllocation.dollar_amount / updatedAllocation.price);
-      }
-    }
+    setTickerAllocations(prev => prev.map(a => {
+      if (a.id !== id) return a;
 
-    setTickerAllocations(tickerAllocations.map(a => a.id === id ? updatedAllocation : a));
+      const ind = industries.find(i => i.industry === a.industry);
+      const dollarAmount = ind ? ind.dollar_allocation * (pct / 100) : 0;
+      const shares = a.price > 0 && dollarAmount > 0
+        ? Math.floor(dollarAmount / a.price)
+        : 0;
+
+      return {
+        ...a,
+        pct_of_industry: pct,
+        dollar_amount: dollarAmount,
+        shares,
+      };
+    }));
   };
 
   // Remove ticker allocation
@@ -549,10 +570,10 @@ export default function NewFundsPage() {
                 <div className="metric-value-lg text-emerald-900">{formatCurrency(totalAllocated)}</div>
               </div>
             </div>
-            <div className="card bg-amber-50 border-amber-200">
-              <div className="metric-card metric-card-orange">
+            <div className={`card ${remainingToAllocate < 1 ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+              <div className="metric-card">
                 <div className="metric-label">Remaining</div>
-                <div className="metric-value-lg text-amber-900">{formatCurrency(remainingToAllocate)}</div>
+                <div className={`metric-value-lg font-bold ${remainingToAllocate < 1 ? 'text-emerald-900' : 'text-red-600'}`}>{formatCurrency(remainingToAllocate)}</div>
               </div>
             </div>
             <div className="card bg-violet-50 border-violet-200">
@@ -635,17 +656,17 @@ export default function NewFundsPage() {
                           <td className="text-right font-medium text-zinc-900">
                             {formatPct(industry.proforma_weight)}
                           </td>
-                          <td className={`text-right font-medium ${
-                            industry.active_weight > 0 ? 'value-positive' :
-                            industry.active_weight < 0 ? 'value-negative' : 'text-zinc-600'
+                          <td className={`text-right font-semibold ${
+                            industry.active_weight > 0.0001 ? 'text-green-600' :
+                            industry.active_weight < -0.0001 ? 'text-red-600' : 'text-zinc-600'
                           }`}>
                             {industry.active_weight > 0 ? '+' : ''}{formatPct(industry.active_weight)}
                           </td>
                           <td className="text-right font-medium text-zinc-900">
                             {formatCurrency(industry.dollar_allocation)}
                           </td>
-                          <td className={`text-right font-medium ${
-                            industryRemaining < 1 ? 'value-positive' : 'text-amber-600'
+                          <td className={`text-right ${
+                            industryRemaining < 1 ? 'font-medium text-green-600' : 'font-bold text-red-600'
                           }`}>
                             {formatCurrency(industryRemaining)}
                           </td>
@@ -689,8 +710,8 @@ export default function NewFundsPage() {
                                             <input
                                               type="text"
                                               value={alloc.ticker}
-                                              onChange={(e) => updateTickerAllocation(alloc.id, 'ticker', e.target.value.toUpperCase())}
-                                              onBlur={(e) => updateTickerAllocation(alloc.id, 'ticker', e.target.value.toUpperCase())}
+                                              onChange={(e) => handleTickerTextChange(alloc.id, e.target.value.toUpperCase())}
+                                              onBlur={(e) => handleTickerBlur(alloc.id, e.target.value.toUpperCase())}
                                               placeholder="AAPL"
                                               className="w-20 px-2 py-1 border border-zinc-300 rounded text-sm"
                                             />
@@ -703,7 +724,7 @@ export default function NewFundsPage() {
                                               <input
                                                 type="number"
                                                 value={alloc.pct_of_industry || ''}
-                                                onChange={(e) => updateTickerAllocation(alloc.id, 'pct_of_industry', e.target.value)}
+                                                onChange={(e) => updateTickerPct(alloc.id, e.target.value)}
                                                 placeholder="100"
                                                 min="0"
                                                 max="100"

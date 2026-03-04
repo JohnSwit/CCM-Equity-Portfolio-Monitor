@@ -1083,6 +1083,7 @@ export default function PortfolioStatisticsPage() {
                                 <th className="text-right" title="Selection Effect (pp)">Select</th>
                                 <th className="text-right" title="Interaction Effect (pp)">Inter</th>
                                 <th className="text-right" title="Total Effect (pp)">Total</th>
+                                <th className="text-right" title="Benchmark sector coverage (priced/total constituents)">Cov</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1110,6 +1111,9 @@ export default function PortfolioStatisticsPage() {
                                     <td className={`text-right tabular-nums font-semibold ${(sector.total_effect || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                       {(sector.total_effect || 0) >= 0 ? '+' : ''}{formatBps(sector.total_effect)}
                                     </td>
+                                    <td className={`text-right tabular-nums text-xs ${sector.bench_coverage ? (sector.bench_coverage.pct >= 80 ? 'text-zinc-400' : sector.bench_coverage.pct >= 50 ? 'text-amber-500' : 'text-red-400') : 'text-zinc-300'}`}>
+                                      {sector.bench_coverage ? `${sector.bench_coverage.priced}/${sector.bench_coverage.total}` : '-'}
+                                    </td>
                                   </tr>
                                 );
                               })}
@@ -1134,6 +1138,9 @@ export default function PortfolioStatisticsPage() {
                                 <td className={`text-right tabular-nums font-bold ${(brinsonData.total_active_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
                                   {(brinsonData.total_active_return || 0) >= 0 ? '+' : ''}{formatBps(brinsonData.total_active_return)}
                                 </td>
+                                <td className="text-right tabular-nums text-xs text-zinc-400">
+                                  {brinsonData.coverage ? `${brinsonData.coverage.coverage_pct}%` : '-'}
+                                </td>
                               </tr>
                             </tfoot>
                           </table>
@@ -1141,10 +1148,22 @@ export default function PortfolioStatisticsPage() {
                       </div>
                     )}
 
+                    {/* Coverage Warning */}
+                    {brinsonData.coverage && brinsonData.coverage.coverage_pct < 80 && (
+                      <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                        <span className="font-semibold">Low benchmark coverage:</span> Only {brinsonData.coverage.priced_constituents} of {brinsonData.coverage.benchmark_constituents} benchmark
+                        constituents ({brinsonData.coverage.coverage_pct}%) have local price data.
+                        Benchmark sector returns may be less accurate. Run a market data update to improve coverage.
+                      </div>
+                    )}
+
                     {/* Context Footer */}
-                    <div className="mt-4 pt-4 border-t border-zinc-100 text-xs text-zinc-500 flex justify-between">
+                    <div className="mt-4 pt-4 border-t border-zinc-100 text-xs text-zinc-500 flex flex-wrap gap-x-6 gap-y-1">
                       <span>Benchmark: {brinsonData.benchmark || 'SP500'}</span>
                       <span>Benchmark data as of: {brinsonData.benchmark_data_date || 'N/A'}</span>
+                      {brinsonData.coverage && (
+                        <span>Coverage: {brinsonData.coverage.priced_constituents}/{brinsonData.coverage.benchmark_constituents} ({brinsonData.coverage.coverage_pct}%)</span>
+                      )}
                     </div>
                   </>
                 )}

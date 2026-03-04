@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, exists
 from typing import List
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, Account, Group, GroupMember, GroupType
+from app.models import User, Account, Group, GroupMember, GroupType, Transaction, PositionsEOD
 from app.models.schemas import (
     AccountResponse, GroupResponse, GroupCreate, GroupMemberAdd
 )
@@ -112,11 +112,28 @@ def remove_group_member(
 
 @router.get("/views")
 def get_all_views(
+    include_empty: bool = Query(False, description="Include accounts with no positions/transactions"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all views (accounts + groups + firm)"""
-    accounts = db.query(Account).order_by(Account.display_name).all()
+    """Get all views (accounts + groups + firm).
+    By default, excludes accounts that have no transactions and no positions."""
+    if include_empty:
+        accounts = db.query(Account).order_by(Account.display_name).all()
+    else:
+        # Only return accounts that have at least one transaction OR at least one position
+        accounts_with_transactions = db.query(Transaction.account_id).distinct().subquery()
+        accounts_with_positions = db.query(PositionsEOD.account_id).distinct().subquery()
+
+        accounts = db.query(Account).filter(
+            Account.id.in_(
+                db.query(accounts_with_transactions.c.account_id)
+            ) |
+            Account.id.in_(
+                db.query(accounts_with_positions.c.account_id)
+            )
+        ).order_by(Account.display_name).all()
+
     groups = db.query(Group).order_by(Group.name).all()
 
     views = []

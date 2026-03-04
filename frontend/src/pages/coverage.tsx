@@ -541,14 +541,15 @@ export default function CoveragePage() {
               </select>
             </div>
             <div className="md:col-span-2">
-              <label className="label">Model Path</label>
+              <label className="label">Model Link (OneDrive)</label>
               <input
                 type="text"
-                value={newModelPath}
-                onChange={(e) => setNewModelPath(e.target.value)}
-                placeholder="/models/AAPL/AAPL Model.xlsx"
+                value={newModelShareLink}
+                onChange={(e) => setNewModelShareLink(e.target.value)}
+                placeholder="Paste OneDrive share link..."
                 className="input"
               />
+              <p className="text-xs text-zinc-400 mt-1">Right-click file in OneDrive &gt; Share &gt; Copy link</p>
             </div>
             <div className="flex items-end">
               <button
@@ -704,7 +705,7 @@ export default function CoveragePage() {
                           >
                             Edit
                           </button>
-                          {coverage.model_path && (
+                          {(coverage.model_path || coverage.model_share_link) && (
                             <button
                               onClick={(e) => { e.stopPropagation(); handleRefreshModel(coverage.id); }}
                               disabled={refreshing === coverage.id}

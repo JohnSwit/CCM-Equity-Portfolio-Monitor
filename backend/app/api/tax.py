@@ -154,14 +154,44 @@ def get_lots_by_symbol(
 def get_realized_gains(
     account_id: Optional[int] = None,
     tax_year: Optional[int] = None,
+    auto_build: bool = Query(True, description="Auto-build realized gains from transactions if none exist"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get realized gains/losses with summary."""
+    """
+    Get realized gains/losses with summary.
+    Realized gains are computed from transactions using FIFO lot matching.
+    If auto_build=True and no transaction-built lots exist, they are built automatically.
+    """
+    from app.models.models import TaxLot
+
     tax_service = TaxService(db)
 
     if not tax_year:
         tax_year = date.today().year
+
+    # Auto-build: if there are transactions but no transaction-built lots, build them
+    if auto_build:
+        txn_built_lot_count = db.query(TaxLot).filter(
+            TaxLot.import_log_id.is_(None)
+        ).count()
+
+        if txn_built_lot_count == 0:
+            # Check if there are any transactions at all
+            txn_count = db.query(Transaction).count()
+            if txn_count > 0:
+                logger.info("Auto-building tax lots from transactions for realized gains")
+                if account_id:
+                    accounts = [db.query(Account).filter(Account.id == account_id).first()]
+                    accounts = [a for a in accounts if a is not None]
+                else:
+                    accounts = db.query(Account).all()
+
+                for account in accounts:
+                    try:
+                        tax_service.build_tax_lots_for_account(account.id)
+                    except Exception as e:
+                        logger.error(f"Error auto-building lots for account {account.account_number}: {e}")
 
     gains, summary_data = tax_service.get_realized_gains(account_id, tax_year)
 
@@ -183,8 +213,34 @@ def get_tax_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get comprehensive tax summary including realized and unrealized gains."""
+    """
+    Get comprehensive tax summary including realized and unrealized gains.
+    Realized gains come from transactions (FIFO matching).
+    Unrealized gains come from imported tax lots.
+    """
+    from app.models.models import TaxLot
+
     tax_service = TaxService(db)
+
+    # Auto-build transaction-based lots if none exist
+    txn_built_lot_count = db.query(TaxLot).filter(
+        TaxLot.import_log_id.is_(None)
+    ).count()
+    if txn_built_lot_count == 0:
+        txn_count = db.query(Transaction).count()
+        if txn_count > 0:
+            logger.info("Auto-building tax lots from transactions for tax summary")
+            if account_id:
+                accounts = [db.query(Account).filter(Account.id == account_id).first()]
+                accounts = [a for a in accounts if a is not None]
+            else:
+                accounts = db.query(Account).all()
+            for account in accounts:
+                try:
+                    tax_service.build_tax_lots_for_account(account.id)
+                except Exception as e:
+                    logger.error(f"Error auto-building lots for account {account.account_number}: {e}")
+
     summary = tax_service.get_tax_summary(account_id, tax_year)
     return TaxSummaryResponse(**summary)
 

@@ -1,8 +1,8 @@
 """
 Excel Model Parser - Extracts data from analyst Excel models' API tabs
 
-This module reads Excel files (local or OneDrive-synced) and extracts
-standardized metrics from the "API" tab.
+This module reads Excel files (local, OneDrive-synced, or via OneDrive share
+links) and extracts standardized metrics from the "API" tab.
 
 Expected API Tab Layout:
 - E11: IRR (3-year)
@@ -12,6 +12,7 @@ Expected API Tab Layout:
 Revenue/EBITDA/EPS/FCF estimates laid out in a grid format.
 """
 import os
+import tempfile
 from typing import Dict, Any, Optional
 from datetime import datetime
 import logging
@@ -39,13 +40,97 @@ def parse_excel_model(file_path: str) -> Dict[str, Any]:
     if not os.path.exists(normalized_path):
         raise FileNotFoundError(f"Excel file not found: {normalized_path}")
 
+    return _parse_workbook(normalized_path)
+
+
+def parse_excel_model_from_url(share_url: str) -> Dict[str, Any]:
+    """
+    Download an Excel model from a OneDrive/SharePoint share link and parse it.
+
+    Args:
+        share_url: OneDrive or SharePoint sharing URL
+
+    Returns:
+        Dictionary with extracted model data
+
+    Raises:
+        ConnectionError: If the file cannot be downloaded
+        ValueError: If the API tab is missing or malformed
+    """
+    import httpx
+
+    # Convert share link to direct download URL
+    download_url = _share_link_to_download_url(share_url)
+
+    logger.info(f"Downloading Excel model from share link...")
+
+    tmp_path = None
+    try:
+        # Download the file with redirect following
+        with httpx.Client(follow_redirects=True, timeout=60.0) as client:
+            response = client.get(download_url)
+            response.raise_for_status()
+
+        # Verify we got an Excel file (not an HTML login page)
+        content_type = response.headers.get('content-type', '')
+        if 'text/html' in content_type and len(response.content) < 50000:
+            raise ConnectionError(
+                "Share link requires authentication. "
+                "Ensure the link is set to 'Anyone with the link' or "
+                "'People in your organization' with no sign-in required."
+            )
+
+        # Save to temp file
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix='.xlsx')
+        with os.fdopen(tmp_fd, 'wb') as f:
+            f.write(response.content)
+
+        logger.info(f"Downloaded {len(response.content)} bytes to temp file")
+
+        return _parse_workbook(tmp_path)
+
+    except httpx.HTTPStatusError as e:
+        raise ConnectionError(f"Failed to download model: HTTP {e.response.status_code}")
+    except httpx.RequestError as e:
+        raise ConnectionError(f"Failed to download model: {str(e)}")
+    finally:
+        # Clean up temp file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _share_link_to_download_url(share_url: str) -> str:
+    """
+    Convert a OneDrive/SharePoint share link to a direct download URL.
+
+    Handles common SharePoint URL patterns:
+    - https://company-my.sharepoint.com/:x:/g/personal/user/ENCODED
+    - https://company.sharepoint.com/sites/SITE/:x:/g/ENCODED
+    - https://1drv.ms/x/ENCODED (personal OneDrive)
+    """
+    url = share_url.strip().rstrip('/')
+
+    # Append download=1 parameter to force file download
+    if '?' in url:
+        return url + '&download=1'
+    else:
+        return url + '?download=1'
+
+
+def _parse_workbook(file_path: str) -> Dict[str, Any]:
+    """
+    Parse an Excel workbook at the given local path and extract API tab data.
+    """
     try:
         import openpyxl
     except ImportError:
         raise ImportError("openpyxl is required for Excel parsing. Install with: pip install openpyxl")
 
     try:
-        wb = openpyxl.load_workbook(normalized_path, data_only=True)
+        wb = openpyxl.load_workbook(file_path, data_only=True)
     except Exception as e:
         raise ValueError(f"Error opening Excel file: {str(e)}")
 

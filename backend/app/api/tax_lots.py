@@ -14,7 +14,7 @@ from datetime import date
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import User, TaxLotImportLog
-from app.models.models import TaxLot, RealizedGain
+from app.models.models import TaxLot, RealizedGain, WashSaleViolation
 from app.services.tax_lot_parser import TaxLotParser, calculate_file_hash
 
 router = APIRouter(prefix="/tax-lots", tags=["tax-lots"])
@@ -149,6 +149,22 @@ async def delete_tax_lot_import(
 
     file_name = import_log.file_name
 
+    # Get tax lot IDs from this import for FK cleanup
+    tax_lot_ids = [r[0] for r in db.query(TaxLot.id).filter(
+        TaxLot.import_log_id == import_id
+    ).all()]
+
+    if tax_lot_ids:
+        # Delete RealizedGain records referencing these lots (FK: tax_lot_id)
+        db.query(RealizedGain).filter(
+            RealizedGain.tax_lot_id.in_(tax_lot_ids)
+        ).delete(synchronize_session=False)
+
+        # Nullify WashSaleViolation references (FK: adjusted_lot_id)
+        db.query(WashSaleViolation).filter(
+            WashSaleViolation.adjusted_lot_id.in_(tax_lot_ids)
+        ).update({WashSaleViolation.adjusted_lot_id: None}, synchronize_session=False)
+
     # Delete all tax lots from this import
     tax_lot_count = db.query(TaxLot).filter(
         TaxLot.import_log_id == import_id
@@ -158,11 +174,17 @@ async def delete_tax_lot_import(
     db.delete(import_log)
     db.commit()
 
+    # Clean up accounts that now have no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    orphaned_deleted = cleanup_orphaned_accounts(db)
+
     return {
         'deleted': True,
         'import_id': import_id,
         'tax_lots_deleted': tax_lot_count,
-        'message': f'Deleted import {file_name} and {tax_lot_count} tax lots'
+        'orphaned_accounts_deleted': orphaned_deleted,
+        'message': f'Deleted import {file_name} and {tax_lot_count} tax lots. '
+                   f'{orphaned_deleted} orphaned accounts removed.'
     }
 
 
@@ -298,7 +320,10 @@ async def delete_all_tax_lots(
             }
         }
 
-    # Delete realized gains first (foreign key to tax lots)
+    # Delete wash sale violations first (FK: adjusted_lot_id -> tax_lots)
+    wash_sales_deleted = db.query(WashSaleViolation).delete(synchronize_session=False)
+
+    # Delete realized gains (FK: tax_lot_id -> tax_lots)
     realized_gains_deleted = db.query(RealizedGain).delete(synchronize_session=False)
 
     # Delete all tax lots
@@ -309,12 +334,17 @@ async def delete_all_tax_lots(
 
     db.commit()
 
+    # Clean up accounts that now have no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    orphaned_deleted = cleanup_orphaned_accounts(db)
+
     return {
         'status': 'success',
-        'message': 'All tax lots deleted',
+        'message': f'All tax lots deleted. {orphaned_deleted} orphaned accounts removed.',
         'deleted': {
             'realized_gains': realized_gains_deleted,
             'tax_lots': tax_lots_deleted,
-            'import_logs': import_logs_deleted
+            'import_logs': import_logs_deleted,
+            'orphaned_accounts': orphaned_deleted
         }
     }

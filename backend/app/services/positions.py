@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
 from app.models import (
     Transaction, PositionsEOD, PricesEOD, Security,
-    TransactionType, Account, AccountInception, InceptionPosition
+    TransactionType, Account, AccountInception, InceptionPosition,
+    TaxLot
 )
 import logging
 
@@ -20,9 +21,9 @@ class PositionsEngine:
 
     def get_transaction_unit_delta(self, txn_type: TransactionType, units: float) -> float:
         """Get share delta for a transaction type"""
-        if txn_type == TransactionType.BUY or txn_type == TransactionType.TRANSFER_IN:
+        if txn_type in (TransactionType.BUY, TransactionType.TRANSFER_IN, TransactionType.DIVIDEND_REINVEST):
             return units
-        elif txn_type == TransactionType.SELL or txn_type == TransactionType.TRANSFER_OUT:
+        elif txn_type in (TransactionType.SELL, TransactionType.TRANSFER_OUT):
             return -units
         else:
             return 0.0
@@ -337,6 +338,88 @@ class PositionsEngine:
 
         return avg_costs
 
+    def _get_tax_lot_avg_costs(
+        self,
+        account_id: int,
+        security_ids: List[int],
+    ) -> Dict[int, float]:
+        """
+        Get weighted average cost per share from TaxLot table for a single account.
+        Used as fallback when transaction-based avg_cost is not available.
+        Only includes open lots (remaining_shares > 0).
+        """
+        if not security_ids:
+            return {}
+
+        lots = self.db.query(
+            TaxLot.security_id,
+            TaxLot.remaining_shares,
+            TaxLot.remaining_cost_basis,
+        ).filter(
+            and_(
+                TaxLot.account_id == account_id,
+                TaxLot.security_id.in_(security_ids),
+                TaxLot.is_closed == False,
+                TaxLot.remaining_shares > 0,
+            )
+        ).all()
+
+        # Aggregate across lots for the same security
+        sec_data: Dict[int, Dict] = {}
+        for sec_id, shares, cost_basis in lots:
+            if sec_id not in sec_data:
+                sec_data[sec_id] = {'total_cost': 0.0, 'total_shares': 0.0}
+            sec_data[sec_id]['total_cost'] += cost_basis if cost_basis else 0
+            sec_data[sec_id]['total_shares'] += shares
+
+        result = {}
+        for sec_id, data in sec_data.items():
+            if data['total_shares'] > 0:
+                result[sec_id] = data['total_cost'] / data['total_shares']
+
+        return result
+
+    def _get_tax_lot_avg_costs_for_accounts(
+        self,
+        account_ids: List[int],
+        security_ids: List[int],
+    ) -> Dict[int, float]:
+        """
+        Get weighted average cost per share from TaxLot table across multiple accounts.
+        Used as fallback when transaction-based avg_cost is not available.
+        Only includes open lots (remaining_shares > 0).
+        """
+        if not security_ids or not account_ids:
+            return {}
+
+        lots = self.db.query(
+            TaxLot.security_id,
+            TaxLot.remaining_shares,
+            TaxLot.remaining_cost_basis,
+        ).filter(
+            and_(
+                TaxLot.account_id.in_(account_ids),
+                TaxLot.security_id.in_(security_ids),
+                TaxLot.is_closed == False,
+                TaxLot.remaining_shares > 0,
+            )
+        ).all()
+
+        # Aggregate across all accounts and lots for the same security
+        sec_data: Dict[int, Dict] = {}
+        for sec_id, shares, cost_basis in lots:
+            if sec_id not in sec_data:
+                sec_data[sec_id] = {'total_cost': 0.0, 'total_shares': 0.0}
+            sec_data[sec_id]['total_cost'] += cost_basis if cost_basis else 0
+            sec_data[sec_id]['total_shares'] += shares
+
+        result = {}
+        for sec_id, data in sec_data.items():
+            if data['total_shares'] > 0:
+                result[sec_id] = data['total_cost'] / data['total_shares']
+
+        return result
+
     def get_previous_trading_date(self, as_of_date: date) -> Optional[date]:
         """Get the previous trading date from available prices"""
         prev_date = self.db.query(PricesEOD.date).filter(
@@ -384,6 +467,16 @@ class PositionsEngine:
         if include_cost_basis:
             avg_costs = self.get_average_costs(account_id, security_ids, as_of_date)
 
+        # Get tax lot cost basis as fallback for securities without transaction-based avg_cost
+        tax_lot_costs = {}
+        missing_cost_ids = [sid for sid in security_ids if sid not in avg_costs]
+        if missing_cost_ids:
+            tax_lot_costs = self._get_tax_lot_avg_costs(account_id, missing_cost_ids)
+            if tax_lot_costs:
+                logger.info(f"Tax lot fallback provided avg_cost for {len(tax_lot_costs)} securities in account {account_id}")
+            else:
+                logger.debug(f"No tax lot avg_cost found for {len(missing_cost_ids)} missing securities in account {account_id}")
+
         # Get previous day prices for 1D gain if requested
         prev_prices = {}
         if include_1d_gain:
@@ -421,6 +514,13 @@ class PositionsEngine:
 
             # Add average cost and unrealized gain
             avg_cost = avg_costs.get(security.id)
+
+            # Fallback to tax lot data if no avg_cost from transactions
+            if avg_cost is None:
+                tax_lot_cost = tax_lot_costs.get(security.id)
+                if tax_lot_cost is not None:
+                    avg_cost = tax_lot_cost
+
             if avg_cost is not None and price is not None:
                 holding['avg_cost'] = avg_cost
                 holding['unr_gain'] = (price - avg_cost) * position.shares
@@ -556,6 +656,16 @@ class PositionsEngine:
                 sec_cost_data[sec_id]['total_cost'] += abs(mkt_val)
                 sec_cost_data[sec_id]['total_units'] += units
 
+        # Get tax lot cost basis as fallback for securities without transaction-based avg_cost
+        missing_cost_ids = [sid for sid in security_ids_list if sid not in sec_cost_data]
+        tax_lot_costs = {}
+        if missing_cost_ids:
+            tax_lot_costs = self._get_tax_lot_avg_costs_for_accounts(account_ids, missing_cost_ids)
+            if tax_lot_costs:
+                logger.info(f"Tax lot fallback provided avg_cost for {len(tax_lot_costs)} securities across {len(account_ids)} accounts")
+            else:
+                logger.debug(f"No tax lot avg_cost found for {len(missing_cost_ids)} missing securities across accounts")
+
         # Build holdings list
         holdings = []
         for sec_id, h in security_map.items():
@@ -564,6 +674,12 @@ class PositionsEngine:
             cost_data = sec_cost_data.get(sec_id)
             if cost_data and cost_data['total_units'] > 0:
                 avg_cost = cost_data['total_cost'] / cost_data['total_units']
+
+            # Fallback to tax lot data if no avg_cost from transactions
+            if avg_cost is None:
+                tax_lot_cost = tax_lot_costs.get(sec_id)
+                if tax_lot_cost is not None:
+                    avg_cost = tax_lot_cost
 
             if avg_cost is not None and price is not None:
                 h['avg_cost'] = avg_cost

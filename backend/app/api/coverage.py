@@ -519,11 +519,11 @@ def refresh_model_data(
     if not coverage:
         raise HTTPException(status_code=404, detail="Coverage not found")
 
-    if not coverage.model_path:
-        raise HTTPException(status_code=400, detail="No model path configured for this coverage")
+    if not coverage.model_path and not coverage.model_share_link:
+        raise HTTPException(status_code=400, detail="No model path or share link configured for this coverage")
 
     # Import the Excel parsing service
-    from app.services.excel_model_parser import parse_excel_model
+    from app.services.excel_model_parser import parse_excel_model, parse_excel_model_from_url
     from datetime import datetime
 
     try:
@@ -554,7 +554,11 @@ def refresh_model_data(
             )
             db.add(snapshot)
 
-        model_data = parse_excel_model(coverage.model_path)
+        # Parse from local path or download from share link
+        if coverage.model_path:
+            model_data = parse_excel_model(coverage.model_path)
+        else:
+            model_data = parse_excel_model_from_url(coverage.model_share_link)
 
         # Update or create cached data
         if not cached:
@@ -575,6 +579,8 @@ def refresh_model_data(
 
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Excel model file not found")
+    except ConnectionError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing model: {str(e)}")
 
@@ -585,19 +591,23 @@ def refresh_all_models(
     current_user: User = Depends(get_current_user)
 ):
     """Refresh model data for all coverage items with linked Excel models"""
+    from sqlalchemy import or_
     coverages = db.query(ActiveCoverage).filter(
         ActiveCoverage.is_active == True,
-        ActiveCoverage.model_path != None
+        or_(ActiveCoverage.model_path != None, ActiveCoverage.model_share_link != None)
     ).all()
 
     results = {"success": 0, "failed": 0, "errors": []}
 
-    from app.services.excel_model_parser import parse_excel_model
+    from app.services.excel_model_parser import parse_excel_model, parse_excel_model_from_url
     from datetime import datetime
 
     for coverage in coverages:
         try:
-            model_data = parse_excel_model(coverage.model_path)
+            if coverage.model_path:
+                model_data = parse_excel_model(coverage.model_path)
+            else:
+                model_data = parse_excel_model_from_url(coverage.model_share_link)
 
             cached = db.query(CoverageModelData).filter(
                 CoverageModelData.coverage_id == coverage.id

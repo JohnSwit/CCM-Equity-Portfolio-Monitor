@@ -336,13 +336,17 @@ def refresh_model_data(
     if not idea:
         raise HTTPException(status_code=404, detail="Idea not found")
 
-    if not idea.model_path:
-        raise HTTPException(status_code=400, detail="No model path configured for this idea")
+    if not idea.model_path and not idea.model_share_link:
+        raise HTTPException(status_code=400, detail="No model path or share link configured for this idea")
 
-    from app.services.excel_model_parser import parse_excel_model
+    from app.services.excel_model_parser import parse_excel_model, parse_excel_model_from_url
 
     try:
-        model_data = parse_excel_model(idea.model_path)
+        # Parse from local path or download from share link
+        if idea.model_path:
+            model_data = parse_excel_model(idea.model_path)
+        else:
+            model_data = parse_excel_model_from_url(idea.model_share_link)
 
         # Update or create cached data
         cached = db.query(IdeaPipelineModelData).filter(
@@ -367,6 +371,8 @@ def refresh_model_data(
 
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Excel model file not found")
+    except ConnectionError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing model: {str(e)}")
 

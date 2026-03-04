@@ -2,14 +2,17 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.models import (
     Transaction, PositionsEOD, PortfolioValueEOD, ReturnsEOD,
-    PricesEOD, Security, Account, ViewType, TransactionType
+    PricesEOD, Security, Account, ViewType, TransactionType, AssetClass
 )
 from app.models.sector_models import SectorClassification, BenchmarkConstituent, FactorReturns
 from app.utils.ticker_utils import TickerNormalizer
+from app.core.config import settings
 import logging
 from scipy import stats
 
@@ -433,6 +436,13 @@ class SectorAnalyzer:
 class BrinsonAttributionAnalyzer:
     """Perform Brinson attribution analysis"""
 
+    # Mapping from benchmark definition codes to ETF proxy codes used in BenchmarkReturn table
+    BENCHMARK_ETF_PROXY = {
+        'SP500': 'SPY',
+        'NASDAQ': 'QQQ',
+        'DOW': 'INDU',
+    }
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -450,12 +460,11 @@ class BrinsonAttributionAnalyzer:
         - Selection effect: benefit from security selection within sectors
         - Interaction effect: combined allocation and selection
 
-        Formulas:
+        Formulas (BHB model):
         Allocation = (W_p - W_b) * R_b
         Selection = W_b * (R_p - R_b)
         Interaction = (W_p - W_b) * (R_p - R_b)
         """
-        # Get sector analyzer
         sector_analyzer = SectorAnalyzer(self.db)
 
         # Get portfolio sector weights and holdings at start
@@ -463,13 +472,12 @@ class BrinsonAttributionAnalyzer:
         if 'error' in port_start:
             return port_start
 
-        # Get portfolio sector weights at end
+        # Get portfolio sector weights at end (validates end-period data exists)
         port_end = sector_analyzer.get_portfolio_sector_weights(view_type, view_id, end_date)
         if 'error' in port_end:
             return {'error': 'Could not get end-period portfolio data'}
 
-        # Get benchmark weights (use latest available data)
-        # Note: We use the latest snapshot since we don't have historical benchmark constituents
+        # ── Benchmark constituent data ──────────────────────────────────
         latest_bench_date = self.db.query(func.max(BenchmarkConstituent.as_of_date)).filter(
             BenchmarkConstituent.benchmark_code == benchmark_code
         ).scalar()
@@ -481,7 +489,6 @@ class BrinsonAttributionAnalyzer:
                 'action_required': f'Run POST /data-management/refresh-benchmark/{benchmark_code}'
             }
 
-        # Get benchmark constituents with sectors (sector is stored during refresh)
         benchmark_holdings = self.db.query(
             BenchmarkConstituent.symbol,
             BenchmarkConstituent.weight,
@@ -496,7 +503,9 @@ class BrinsonAttributionAnalyzer:
         if not benchmark_holdings:
             return {'error': f'No holdings found for benchmark {benchmark_code}'}
 
-        # Build a fallback sector lookup from SectorClassification
+        # ── Build unified sector lookup from SectorClassification ───────
+        # Use the SAME sector source for both portfolio and benchmark to prevent
+        # taxonomy mismatches (e.g., "Technology" vs "Communication" for META).
         sector_lookup = {}
         classifications = self.db.query(
             Security.symbol,
@@ -508,27 +517,67 @@ class BrinsonAttributionAnalyzer:
         for c in classifications:
             sector_lookup[c.symbol] = c.sector or c.gics_sector
 
-        # Enrich benchmark holdings with sector data for further calculations
+        # Enrich benchmark holdings — prefer SectorClassification (same as portfolio),
+        # fall back to BenchmarkConstituent.sector from the SPY file
         enriched_holdings = []
+        unclassified_count = 0
         for holding in benchmark_holdings:
-            sector = holding.sector or sector_lookup.get(holding.symbol)
-            if sector:  # Skip unclassified
+            sector = sector_lookup.get(holding.symbol) or holding.sector
+            if sector:
                 enriched_holdings.append({
                     'symbol': holding.symbol,
                     'weight': holding.weight,
                     'sector': sector
                 })
+            else:
+                unclassified_count += 1
 
-        # Calculate sector returns for portfolio holdings
-        portfolio_sector_returns = self._calculate_sector_returns(port_start['holdings'], start_date, end_date)
+        if unclassified_count > 0:
+            logger.warning(f"Brinson: {unclassified_count} benchmark constituents have no sector classification")
 
-        # Calculate sector returns for benchmark holdings (use enriched data)
-        benchmark_sector_returns = self._calculate_benchmark_sector_returns_from_dict(enriched_holdings, start_date, end_date)
+        # ── Pre-fetch prices in batch (avoid N+1 queries) ──────────────
+        # Collect all security IDs we'll need prices for
+        benchmark_symbols = [h['symbol'] for h in enriched_holdings]
+        portfolio_security_ids = [h['security_id'] for h in port_start['holdings']]
 
-        # Build portfolio sector weights dict (use start weights)
+        # Lookup security IDs for benchmark tickers
+        bench_securities = self.db.query(
+            Security.id, Security.symbol
+        ).filter(
+            Security.symbol.in_([TickerNormalizer.normalize(s) for s in benchmark_symbols])
+        ).all()
+        bench_symbol_to_id = {s.symbol: s.id for s in bench_securities}
+
+        all_security_ids = set(portfolio_security_ids) | set(bench_symbol_to_id.values())
+
+        # Batch-fetch closest prices at start_date and end_date
+        start_prices = self._batch_get_prices(all_security_ids, start_date)
+        end_prices = self._batch_get_prices(all_security_ids, end_date)
+
+        # ── Tiingo fallback for missing benchmark prices ─────────────────
+        # Fetch prices from Tiingo for any benchmark constituents not in the
+        # local PricesEOD table, store them for future caching, and update
+        # the in-memory dicts so this request gets 100% coverage.
+        tiingo_filled = self._ensure_benchmark_prices(
+            enriched_holdings, bench_symbol_to_id,
+            start_date, end_date,
+            start_prices, end_prices,
+        )
+        if tiingo_filled > 0:
+            logger.info(f"Brinson: Tiingo filled {tiingo_filled} missing benchmark tickers")
+
+        # ── Calculate sector returns ────────────────────────────────────
+        portfolio_sector_returns = self._calculate_sector_returns_batch(
+            port_start['holdings'], start_prices, end_prices
+        )
+
+        benchmark_sector_returns, bench_coverage = self._calculate_benchmark_sector_returns_batch(
+            enriched_holdings, bench_symbol_to_id, start_prices, end_prices
+        )
+
+        # ── Build weight dictionaries ───────────────────────────────────
         port_weights = {s['sector']: s['weight'] for s in port_start['sectors']}
 
-        # Build benchmark sector weights dict from enriched holdings
         bench_weights = {}
         total_bench_weight = 0.0
         for holding in enriched_holdings:
@@ -542,16 +591,13 @@ class BrinsonAttributionAnalyzer:
             for sector in bench_weights:
                 bench_weights[sector] = bench_weights[sector] / total_bench_weight
 
-        # Get all sectors
+        # ── Brinson decomposition ───────────────────────────────────────
         all_sectors = set(port_weights.keys()) | set(bench_weights.keys())
 
-        # Calculate Brinson components by sector
         attribution_by_sector = []
         total_allocation = 0.0
         total_selection = 0.0
         total_interaction = 0.0
-
-        # Also track total portfolio and benchmark returns (weighted)
         total_portfolio_return = 0.0
         total_benchmark_return = 0.0
 
@@ -569,11 +615,10 @@ class BrinsonAttributionAnalyzer:
             total_selection += selection
             total_interaction += interaction
 
-            # Weighted contributions to total returns
             total_portfolio_return += W_p * R_p
             total_benchmark_return += W_b * R_b
 
-            attribution_by_sector.append({
+            sector_entry: Dict = {
                 'sector': sector,
                 'portfolio_weight': float(W_p),
                 'benchmark_weight': float(W_b),
@@ -582,12 +627,22 @@ class BrinsonAttributionAnalyzer:
                 'allocation_effect': float(allocation),
                 'selection_effect': float(selection),
                 'interaction_effect': float(interaction),
-                'total_effect': float(allocation + selection + interaction)
-            })
+                'total_effect': float(allocation + selection + interaction),
+            }
+
+            # Attach coverage info for benchmark sectors
+            if sector in bench_coverage:
+                cov = bench_coverage[sector]
+                sector_entry['bench_coverage'] = {
+                    'priced': cov['priced'],
+                    'total': cov['total'],
+                    'pct': round(cov['priced'] / cov['total'] * 100, 1) if cov['total'] > 0 else 0,
+                }
+
+            attribution_by_sector.append(sector_entry)
 
         attribution_by_sector.sort(key=lambda x: abs(x['total_effect']), reverse=True)
 
-        # Get top contributors (positive total_effect) and detractors (negative total_effect)
         contributors = sorted(
             [s for s in attribution_by_sector if s['total_effect'] > 0],
             key=lambda x: x['total_effect'],
@@ -599,24 +654,30 @@ class BrinsonAttributionAnalyzer:
             key=lambda x: x['total_effect']
         )[:5]
 
-        # Get ACTUAL portfolio return from ReturnsEOD (this is what's shown on dashboard)
+        # ── Actual returns for reconciliation ───────────────────────────
         actual_portfolio_return = self._get_actual_portfolio_return(view_type, view_id, start_date, end_date)
 
-        # Get ACTUAL benchmark return (use SPY as proxy for SP500)
-        actual_benchmark_return = self._get_actual_benchmark_return('SPY', start_date, end_date)
+        # Map benchmark definition code to ETF proxy code for BenchmarkReturn lookup
+        etf_proxy = self.BENCHMARK_ETF_PROXY.get(benchmark_code, 'SPY')
+        actual_benchmark_return = self._get_actual_benchmark_return(etf_proxy, start_date, end_date)
 
-        # Calculate any unattributed return (due to unclassified holdings, missing data, etc.)
         attributed_active_return = float(total_allocation + total_selection + total_interaction)
         actual_active_return = (actual_portfolio_return or 0) - (actual_benchmark_return or 0)
+
+        # ── Overall coverage summary ────────────────────────────────────
+        total_bench_constituents = len(enriched_holdings)
+        total_priced = sum(c['priced'] for c in bench_coverage.values())
+        total_in_sectors = sum(c['total'] for c in bench_coverage.values())
+        overall_coverage_pct = round(total_priced / total_in_sectors * 100, 1) if total_in_sectors > 0 else 0
 
         return {
             'allocation_effect': float(total_allocation),
             'selection_effect': float(total_selection),
             'interaction_effect': float(total_interaction),
-            'total_active_return': actual_active_return,  # Use actual active return
-            'portfolio_return': actual_portfolio_return,  # Actual portfolio return
-            'benchmark_return': actual_benchmark_return,  # Actual benchmark return
-            'attributed_active_return': attributed_active_return,  # Sum of Brinson effects
+            'total_active_return': actual_active_return,
+            'portfolio_return': actual_portfolio_return,
+            'benchmark_return': actual_benchmark_return,
+            'attributed_active_return': attributed_active_return,
             'unattributed': actual_active_return - attributed_active_return if actual_portfolio_return and actual_benchmark_return else 0,
             'top_contributors': contributors,
             'top_detractors': detractors,
@@ -624,8 +685,193 @@ class BrinsonAttributionAnalyzer:
             'start_date': start_date.isoformat(),
             'end_date': end_date.isoformat(),
             'benchmark': benchmark_code,
-            'benchmark_data_date': latest_bench_date.isoformat()
+            'benchmark_data_date': latest_bench_date.isoformat(),
+            'coverage': {
+                'benchmark_constituents': total_bench_constituents,
+                'priced_constituents': total_priced,
+                'coverage_pct': overall_coverage_pct,
+                'unclassified_constituents': unclassified_count,
+                'tiingo_fetched': tiingo_filled,
+            },
         }
+
+    def _batch_get_prices(self, security_ids: set, as_of_date: date) -> Dict[int, float]:
+        """
+        Batch-fetch the latest closing price on or before as_of_date for each security.
+        Returns {security_id: close_price}.
+        """
+        if not security_ids:
+            return {}
+
+        # Use a subquery to find the max date <= as_of_date per security
+        subq = self.db.query(
+            PricesEOD.security_id,
+            func.max(PricesEOD.date).label('max_date')
+        ).filter(
+            and_(
+                PricesEOD.security_id.in_(security_ids),
+                PricesEOD.date <= as_of_date
+            )
+        ).group_by(PricesEOD.security_id).subquery()
+
+        rows = self.db.query(PricesEOD.security_id, PricesEOD.close).join(
+            subq,
+            and_(
+                PricesEOD.security_id == subq.c.security_id,
+                PricesEOD.date == subq.c.max_date
+            )
+        ).all()
+
+        return {r.security_id: float(r.close) for r in rows}
+
+    def _ensure_benchmark_prices(
+        self,
+        enriched_holdings: List[Dict],
+        bench_symbol_to_id: Dict[str, int],
+        start_date: date,
+        end_date: date,
+        start_prices: Dict[int, float],
+        end_prices: Dict[int, float],
+    ) -> int:
+        """
+        For benchmark constituents missing local price data, fetch from Tiingo
+        and store in PricesEOD for future caching.  Updates bench_symbol_to_id,
+        start_prices, and end_prices dicts *in-place*.
+
+        Returns the number of newly-priced tickers.
+        """
+        if not settings.TIINGO_API_KEY:
+            logger.warning("No TIINGO_API_KEY configured – cannot fetch missing benchmark prices")
+            return 0
+
+        # ── 1. Identify which benchmark symbols are missing ──────────────
+        missing_symbols: set = set()
+        for holding in enriched_holdings:
+            ticker = TickerNormalizer.normalize(holding['symbol'])
+            security_id = bench_symbol_to_id.get(ticker)
+
+            if security_id is None:
+                missing_symbols.add(ticker)
+            elif security_id not in start_prices or security_id not in end_prices:
+                missing_symbols.add(ticker)
+
+        if not missing_symbols:
+            logger.info("Brinson: All benchmark constituents have local price data (100%% coverage)")
+            return 0
+
+        logger.info(f"Brinson: Fetching Tiingo prices for {len(missing_symbols)} missing benchmark tickers")
+
+        # ── 2. Initialise Tiingo client ──────────────────────────────────
+        try:
+            from tiingo import TiingoClient
+            client = TiingoClient({'api_key': settings.TIINGO_API_KEY, 'session': True})
+        except Exception as e:
+            logger.error(f"Failed to init Tiingo client for Brinson fallback: {e}")
+            return 0
+
+        # ── 3. Fetch prices in parallel ──────────────────────────────────
+        fetch_start = start_date - timedelta(days=7)  # buffer for weekends/holidays
+
+        def _fetch_one(symbol: str):
+            """Fetch prices for a single ticker from Tiingo."""
+            try:
+                tiingo_sym = symbol.replace('.', '-').upper()
+                data = client.get_ticker_price(
+                    tiingo_sym,
+                    startDate=fetch_start.strftime('%Y-%m-%d'),
+                    endDate=end_date.strftime('%Y-%m-%d'),
+                    frequency='daily',
+                )
+                if not data:
+                    return symbol, None
+
+                prices = {}
+                for row in data:
+                    d = pd.to_datetime(row['date']).date()
+                    prices[d] = float(row.get('adjClose', row.get('close', 0)))
+
+                if not prices:
+                    return symbol, None
+
+                # Find closest price on or before start_date and end_date
+                sorted_dates = sorted(prices.keys(), reverse=True)
+                sp = ep = None
+                for d in sorted_dates:
+                    if d <= end_date and ep is None:
+                        ep = prices[d]
+                    if d <= start_date and sp is None:
+                        sp = prices[d]
+                    if sp is not None and ep is not None:
+                        break
+
+                return symbol, {'start': sp, 'end': ep, 'all_prices': prices}
+            except Exception as exc:
+                logger.debug(f"Tiingo fetch failed for {symbol}: {exc}")
+                return symbol, None
+
+        results: Dict[str, Dict] = {}
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_fetch_one, sym): sym for sym in missing_symbols}
+            for future in as_completed(futures):
+                sym, data = future.result()
+                if data and data['start'] is not None and data['end'] is not None:
+                    results[sym] = data
+
+        if not results:
+            logger.warning("Brinson: Could not fetch any missing benchmark prices from Tiingo")
+            return 0
+
+        logger.info(
+            f"Brinson: Got Tiingo prices for {len(results)}/{len(missing_symbols)} missing tickers"
+        )
+
+        # ── 4. Create Security records for truly-new tickers ─────────────
+        for symbol in results:
+            if symbol in bench_symbol_to_id:
+                continue  # already has a Security row
+            existing = self.db.query(Security).filter(Security.symbol == symbol).first()
+            if existing:
+                bench_symbol_to_id[symbol] = existing.id
+            else:
+                new_sec = Security(symbol=symbol, asset_class=AssetClass.EQUITY)
+                self.db.add(new_sec)
+                self.db.flush()  # assigns id
+                bench_symbol_to_id[symbol] = new_sec.id
+
+        # ── 5. Bulk-insert prices into PricesEOD (cache for next time) ───
+        price_rows = []
+        for symbol, price_data in results.items():
+            security_id = bench_symbol_to_id[symbol]
+            for d, price in price_data['all_prices'].items():
+                price_rows.append({
+                    'security_id': security_id,
+                    'date': d,
+                    'close': price,
+                    'source': 'tiingo',
+                })
+
+        if price_rows:
+            try:
+                stmt = pg_insert(PricesEOD.__table__).values(price_rows)
+                stmt = stmt.on_conflict_do_nothing(
+                    constraint='uq_price_security_date'
+                )
+                self.db.execute(stmt)
+                self.db.commit()
+                logger.info(f"Brinson: Cached {len(price_rows)} price records in PricesEOD")
+            except Exception as e:
+                logger.warning(f"Failed to cache Tiingo prices in PricesEOD: {e}")
+                self.db.rollback()
+
+        # ── 6. Update the in-memory price dicts for this request ─────────
+        fetched_count = 0
+        for symbol, price_data in results.items():
+            security_id = bench_symbol_to_id[symbol]
+            start_prices[security_id] = price_data['start']
+            end_prices[security_id] = price_data['end']
+            fetched_count += 1
+
+        return fetched_count
 
     def _get_actual_portfolio_return(self, view_type: ViewType, view_id: int, start_date: date, end_date: date) -> Optional[float]:
         """Get actual portfolio return from ReturnsEOD table"""
@@ -634,7 +880,6 @@ class BrinsonAttributionAnalyzer:
         # FIRM views are stored as GROUP in the database
         db_vt = ViewType.GROUP if view_type == ViewType.FIRM else view_type
 
-        # Get twr_index at start (closest date on or before start_date)
         start_record = self.db.query(ReturnsEOD.twr_index).filter(
             and_(
                 ReturnsEOD.view_type == db_vt,
@@ -643,7 +888,6 @@ class BrinsonAttributionAnalyzer:
             )
         ).order_by(desc(ReturnsEOD.date)).first()
 
-        # Get twr_index at end (closest date on or before end_date)
         end_record = self.db.query(ReturnsEOD.twr_index).filter(
             and_(
                 ReturnsEOD.view_type == db_vt,
@@ -656,15 +900,14 @@ class BrinsonAttributionAnalyzer:
             return (float(end_record[0]) / float(start_record[0])) - 1
         return None
 
-    def _get_actual_benchmark_return(self, benchmark_code: str, start_date: date, end_date: date) -> Optional[float]:
-        """Get actual benchmark return from BenchmarkReturn table by compounding daily returns"""
+    def _get_actual_benchmark_return(self, etf_code: str, start_date: date, end_date: date) -> Optional[float]:
+        """Get actual benchmark return from BenchmarkReturn table by compounding daily returns.
+        etf_code should be the ETF proxy code (e.g., 'SPY'), not the benchmark definition code."""
         from app.models import BenchmarkReturn
 
-        # BenchmarkReturn stores daily returns in return_value field, with code field for benchmark
-        # Get all daily returns in the date range (exclusive of start_date, inclusive of end_date)
         daily_returns = self.db.query(BenchmarkReturn.return_value).filter(
             and_(
-                BenchmarkReturn.code == benchmark_code,
+                BenchmarkReturn.code == etf_code,
                 BenchmarkReturn.date > start_date,
                 BenchmarkReturn.date <= end_date
             )
@@ -673,7 +916,6 @@ class BrinsonAttributionAnalyzer:
         if not daily_returns:
             return None
 
-        # Compound the daily returns: (1 + r1) * (1 + r2) * ... - 1
         cumulative = 1.0
         for (ret,) in daily_returns:
             if ret is not None:
@@ -681,138 +923,90 @@ class BrinsonAttributionAnalyzer:
 
         return cumulative - 1.0
 
-    def _calculate_sector_returns(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
-        """Calculate sector returns for portfolio holdings"""
-        sector_returns = {}
-        sector_start_values = {}
-        sector_end_values = {}
+    def _calculate_sector_returns_batch(
+        self,
+        holdings: List[Dict],
+        start_prices: Dict[int, float],
+        end_prices: Dict[int, float]
+    ) -> Dict[str, float]:
+        """Calculate sector returns for portfolio holdings using pre-fetched prices."""
+        sector_start_values: Dict[str, float] = {}
+        sector_end_values: Dict[str, float] = {}
 
         for holding in holdings:
             sector = holding['sector']
             security_id = holding['security_id']
 
-            # Get prices at start and end
-            start_price = self.db.query(PricesEOD.close).filter(
-                and_(
-                    PricesEOD.security_id == security_id,
-                    PricesEOD.date <= start_date
-                )
-            ).order_by(desc(PricesEOD.date)).first()
+            sp = start_prices.get(security_id)
+            ep = end_prices.get(security_id)
 
-            end_price = self.db.query(PricesEOD.close).filter(
-                and_(
-                    PricesEOD.security_id == security_id,
-                    PricesEOD.date <= end_date
-                )
-            ).order_by(desc(PricesEOD.date)).first()
-
-            if start_price and end_price:
-                start_val = holding['shares'] * float(start_price[0])
-                end_val = holding['shares'] * float(end_price[0])
+            if sp is not None and ep is not None:
+                start_val = holding['shares'] * sp
+                end_val = holding['shares'] * ep
 
                 sector_start_values[sector] = sector_start_values.get(sector, 0) + start_val
                 sector_end_values[sector] = sector_end_values.get(sector, 0) + end_val
 
-        # Calculate returns
+        sector_returns = {}
         for sector in sector_start_values:
             if sector_start_values[sector] > 0:
                 sector_returns[sector] = (sector_end_values[sector] / sector_start_values[sector]) - 1
 
         return sector_returns
 
-    def _calculate_benchmark_sector_returns_from_dict(self, holdings: List[Dict], start_date: date, end_date: date) -> Dict[str, float]:
-        """Calculate sector returns for benchmark holdings from dict format"""
-        sector_returns = {}
-        sector_weighted_returns = {}
-        sector_weights = {}
+    def _calculate_benchmark_sector_returns_batch(
+        self,
+        holdings: List[Dict],
+        symbol_to_id: Dict[str, int],
+        start_prices: Dict[int, float],
+        end_prices: Dict[int, float]
+    ) -> Tuple[Dict[str, float], Dict[str, Dict]]:
+        """
+        Calculate sector returns for benchmark holdings using pre-fetched prices.
+        Returns (sector_returns, coverage_by_sector).
+        coverage_by_sector: {sector: {'priced': N, 'total': M}}
+        """
+        sector_weighted_returns: Dict[str, float] = {}
+        sector_weights: Dict[str, float] = {}
+        sector_total_count: Dict[str, int] = {}
+        sector_priced_count: Dict[str, int] = {}
 
         for holding in holdings:
             sector = holding['sector']
-            ticker = holding['symbol']
+            ticker = TickerNormalizer.normalize(holding['symbol'])
             weight = float(holding['weight'])
 
-            # Find security by ticker
-            security = self.db.query(Security).filter(
-                Security.symbol == TickerNormalizer.normalize(ticker)
-            ).first()
+            sector_total_count[sector] = sector_total_count.get(sector, 0) + 1
 
-            if not security:
+            security_id = symbol_to_id.get(ticker)
+            if security_id is None:
                 continue
 
-            # Get prices
-            start_price = self.db.query(PricesEOD.close).filter(
-                and_(
-                    PricesEOD.security_id == security.id,
-                    PricesEOD.date <= start_date
-                )
-            ).order_by(desc(PricesEOD.date)).first()
+            sp = start_prices.get(security_id)
+            ep = end_prices.get(security_id)
 
-            end_price = self.db.query(PricesEOD.close).filter(
-                and_(
-                    PricesEOD.security_id == security.id,
-                    PricesEOD.date <= end_date
-                )
-            ).order_by(desc(PricesEOD.date)).first()
-
-            if start_price and end_price:
-                security_return = (float(end_price[0]) / float(start_price[0])) - 1
+            if sp is not None and ep is not None and sp > 0:
+                security_return = (ep / sp) - 1
 
                 sector_weighted_returns[sector] = sector_weighted_returns.get(sector, 0) + (security_return * weight)
                 sector_weights[sector] = sector_weights.get(sector, 0) + weight
+                sector_priced_count[sector] = sector_priced_count.get(sector, 0) + 1
 
-        # Calculate sector returns (weighted average)
-        for sector in sector_weights:
-            if sector_weights[sector] > 0:
-                sector_returns[sector] = sector_weighted_returns[sector] / sector_weights[sector]
-
-        return sector_returns
-
-    def _calculate_benchmark_sector_returns(self, holdings: List, start_date: date, end_date: date) -> Dict[str, float]:
-        """Calculate sector returns for benchmark holdings"""
         sector_returns = {}
-        sector_weighted_returns = {}
-        sector_weights = {}
-
-        for holding in holdings:
-            sector = holding.sector or 'Unclassified'
-            ticker = holding.symbol
-            weight = float(holding.weight)
-
-            # Find security by ticker
-            security = self.db.query(Security).filter(
-                Security.symbol == TickerNormalizer.normalize(ticker)
-            ).first()
-
-            if not security:
-                continue
-
-            # Get prices
-            start_price = self.db.query(PricesEOD.close).filter(
-                and_(
-                    PricesEOD.security_id == security.id,
-                    PricesEOD.date <= start_date
-                )
-            ).order_by(desc(PricesEOD.date)).first()
-
-            end_price = self.db.query(PricesEOD.close).filter(
-                and_(
-                    PricesEOD.security_id == security.id,
-                    PricesEOD.date <= end_date
-                )
-            ).order_by(desc(PricesEOD.date)).first()
-
-            if start_price and end_price:
-                security_return = (float(end_price[0]) / float(start_price[0])) - 1
-
-                sector_weighted_returns[sector] = sector_weighted_returns.get(sector, 0) + (security_return * weight)
-                sector_weights[sector] = sector_weights.get(sector, 0) + weight
-
-        # Calculate sector returns (weighted average)
         for sector in sector_weights:
             if sector_weights[sector] > 0:
                 sector_returns[sector] = sector_weighted_returns[sector] / sector_weights[sector]
 
-        return sector_returns
+        # Build coverage dict
+        all_sectors = set(sector_total_count.keys())
+        coverage = {}
+        for sector in all_sectors:
+            coverage[sector] = {
+                'priced': sector_priced_count.get(sector, 0),
+                'total': sector_total_count[sector],
+            }
+
+        return sector_returns, coverage
 
 
 class AdvancedFactorAnalyzer:

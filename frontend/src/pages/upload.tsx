@@ -75,6 +75,8 @@ export default function Upload() {
   const [inceptionImporting, setInceptionImporting] = useState(false);
   const [inceptionResult, setInceptionResult] = useState<any>(null);
   const [inceptionAccounts, setInceptionAccounts] = useState<InceptionAccount[]>([]);
+  const [selectedInceptionAccounts, setSelectedInceptionAccounts] = useState<Set<number>>(new Set());
+  const [inceptionSelectAll, setInceptionSelectAll] = useState(false);
 
   // Classification Import state
   const [classFile, setClassFile] = useState<File | null>(null);
@@ -358,8 +360,52 @@ export default function Upload() {
       const result = await api.deleteAccountInception(accountId);
       alert(result.message);
       await loadInceptionData();
+      setSelectedInceptionAccounts(new Set());
+      setInceptionSelectAll(false);
     } catch (error: any) {
       alert('Delete failed: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const toggleInceptionAccount = (accountId: number) => {
+    const newSelected = new Set(selectedInceptionAccounts);
+    if (newSelected.has(accountId)) {
+      newSelected.delete(accountId);
+    } else {
+      newSelected.add(accountId);
+    }
+    setSelectedInceptionAccounts(newSelected);
+    setInceptionSelectAll(newSelected.size === inceptionAccounts.length);
+  };
+
+  const toggleInceptionSelectAll = () => {
+    if (inceptionSelectAll) {
+      setSelectedInceptionAccounts(new Set());
+    } else {
+      setSelectedInceptionAccounts(new Set(inceptionAccounts.map(a => a.account_id)));
+    }
+    setInceptionSelectAll(!inceptionSelectAll);
+  };
+
+  const handleBulkDeleteInception = async () => {
+    if (selectedInceptionAccounts.size === 0) return;
+
+    const count = selectedInceptionAccounts.size;
+    const isAll = count === inceptionAccounts.length;
+    const msg = isAll
+      ? `Delete inception data for ALL ${count} accounts? This cannot be undone.`
+      : `Delete inception data for ${count} selected account(s)? This cannot be undone.`;
+
+    if (!confirm(msg)) return;
+
+    try {
+      const result = await api.deleteInceptionBulk(Array.from(selectedInceptionAccounts));
+      alert(result.message);
+      await loadInceptionData();
+      setSelectedInceptionAccounts(new Set());
+      setInceptionSelectAll(false);
+    } catch (error: any) {
+      alert('Bulk delete failed: ' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -1255,44 +1301,73 @@ export default function Upload() {
             <div className="card">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold">Accounts with Inception Data</h2>
-                <button
-                  onClick={loadInceptionData}
-                  className="text-sm text-blue-600 hover:text-blue-800"
-                >
-                  Refresh
-                </button>
+                <div className="flex items-center gap-3">
+                  {selectedInceptionAccounts.size > 0 && (
+                    <button
+                      onClick={handleBulkDeleteInception}
+                      className="btn btn-danger btn-sm"
+                    >
+                      Delete {selectedInceptionAccounts.size === inceptionAccounts.length ? 'All' : selectedInceptionAccounts.size} Selected
+                    </button>
+                  )}
+                  <button
+                    onClick={loadInceptionData}
+                    className="text-sm text-blue-600 hover:text-blue-800"
+                  >
+                    Refresh
+                  </button>
+                </div>
               </div>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Account Number</th>
-                    <th>Display Name</th>
-                    <th>Inception Date</th>
-                    <th className="text-right">Positions</th>
-                    <th className="text-right">Total Value</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inceptionAccounts.map((acct) => (
-                    <tr key={acct.account_id}>
-                      <td className="font-mono">{acct.account_number}</td>
-                      <td>{acct.display_name}</td>
-                      <td>{acct.inception_date}</td>
-                      <td className="text-right">{acct.position_count}</td>
-                      <td className="text-right">{formatCurrency(acct.total_value)}</td>
-                      <td>
-                        <button
-                          onClick={() => handleDeleteInception(acct.account_id, acct.account_number)}
-                          className="text-red-600 hover:text-red-800 text-sm font-medium"
-                        >
-                          Delete
-                        </button>
-                      </td>
+
+              {inceptionAccounts.length > 0 && (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="w-10">
+                        <input
+                          type="checkbox"
+                          checked={inceptionSelectAll}
+                          onChange={toggleInceptionSelectAll}
+                          className="rounded border-zinc-300"
+                        />
+                      </th>
+                      <th>Account Number</th>
+                      <th>Display Name</th>
+                      <th>Inception Date</th>
+                      <th className="text-right">Positions</th>
+                      <th className="text-right">Total Value</th>
+                      <th>Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {inceptionAccounts.map((acct) => (
+                      <tr key={acct.account_id} className={selectedInceptionAccounts.has(acct.account_id) ? 'bg-blue-50/50' : ''}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedInceptionAccounts.has(acct.account_id)}
+                            onChange={() => toggleInceptionAccount(acct.account_id)}
+                            className="rounded border-zinc-300"
+                          />
+                        </td>
+                        <td className="font-mono">{acct.account_number}</td>
+                        <td>{acct.display_name}</td>
+                        <td>{acct.inception_date}</td>
+                        <td className="text-right">{acct.position_count}</td>
+                        <td className="text-right">{formatCurrency(acct.total_value)}</td>
+                        <td>
+                          <button
+                            onClick={() => handleDeleteInception(acct.account_id, acct.account_number)}
+                            className="text-red-600 hover:text-red-800 text-sm font-medium"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
 
               {inceptionAccounts.length === 0 && (
                 <div className="text-center py-8 text-gray-500">
@@ -1368,10 +1443,6 @@ export default function Upload() {
                     <div className="text-2xl font-bold text-gray-900">{classPreview.total_rows}</div>
                     <div className="text-xs text-gray-500">Total Rows</div>
                   </div>
-                  <div className="bg-green-50 rounded-lg p-3 text-center">
-                    <div className="text-2xl font-bold text-green-700">{classPreview.matched}</div>
-                    <div className="text-xs text-gray-500">Matched Securities</div>
-                  </div>
                   <div className="bg-blue-50 rounded-lg p-3 text-center">
                     <div className="text-2xl font-bold text-blue-700">{classPreview.will_create}</div>
                     <div className="text-xs text-gray-500">New Classifications</div>
@@ -1380,6 +1451,12 @@ export default function Upload() {
                     <div className="text-2xl font-bold text-amber-700">{classPreview.will_update}</div>
                     <div className="text-xs text-gray-500">Will Update</div>
                   </div>
+                  {classPreview.new_securities > 0 && (
+                    <div className="bg-purple-50 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-purple-700">{classPreview.new_securities}</div>
+                      <div className="text-xs text-gray-500">New Securities</div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Columns Detected */}
@@ -1393,15 +1470,15 @@ export default function Upload() {
                   </div>
                 )}
 
-                {/* Unmatched Symbols */}
-                {classPreview.unmatched > 0 && (
-                  <div className="mb-4 p-3 bg-amber-50 rounded-lg">
-                    <div className="text-sm font-medium text-amber-800 mb-1">
-                      {classPreview.unmatched} symbols not found in portfolio (will be skipped):
+                {/* New Securities Info */}
+                {classPreview.new_securities > 0 && (
+                  <div className="mb-4 p-3 bg-purple-50 rounded-lg">
+                    <div className="text-sm font-medium text-purple-800 mb-1">
+                      {classPreview.new_securities} tickers not yet in the database (securities will be auto-created):
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {classPreview.unmatched_symbols?.map((s: string) => (
-                        <span key={s} className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
+                      {classPreview.new_security_symbols?.map((s: string) => (
+                        <span key={s} className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
                           {s}
                         </span>
                       ))}
@@ -1432,11 +1509,13 @@ export default function Upload() {
                             <td>{row.country || '-'}</td>
                             <td>
                               <span className={`text-xs px-2 py-0.5 rounded ${
-                                row.status === 'new' ? 'bg-green-100 text-green-700' :
+                                row.status?.startsWith('new') ? 'bg-green-100 text-green-700' :
                                 row.status === 'update' ? 'bg-blue-100 text-blue-700' :
                                 'bg-gray-100 text-gray-500'
                               }`}>
-                                {row.status === 'new' ? 'New' : row.status === 'update' ? 'Update' : 'Not in portfolio'}
+                                {row.status === 'new' ? 'New' :
+                                 row.status === 'new (security will be created)' ? 'New + Security' :
+                                 row.status === 'update' ? 'Update' : row.status}
                               </span>
                             </td>
                             <td className="text-gray-500 text-sm">{row.existing_source || '-'}</td>
@@ -1458,13 +1537,13 @@ export default function Upload() {
                 )}
 
                 {/* Import Button */}
-                {classPreview.matched > 0 && (
+                {classPreview.total_rows > 0 && (
                   <button
                     onClick={handleClassImport}
                     disabled={classImporting}
                     className="btn btn-primary"
                   >
-                    {classImporting ? 'Importing...' : `Import ${classPreview.matched} Classifications`}
+                    {classImporting ? 'Importing...' : `Import ${classPreview.total_rows} Classifications`}
                   </button>
                 )}
               </div>
@@ -1480,8 +1559,13 @@ export default function Upload() {
                 {classResult.success && (
                   <div className="mt-2 text-sm text-gray-600">
                     <span className="font-medium">{classResult.created}</span> new,{' '}
-                    <span className="font-medium">{classResult.updated}</span> updated,{' '}
-                    <span className="font-medium">{classResult.unmatched}</span> unmatched
+                    <span className="font-medium">{classResult.updated}</span> updated
+                    {classResult.securities_created > 0 && (
+                      <>, <span className="font-medium">{classResult.securities_created}</span> securities created</>
+                    )}
+                    {classResult.sp500_sectors_updated > 0 && (
+                      <>, <span className="font-medium">{classResult.sp500_sectors_updated}</span> S&P 500 sectors updated</>
+                    )}
                   </div>
                 )}
               </div>

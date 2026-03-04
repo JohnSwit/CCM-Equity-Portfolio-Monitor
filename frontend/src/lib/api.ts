@@ -276,6 +276,11 @@ class APIClient {
     return response.data;
   }
 
+  async deleteAllTransactions() {
+    const response = await this.client.delete('/transactions/all');
+    return response.data;
+  }
+
   // Portfolio Statistics
   async getContributionToReturns(viewType: string, viewId: number, startDate?: string, endDate?: string, topN: number = 20) {
     const response = await this.client.get('/portfolio-stats/contribution-to-returns', {
@@ -902,6 +907,13 @@ class APIClient {
 
   async deleteAccountInception(accountId: number) {
     const response = await this.client.delete(`/imports/inception/${accountId}`);
+    return response.data;
+  }
+
+  async deleteInceptionBulk(accountIds: number[]) {
+    const response = await this.client.delete('/imports/inception/bulk', {
+      data: { account_ids: accountIds },
+    });
     return response.data;
   }
 

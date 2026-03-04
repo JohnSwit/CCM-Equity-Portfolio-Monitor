@@ -124,8 +124,28 @@ class TaxService:
                 open_lots.append(lot)
                 lots_created += 1
 
-            elif txn.transaction_type in [TransactionType.SELL, TransactionType.TRANSFER_OUT]:
-                # Match against open lots using FIFO
+            elif txn.transaction_type == TransactionType.TRANSFER_OUT:
+                # Transfers are not taxable events — just remove shares from lots
+                # without creating realized gain/loss records (cost basis carries over)
+                shares_to_transfer = abs(txn.units) if txn.units else 0
+
+                while shares_to_transfer > 0 and open_lots:
+                    lot = open_lots[0]
+                    shares_from_lot = min(shares_to_transfer, lot.remaining_shares)
+
+                    # Update lot (reduce shares, no gain/loss)
+                    lot.remaining_shares -= shares_from_lot
+                    lot.remaining_cost_basis = lot.remaining_shares * lot.cost_basis_per_share
+
+                    if lot.remaining_shares <= 0.0001:  # Float comparison tolerance
+                        lot.is_closed = True
+                        lot.closed_date = txn.trade_date
+                        open_lots.pop(0)
+
+                    shares_to_transfer -= shares_from_lot
+
+            elif txn.transaction_type == TransactionType.SELL:
+                # Actual sale — match against open lots using FIFO and record realized gain/loss
                 shares_to_sell = abs(txn.units) if txn.units else 0
                 sale_price = txn.price if txn.price else 0
 
@@ -273,12 +293,12 @@ class TaxService:
         account_id: Optional[int] = None,
         tax_year: Optional[int] = None
     ) -> Tuple[List[Dict], Dict]:
-        """Get realized gains with summary. Only returns gains from imported tax lots."""
+        """Get realized gains with summary. Returns gains from transaction-built tax lots (FIFO matching)."""
         query = self.db.query(RealizedGain).join(Security).join(Account)
 
-        # Only include realized gains from imported tax lots
+        # Only include realized gains from transaction-built tax lots (not imported ones)
         query = query.join(TaxLot, RealizedGain.tax_lot_id == TaxLot.id)
-        query = query.filter(TaxLot.import_log_id.isnot(None))
+        query = query.filter(TaxLot.import_log_id.is_(None))
 
         if account_id:
             query = query.filter(RealizedGain.account_id == account_id)

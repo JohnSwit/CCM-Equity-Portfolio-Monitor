@@ -19,10 +19,10 @@ const CHART_COLORS = [
   '#d946ef', '#64748b', '#78716c', '#0891b2', '#7c3aed'
 ];
 
-// Holdings chart view modes
-type HoldingsViewMode = 'marketValue' | 'cost' | 'gain' | 'loss';
 // Sector chart view modes
 type SectorViewMode = 'sector' | 'industry' | 'country' | 'region' | 'market' | 'assetType';
+
+const TOP_N = 20; // Max slices before grouping as "Other"
 
 // Custom Select styles for react-select
 const selectStyles = {
@@ -102,7 +102,6 @@ export default function Dashboard() {
   const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
 
   // Donut chart states
-  const [holdingsViewMode, setHoldingsViewMode] = useState<HoldingsViewMode>('marketValue');
   const [sectorViewMode, setSectorViewMode] = useState<SectorViewMode>('sector');
   const [sectorData, setSectorData] = useState<any>(null);
 
@@ -247,40 +246,60 @@ export default function Dashboard() {
           return normalizedPoint;
         });
     } else {
-      // Simple mode
-      const firstDate = returns[0].date;
-      const lastDate = returns[returns.length - 1].date;
-      const portfolioStart = returns[0].index_value;
-      const portfolioEnd = returns[returns.length - 1].index_value;
+      // Simple mode — daily cumulative simple returns (V_t / V_0)
+      // Uses the same daily index values as TWR but shows growth-of-$1 from each series' start
+      const dataByDate: any = {};
+      returns.forEach((r: any) => {
+        dataByDate[r.date] = { date: r.date, Portfolio: r.index_value };
+      });
 
-      const getSimpleReturn = (code: string) => {
-        const benchData = benchmarkReturns[code];
-        if (!benchData || benchData.length === 0) return { start: null, end: null };
-        const dataInRange = benchData.filter((r: any) => r.date >= firstDate && r.date <= lastDate);
-        if (dataInRange.length === 0) return { start: null, end: null };
-        return { start: dataInRange[0].index_value, end: dataInRange[dataInRange.length - 1].index_value };
-      };
+      ['SPY', 'QQQ', 'INDU'].forEach((code) => {
+        if (benchmarkReturns[code]) {
+          benchmarkReturns[code].forEach((r: any) => {
+            if (!dataByDate[r.date]) dataByDate[r.date] = { date: r.date };
+            dataByDate[r.date][code] = r.index_value;
+          });
+        }
+      });
 
-      const spy = getSimpleReturn('SPY');
-      const qqq = getSimpleReturn('QQQ');
-      const indu = getSimpleReturn('INDU');
+      const merged = Object.values(dataByDate).sort((a: any, b: any) =>
+        a.date.localeCompare(b.date)
+      );
 
-      return [
-        {
-          date: firstDate,
-          Portfolio: 1.0,
-          ...(spy.start && { SPY: 1.0 }),
-          ...(qqq.start && { QQQ: 1.0 }),
-          ...(indu.start && { INDU: 1.0 }),
-        },
-        {
-          date: lastDate,
-          Portfolio: portfolioEnd / portfolioStart,
-          ...(spy.start && spy.end && { SPY: spy.end / spy.start }),
-          ...(qqq.start && qqq.end && { QQQ: qqq.end / qqq.start }),
-          ...(indu.start && indu.end && { INDU: indu.end / indu.start }),
-        },
-      ];
+      if (merged.length === 0) return [];
+
+      const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+      const availableSeries = allSeries.filter(s =>
+        merged.some((point: any) => point[s] !== undefined && point[s] !== null)
+      );
+
+      const firstPortfolioDate = merged.find((point: any) =>
+        point.Portfolio !== undefined && point.Portfolio !== null
+      ) as { date: string; [key: string]: any } | undefined;
+
+      if (!firstPortfolioDate) return [];
+
+      const baselineValues: any = {};
+      availableSeries.forEach(s => {
+        const firstWithSeries = merged.find((point: any) =>
+          point.date >= firstPortfolioDate.date &&
+          point[s] !== undefined &&
+          point[s] !== null
+        ) as { [key: string]: any } | undefined;
+        baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
+      });
+
+      return merged
+        .filter((point: any) => point.date >= firstPortfolioDate.date)
+        .map((point: any) => {
+          const normalizedPoint: any = { date: point.date };
+          availableSeries.forEach(s => {
+            if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
+              normalizedPoint[s] = point[s] / baselineValues[s];
+            }
+          });
+          return normalizedPoint;
+        });
     }
   }, [returns, benchmarkReturns, returnMode]);
 
@@ -290,74 +309,74 @@ export default function Dashboard() {
     group: v.view_type,
   })), [views]);
 
-  // Process holdings data for pie chart
+  // Process holdings data for pie chart — top 20 by market value, rest grouped as "Other"
   const holdingsPieData = useMemo(() => {
     if (!holdings?.holdings) return [];
 
-    const data = holdings.holdings.map((h: any, idx: number) => {
-      const cost = h.cost_basis || h.market_value;
-      const gain = Math.max(0, h.market_value - cost);
-      const loss = Math.max(0, cost - h.market_value);
+    const sorted = [...holdings.holdings]
+      .filter((h: any) => h.market_value > 0)
+      .sort((a: any, b: any) => b.market_value - a.market_value);
 
-      return {
-        name: h.symbol,
-        marketValue: h.market_value,
-        cost: cost,
-        gain: gain,
-        loss: loss,
-        weight: h.weight,
-        color: CHART_COLORS[idx % CHART_COLORS.length],
-      };
-    });
+    const top = sorted.slice(0, TOP_N);
+    const rest = sorted.slice(TOP_N);
 
-    switch (holdingsViewMode) {
-      case 'cost':
-        return data.filter((d: any) => d.cost > 0).map((d: any) => ({ ...d, value: d.cost }));
-      case 'gain':
-        return data.filter((d: any) => d.gain > 0).map((d: any) => ({ ...d, value: d.gain }));
-      case 'loss':
-        return data.filter((d: any) => d.loss > 0).map((d: any) => ({ ...d, value: d.loss }));
-      default:
-        return data.filter((d: any) => d.marketValue > 0).map((d: any) => ({ ...d, value: d.marketValue }));
+    const data = top.map((h: any, idx: number) => ({
+      name: h.symbol,
+      value: h.market_value,
+      weight: h.weight,
+      color: CHART_COLORS[idx % CHART_COLORS.length],
+    }));
+
+    if (rest.length > 0) {
+      const otherValue = rest.reduce((sum: number, h: any) => sum + h.market_value, 0);
+      const otherWeight = rest.reduce((sum: number, h: any) => sum + (h.weight || 0), 0);
+      data.push({
+        name: `Other (${rest.length})`,
+        value: otherValue,
+        weight: otherWeight,
+        color: '#94a3b8',
+      });
     }
-  }, [holdings, holdingsViewMode]);
 
-  // Process sector data for pie chart
+    return data;
+  }, [holdings]);
+
+  // Process sector data for pie chart — top N for industry, all for sector/country
   const sectorPieData = useMemo(() => {
     if (!sectorData?.sectors) return [];
 
-    return sectorData.sectors.map((s: any, idx: number) => ({
+    const sorted = [...sectorData.sectors].sort((a: any, b: any) => b.weight - a.weight);
+    const limit = sectorViewMode === 'industry' ? TOP_N : sorted.length;
+
+    const top = sorted.slice(0, limit);
+    const rest = sorted.slice(limit);
+
+    const data = top.map((s: any, idx: number) => ({
       name: s.sector,
       value: s.weight,
       marketValue: s.market_value,
       count: s.holdings_count,
       color: CHART_COLORS[idx % CHART_COLORS.length],
     }));
-  }, [sectorData]);
 
-  // Custom label for pie chart
-  const renderCustomLabel = ({ name, value, cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
-    if (percent < 0.03) return null;
-    const RADIAN = Math.PI / 180;
-    const radius = outerRadius * 1.2;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-    const pct = (percent * 100).toFixed(1);
+    if (rest.length > 0) {
+      const otherWeight = rest.reduce((sum: number, s: any) => sum + s.weight, 0);
+      const otherMV = rest.reduce((sum: number, s: any) => sum + (s.market_value || 0), 0);
+      const otherCount = rest.reduce((sum: number, s: any) => sum + (s.holdings_count || 0), 0);
+      data.push({
+        name: `Other (${rest.length})`,
+        value: otherWeight,
+        marketValue: otherMV,
+        count: otherCount,
+        color: '#94a3b8',
+      });
+    }
 
-    return (
-      <text
-        x={x}
-        y={y}
-        fill="#52525b"
-        textAnchor={x > cx ? 'start' : 'end'}
-        dominantBaseline="central"
-        fontSize={11}
-        fontWeight={500}
-      >
-        {`${name}: ${pct}%`}
-      </text>
-    );
-  };
+    return data;
+  }, [sectorData, sectorViewMode]);
+
+  // Track which donut slice is hovered for potential highlight
+  const [hoveredSliceIdx, setHoveredSliceIdx] = useState<number | null>(null);
 
   return (
     <Layout>
@@ -431,122 +450,150 @@ export default function Dashboard() {
 
             {/* Allocation Charts */}
             {(holdingsPieData.length > 0 || sectorPieData.length > 0) && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" style={{ alignItems: 'stretch' }}>
                 {/* Holdings Breakdown */}
-                <div className="card">
-                  <div className="card-header">
+                <div className="card flex flex-col" style={{ minHeight: 320 }}>
+                  <div className="card-header flex items-center justify-between">
                     <h3 className="card-title">Holdings Breakdown</h3>
-                    <button
-                      onClick={() => loadViewData(selectedView)}
-                      className="btn btn-ghost btn-sm"
-                      title="Refresh"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                    </button>
-                  </div>
-                  <div className="pill-tabs mb-4">
-                    {[
-                      { key: 'marketValue', label: 'Value' },
-                      { key: 'cost', label: 'Cost' },
-                      { key: 'gain', label: 'Gains' },
-                      { key: 'loss', label: 'Losses' },
-                    ].map((item) => (
-                      <button
-                        key={item.key}
-                        onClick={() => setHoldingsViewMode(item.key as HoldingsViewMode)}
-                        className={`pill-tab ${holdingsViewMode === item.key ? 'pill-tab-active' : ''}`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                    <span className="text-xs text-zinc-400">Top {Math.min(TOP_N, holdingsPieData.length)} by value</span>
                   </div>
 
                   {holdingsPieData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={280}>
-                      <PieChart>
-                        <Pie
-                          data={holdingsPieData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={55}
-                          outerRadius={90}
-                          paddingAngle={2}
-                          dataKey="value"
-                          label={renderCustomLabel}
-                          labelLine={{ stroke: '#d4d4d8', strokeWidth: 1 }}
-                        >
-                          {holdingsPieData.map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          formatter={(value: any, name: any, props: any) => [
-                            formatCurrency(value),
-                            props.payload.name
-                          ]}
-                          contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7' }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <div className="flex items-center gap-6 flex-1 py-2">
+                      {/* Donut chart */}
+                      <div className="flex-shrink-0" style={{ width: 170, height: 170 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={holdingsPieData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={42}
+                              outerRadius={78}
+                              paddingAngle={1}
+                              dataKey="value"
+                              stroke="none"
+                              onMouseEnter={(_, idx) => setHoveredSliceIdx(idx)}
+                              onMouseLeave={() => setHoveredSliceIdx(null)}
+                            >
+                              {holdingsPieData.map((entry: any, index: number) => (
+                                <Cell key={`hc-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              formatter={(value: any, _: any, props: any) => [
+                                formatCurrency(value),
+                                props.payload.name
+                              ]}
+                              contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7', fontSize: '12px' }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      {/* Legend list */}
+                      <div className="flex-1 min-w-0 max-h-[220px] overflow-y-auto pr-1">
+                        <table className="w-full text-xs">
+                          <tbody>
+                            {holdingsPieData.map((entry: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-zinc-50">
+                                <td className="py-0.5 pr-1.5">
+                                  <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: entry.color }} />
+                                </td>
+                                <td className="py-0.5 pr-2 font-medium text-zinc-800 whitespace-nowrap">{entry.name}</td>
+                                <td className="py-0.5 text-right tabular-nums text-zinc-500 whitespace-nowrap">
+                                  {(entry.weight * 100).toFixed(1)}%
+                                </td>
+                                <td className="py-0.5 pl-2 text-right tabular-nums text-zinc-600 whitespace-nowrap">
+                                  {formatCurrency(entry.value)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="h-72 flex items-center justify-center text-zinc-400">
+                    <div className="flex-1 flex items-center justify-center text-zinc-400">
                       No holdings data available
                     </div>
                   )}
                 </div>
 
-                {/* Sector Breakdown */}
-                <div className="card">
-                  <div className="card-header">
-                    <h3 className="card-title">Sector Allocation</h3>
-                  </div>
-                  <div className="pill-tabs mb-4 flex-wrap">
-                    {[
-                      { key: 'sector', label: 'Sector' },
-                      { key: 'industry', label: 'Industry' },
-                      { key: 'country', label: 'Country' },
-                    ].map((item) => (
-                      <button
-                        key={item.key}
-                        onClick={() => setSectorViewMode(item.key as SectorViewMode)}
-                        className={`pill-tab ${sectorViewMode === item.key ? 'pill-tab-active' : ''}`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
+                {/* Sector / Industry / Country Breakdown */}
+                <div className="card flex flex-col" style={{ minHeight: 320 }}>
+                  <div className="card-header flex items-center justify-between">
+                    <h3 className="card-title">Allocation</h3>
+                    <div className="pill-tabs flex-wrap">
+                      {[
+                        { key: 'sector', label: 'Sector' },
+                        { key: 'industry', label: 'Industry' },
+                        { key: 'country', label: 'Country' },
+                      ].map((item) => (
+                        <button
+                          key={item.key}
+                          onClick={() => setSectorViewMode(item.key as SectorViewMode)}
+                          className={`pill-tab ${sectorViewMode === item.key ? 'pill-tab-active' : ''}`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {sectorPieData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={280}>
-                      <PieChart>
-                        <Pie
-                          data={sectorPieData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={55}
-                          outerRadius={90}
-                          paddingAngle={2}
-                          dataKey="value"
-                          label={renderCustomLabel}
-                          labelLine={{ stroke: '#d4d4d8', strokeWidth: 1 }}
-                        >
-                          {sectorPieData.map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          formatter={(value: any, name: any, props: any) => [
-                            formatPercent(value),
-                            props.payload.name
-                          ]}
-                          contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7' }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <div className="flex items-center gap-6 flex-1 py-2">
+                      {/* Donut chart */}
+                      <div className="flex-shrink-0" style={{ width: 170, height: 170 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={sectorPieData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={42}
+                              outerRadius={78}
+                              paddingAngle={1}
+                              dataKey="value"
+                              stroke="none"
+                            >
+                              {sectorPieData.map((entry: any, index: number) => (
+                                <Cell key={`sc-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              formatter={(value: any, _: any, props: any) => [
+                                `${(value * 100).toFixed(1)}%`,
+                                props.payload.name
+                              ]}
+                              contentStyle={{ borderRadius: '8px', border: '1px solid #e4e4e7', fontSize: '12px' }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      {/* Legend list */}
+                      <div className="flex-1 min-w-0 max-h-[220px] overflow-y-auto pr-1">
+                        <table className="w-full text-xs">
+                          <tbody>
+                            {sectorPieData.map((entry: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-zinc-50">
+                                <td className="py-0.5 pr-1.5">
+                                  <span className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: entry.color }} />
+                                </td>
+                                <td className="py-0.5 pr-2 font-medium text-zinc-800 truncate max-w-[120px]" title={entry.name}>{entry.name}</td>
+                                <td className="py-0.5 text-right tabular-nums text-zinc-500 whitespace-nowrap">
+                                  {(entry.value * 100).toFixed(1)}%
+                                </td>
+                                <td className="py-0.5 pl-2 text-right tabular-nums text-zinc-600 whitespace-nowrap">
+                                  {formatCurrency(entry.marketValue)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="h-72 flex items-center justify-center text-zinc-400">
+                    <div className="flex-1 flex items-center justify-center text-zinc-400">
                       No sector data available
                     </div>
                   )}

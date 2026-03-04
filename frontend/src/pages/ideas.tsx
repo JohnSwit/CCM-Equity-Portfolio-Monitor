@@ -96,6 +96,7 @@ export default function IdeasPage() {
   const [newPrimaryAnalyst, setNewPrimaryAnalyst] = useState<number | null>(null);
   const [newSecondaryAnalyst, setNewSecondaryAnalyst] = useState<number | null>(null);
   const [newModelPath, setNewModelPath] = useState('');
+  const [newModelShareLink, setNewModelShareLink] = useState('');
   const [adding, setAdding] = useState(false);
 
   // Edit modal
@@ -166,6 +167,7 @@ export default function IdeasPage() {
         primary_analyst_id: newPrimaryAnalyst || undefined,
         secondary_analyst_id: newSecondaryAnalyst || undefined,
         model_path: newModelPath || undefined,
+        model_share_link: newModelShareLink || undefined,
       });
 
       // Reset form
@@ -173,6 +175,7 @@ export default function IdeasPage() {
       setNewPrimaryAnalyst(null);
       setNewSecondaryAnalyst(null);
       setNewModelPath('');
+      setNewModelShareLink('');
 
       // Reload data
       await loadData();
@@ -425,14 +428,15 @@ export default function IdeasPage() {
               </select>
             </div>
             <div>
-              <label className="label">Model Path</label>
+              <label className="label">Model Link (OneDrive)</label>
               <input
                 type="text"
-                value={newModelPath}
-                onChange={(e) => setNewModelPath(e.target.value)}
-                placeholder="/models/TICKER/Model.xlsx"
+                value={newModelShareLink}
+                onChange={(e) => setNewModelShareLink(e.target.value)}
+                placeholder="Paste OneDrive share link..."
                 className="input"
               />
+              <p className="text-xs text-zinc-400 mt-1">Right-click file in OneDrive &gt; Share &gt; Copy link</p>
             </div>
             <div className="flex items-end">
               <button
@@ -544,7 +548,7 @@ export default function IdeasPage() {
                           >
                             Edit
                           </button>
-                          {idea.model_path && (
+                          {(idea.model_path || idea.model_share_link) && (
                             <button
                               onClick={(e) => { e.stopPropagation(); handleRefreshModel(idea.id); }}
                               disabled={refreshing === idea.id}

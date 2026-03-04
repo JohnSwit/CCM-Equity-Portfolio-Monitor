@@ -183,8 +183,9 @@ class ReturnsEngine:
         # Compute portfolio value each day
         portfolio_values = (pos_wide * price_wide).sum(axis=1)
 
-        # Get daily fees
+        # Get daily fees and dividend income
         fees_df = self._get_daily_fees(account_id, start_date, end_date)
+        dividends_df = self._get_daily_dividends(account_id, start_date, end_date)
 
         # Compute returns using start-of-day holdings
         returns_data = []
@@ -207,8 +208,11 @@ class ReturnsEngine:
 
             V_t_no_trade = (holdings_t_minus_1 * prices_t).sum()
 
-            # Gross return (price return only, no trade impact)
-            r_gross = (V_t_no_trade / V_t_minus_1) - 1 if V_t_minus_1 > 0 else 0
+            # Dividend income for total return (cash dividends are income on the portfolio)
+            div_t = dividends_df.get(date_t, 0.0)
+
+            # Total return = price return + income return
+            r_gross = ((V_t_no_trade + div_t) / V_t_minus_1) - 1 if V_t_minus_1 > 0 else 0
 
             # Fee drag
             fee_t = fees_df.get(date_t, 0.0)
@@ -279,6 +283,41 @@ class ReturnsEngine:
         fees = query.group_by(Transaction.trade_date).all()
 
         return {f[0]: f[1] for f in fees}
+
+    def _get_daily_dividends(
+        self,
+        account_id: int,
+        start_date: Optional[date],
+        end_date: Optional[date]
+    ) -> Dict[date, float]:
+        """
+        Get daily dividend income totals.
+        Includes both cash dividends (DIVIDEND) and reinvested dividends (DIVIDEND_REINVEST)
+        since both represent income earned on the portfolio.
+        Uses market_value as the dividend cash amount.
+        """
+        dividend_types = [TransactionType.DIVIDEND, TransactionType.DIVIDEND_REINVEST]
+
+        query = self.db.query(
+            Transaction.trade_date,
+            func.sum(
+                func.coalesce(func.abs(Transaction.market_value), 0.0)
+            ).label('total_dividend')
+        ).filter(
+            and_(
+                Transaction.account_id == account_id,
+                Transaction.transaction_type.in_(dividend_types)
+            )
+        )
+
+        if start_date:
+            query = query.filter(Transaction.trade_date >= start_date)
+        if end_date:
+            query = query.filter(Transaction.trade_date <= end_date)
+
+        dividends = query.group_by(Transaction.trade_date).all()
+
+        return {d[0]: d[1] for d in dividends if d[1] and d[1] > 0}
 
     def get_returns_series(
         self,

@@ -131,6 +131,25 @@ export default function TransactionsPage() {
     }
   };
 
+  const handleDeleteAllTransactions = async () => {
+    if (!confirm(`DELETE ALL ${totalCount.toLocaleString()} TRANSACTIONS across ALL accounts?\n\nThis cannot be undone. All analytics will be cleared.`)) {
+      return;
+    }
+    // Double confirmation for safety
+    if (!confirm(`Are you absolutely sure? This will permanently delete every transaction in the system.`)) {
+      return;
+    }
+
+    try {
+      const result = await api.deleteAllTransactions();
+      alert(result.message);
+      await loadTransactions();
+      await loadAccounts();
+    } catch (error: any) {
+      alert('Delete all failed: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
   const toggleTransaction = (id: number) => {
     const newSelected = new Set(selectedTransactions);
     if (newSelected.has(id)) {
@@ -236,6 +255,14 @@ export default function TransactionsPage() {
                   className="btn btn-danger"
                 >
                   Delete All for {selectedAccount.account_number}
+                </button>
+              )}
+              {totalCount > 0 && (
+                <button
+                  onClick={handleDeleteAllTransactions}
+                  className="btn btn-danger"
+                >
+                  Delete All Transactions
                 </button>
               )}
             </div>

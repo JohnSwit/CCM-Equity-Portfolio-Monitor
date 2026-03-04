@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+from pydantic import BaseModel
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models import User, ImportLog, Transaction, AccountInception, Account, Security
@@ -123,10 +124,15 @@ async def delete_import(
 
     file_name = import_log.file_name
 
+    # Nullify ALL FK references before deleting transactions
+    from app.api.transactions import _nullify_transaction_references
+    txn_ids = [t.id for t in db.query(Transaction.id).filter(Transaction.import_log_id == import_id).all()]
+    _nullify_transaction_references(db, txn_ids)
+
     # Delete all transactions from this import
     db.query(Transaction).filter(
         Transaction.import_log_id == import_id
-    ).delete()
+    ).delete(synchronize_session=False)
 
     # Delete the import log
     db.delete(import_log)
@@ -137,12 +143,17 @@ async def delete_import(
     for account_id in affected_account_ids:
         clear_analytics_for_account(db, account_id)
 
+    # Clean up accounts that now have no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    accounts_deleted = cleanup_orphaned_accounts(db)
+
     return {
         'deleted': True,
         'import_id': import_id,
         'transactions_deleted': txn_count,
         'accounts_affected': len(affected_account_ids),
-        'message': f'Deleted import {file_name} and {txn_count} transactions. Analytics cleared for {len(affected_account_ids)} accounts.'
+        'accounts_deleted': accounts_deleted,
+        'message': f'Deleted import {file_name} and {txn_count} transactions. Analytics cleared for {len(affected_account_ids)} accounts. {accounts_deleted} orphaned accounts removed.'
     }
 
 
@@ -278,6 +289,62 @@ def get_account_inception(
     }
 
 
+class BulkInceptionDeleteRequest(BaseModel):
+    account_ids: List[int]
+
+
+@router.delete("/inception/bulk")
+async def delete_inception_bulk(
+    request: BulkInceptionDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete inception data for multiple accounts at once.
+    Pass account_ids=[] (empty list) to delete ALL inception data.
+    """
+    from app.workers.jobs import clear_analytics_for_account
+
+    account_ids = request.account_ids
+
+    if len(account_ids) == 0:
+        # Empty list = delete ALL inception data
+        inceptions = db.query(AccountInception).all()
+    else:
+        inceptions = db.query(AccountInception).filter(
+            AccountInception.account_id.in_(account_ids)
+        ).all()
+
+    if not inceptions:
+        raise HTTPException(status_code=404, detail="No inception data found for the specified accounts")
+
+    deleted_accounts = []
+    for inception in inceptions:
+        account_number = inception.account.account_number
+        acc_id = inception.account_id
+        db.delete(inception)
+        deleted_accounts.append({'account_id': acc_id, 'account_number': account_number})
+
+    db.commit()
+
+    # Clear analytics for all affected accounts
+    for item in deleted_accounts:
+        clear_analytics_for_account(db, item['account_id'])
+
+    # Clean up accounts that now have no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    orphaned_deleted = cleanup_orphaned_accounts(db)
+
+    return {
+        'deleted': True,
+        'accounts_deleted': len(deleted_accounts),
+        'deleted_accounts': deleted_accounts,
+        'orphaned_accounts_deleted': orphaned_deleted,
+        'message': f'Deleted inception data for {len(deleted_accounts)} accounts. '
+                   f'{orphaned_deleted} orphaned accounts removed. Analytics cleared.'
+    }
+
+
 @router.delete("/inception/{account_id}")
 async def delete_account_inception(
     account_id: int,
@@ -307,13 +374,19 @@ async def delete_account_inception(
     from app.workers.jobs import clear_analytics_for_account
     clear_analytics_for_account(db, account_id)
 
+    # Clean up account if it now has no data
+    from app.api.transactions import cleanup_orphaned_accounts
+    orphaned_deleted = cleanup_orphaned_accounts(db)
+
     return {
         'deleted': True,
         'account_id': account_id,
         'account_number': account_number,
         'inception_date': inception_date.isoformat(),
         'positions_deleted': position_count,
+        'account_removed': orphaned_deleted > 0,
         'message': f'Deleted inception data for account {account_number}. Analytics cleared.'
+                   + (f' Account removed (no remaining data).' if orphaned_deleted > 0 else '')
     }
 
 
@@ -434,25 +507,30 @@ async def import_classifications(
     ).all()
     security_map = {s.symbol.upper(): s for s in existing_securities}
 
-    matched = [r for r in rows if r['symbol'] in security_map]
-    unmatched = [r for r in rows if r['symbol'] not in security_map]
+    # Symbols not yet in the securities table — will be auto-created on commit
+    new_security_symbols = [r['symbol'] for r in rows if r['symbol'] not in security_map]
+    new_security_symbols_unique = list(dict.fromkeys(new_security_symbols))  # dedupe, preserve order
 
-    # Check which matched securities already have classifications
-    matched_ids = [security_map[r['symbol']].id for r in matched]
+    # For preview/counting, treat ALL rows as "matched" (will be after auto-create)
+    matched = rows  # all rows will be classified
+    unmatched = []  # nothing is skipped
+
+    # Check which existing securities already have classifications
+    existing_ids = [security_map[r['symbol']].id for r in rows if r['symbol'] in security_map]
     existing_classifications = {
         c.security_id: c.source
         for c in db.query(SectorClassification).filter(
-            SectorClassification.security_id.in_(matched_ids)
+            SectorClassification.security_id.in_(existing_ids)
         ).all()
-    } if matched_ids else {}
+    } if existing_ids else {}
 
     will_create = sum(
-        1 for r in matched
-        if security_map[r['symbol']].id not in existing_classifications
+        1 for r in rows
+        if r['symbol'] not in security_map or security_map[r['symbol']].id not in existing_classifications
     )
     will_update = sum(
-        1 for r in matched
-        if security_map[r['symbol']].id in existing_classifications
+        1 for r in rows
+        if r['symbol'] in security_map and security_map[r['symbol']].id in existing_classifications
     )
 
     if mode == "preview":
@@ -460,8 +538,12 @@ async def import_classifications(
         preview_rows = []
         for r in rows[:50]:  # Show first 50
             sec = security_map.get(r['symbol'])
-            status = "new" if sec and sec.id not in existing_classifications else \
-                     "update" if sec else "unmatched"
+            if sec is None:
+                status = "new (security will be created)"
+            elif sec.id not in existing_classifications:
+                status = "new"
+            else:
+                status = "update"
             existing_source = existing_classifications.get(sec.id) if sec else None
             preview_rows.append({
                 'symbol': r['symbol'],
@@ -479,7 +561,8 @@ async def import_classifications(
             'unmatched': len(unmatched),
             'will_create': will_create,
             'will_update': will_update,
-            'unmatched_symbols': [r['symbol'] for r in unmatched[:20]],
+            'new_securities': len(new_security_symbols_unique),
+            'new_security_symbols': new_security_symbols_unique[:30],
             'preview_rows': preview_rows,
             'errors': errors[:20],
             'columns_detected': {
@@ -493,10 +576,30 @@ async def import_classifications(
         }
 
     else:  # commit
+        from app.models.sector_models import BenchmarkConstituent
+
+        # Auto-create Security entries for tickers not yet in the DB
+        securities_created = 0
+        for symbol in new_security_symbols_unique:
+            # Check again in case of race condition or case mismatch
+            existing_sec = db.query(Security).filter(Security.symbol == symbol).first()
+            if existing_sec:
+                security_map[symbol] = existing_sec
+            else:
+                new_sec = Security(
+                    symbol=symbol,
+                    asset_name=symbol,
+                    is_option=False,
+                )
+                db.add(new_sec)
+                db.flush()  # get the id
+                security_map[symbol] = new_sec
+                securities_created += 1
+
         created = 0
         updated = 0
 
-        for r in matched:
+        for r in rows:
             sec = security_map[r['symbol']]
             existing = db.query(SectorClassification).filter(
                 SectorClassification.security_id == sec.id
@@ -535,6 +638,19 @@ async def import_classifications(
                 db.add(new_class)
                 created += 1
 
+        # Also update S&P 500 benchmark constituent sectors for classified tickers
+        sp500_updated = 0
+        classified_symbols = {r['symbol']: r['sector'] for r in rows}
+        sp500_constituents = db.query(BenchmarkConstituent).filter(
+            BenchmarkConstituent.benchmark_code == "SP500",
+            BenchmarkConstituent.symbol.in_(list(classified_symbols.keys())),
+        ).all()
+        for constituent in sp500_constituents:
+            new_sector = classified_symbols.get(constituent.symbol)
+            if new_sector and constituent.sector != new_sector:
+                constituent.sector = new_sector
+                sp500_updated += 1
+
         db.commit()
 
         return {
@@ -545,9 +661,12 @@ async def import_classifications(
             'unmatched': len(unmatched),
             'created': created,
             'updated': updated,
-            'unmatched_symbols': [r['symbol'] for r in unmatched[:20]],
+            'securities_created': securities_created,
+            'sp500_sectors_updated': sp500_updated,
             'errors': errors[:20],
-            'message': f"Imported {created + updated} classifications ({created} new, {updated} updated). {len(unmatched)} symbols not found in portfolio."
+            'message': f"Classified {created + updated} tickers ({created} new, {updated} updated). "
+                       f"{securities_created} new securities created. "
+                       f"{sp500_updated} S&P 500 constituent sectors updated."
         }
 
 

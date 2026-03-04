@@ -301,7 +301,8 @@ def clear_analytics_for_accounts_without_transactions(db: Session):
 
 def clear_analytics_for_account(db: Session, account_id: int):
     """
-    Clear all analytics data for a specific account.
+    Clear all analytics data for a specific account AND any
+    GROUP/FIRM aggregates that include this account's data.
     Use this when transactions are deleted for an account.
     """
     logger.info(f"Clearing analytics for account {account_id}...")
@@ -341,8 +342,29 @@ def clear_analytics_for_account(db: Session, account_id: int):
         FactorRegression.view_id == account_id
     ).delete(synchronize_session=False)
 
+    # Also clear GROUP/FIRM level aggregates since they're now stale
+    db.query(PortfolioValueEOD).filter(
+        PortfolioValueEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    db.query(ReturnsEOD).filter(
+        ReturnsEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    db.query(RiskEOD).filter(
+        RiskEOD.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    db.query(BenchmarkMetric).filter(
+        BenchmarkMetric.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
+    db.query(FactorRegression).filter(
+        FactorRegression.view_type.in_([ViewType.GROUP, ViewType.FIRM])
+    ).delete(synchronize_session=False)
+
     db.commit()
-    logger.info(f"Analytics cleared for account {account_id}")
+    logger.info(f"Analytics cleared for account {account_id} (GROUP/FIRM aggregates also cleared)")
 
 
 def clear_all_returns(db: Session):

@@ -60,17 +60,23 @@ interface HarvestCandidate {
 
 interface RealizedGain {
   id: number;
+  account_id: number;
+  account_number: string | null;
   symbol: string;
   sale_date: string;
   purchase_date: string;
   shares_sold: number;
+  sale_price_per_share: number;
+  cost_basis_per_share: number;
   proceeds: number;
   cost_basis: number;
   gain_loss: number;
   is_short_term: boolean;
+  holding_period_days: number;
   is_wash_sale: boolean;
   wash_sale_disallowed: number;
   adjusted_gain_loss: number;
+  tax_year: number;
 }
 
 interface Account {
@@ -170,6 +176,9 @@ export default function TaxPage() {
   const [harvestCandidates, setHarvestCandidates] = useState<HarvestCandidate[]>([]);
   const [realizedGains, setRealizedGains] = useState<RealizedGain[]>([]);
 
+
+  // Build lots state
+  const [buildingLots, setBuildingLots] = useState(false);
 
   // Import state
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -353,6 +362,22 @@ export default function TaxPage() {
       await loadImportHistory();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to delete import');
+    }
+  };
+
+  const handleRebuildRealizedGains = async () => {
+    try {
+      setBuildingLots(true);
+      setError(null);
+      const result = await api.buildTaxLots(selectedAccount || undefined);
+      alert(`Rebuilt realized gains: ${result.total_lots_created} lots processed across ${result.accounts_processed} accounts.`);
+      // Reload realized gains and summary
+      await loadRealizedGains();
+      await loadSummary();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to rebuild realized gains');
+    } finally {
+      setBuildingLots(false);
     }
   };
 
@@ -603,6 +628,7 @@ export default function TaxPage() {
             <div className="card">
               <div className="card-header">
                 <h3 className="card-title">Realized Gains/Losses ({taxYear})</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">From transactions (FIFO matching)</p>
               </div>
               <div className="space-y-4">
                 <div className="grid grid-cols-3 gap-4 text-sm">
@@ -642,6 +668,7 @@ export default function TaxPage() {
             <div className="card">
               <div className="card-header">
                 <h3 className="card-title">Unrealized Gains/Losses</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">From imported tax lots</p>
               </div>
               <div className="space-y-4">
                 <div className="grid grid-cols-3 gap-4 text-sm">
@@ -999,7 +1026,7 @@ export default function TaxPage() {
                             </svg>
                             <p className="empty-state-title">No tax lots found</p>
                             <p className="empty-state-description">
-                              {lots.length === 0 ? 'Import tax lots from the Import tab.' : 'No lots match the current filters.'}
+                              {lots.length === 0 ? 'Import tax lots from the Import tab to view unrealized gains/losses and harvest candidates.' : 'No lots match the current filters.'}
                             </p>
                           </div>
                         </td>
@@ -1150,63 +1177,105 @@ export default function TaxPage() {
         )}
 
         {activeTab === 'realized' && (
-          <div className="card p-0 overflow-hidden">
-            <div className="table-container mx-0">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Sale Date</th>
-                    <th>Purchase Date</th>
-                    <th className="text-right">Shares</th>
-                    <th className="text-right">Proceeds</th>
-                    <th className="text-right">Cost Basis</th>
-                    <th className="text-right">Gain/Loss</th>
-                    <th className="text-center">Term</th>
-                    <th className="text-center">Wash Sale</th>
-                  </tr>
-                </thead>
-                <tbody className="tabular-nums">
-                  {realizedGains.map((g) => (
-                    <tr key={g.id}>
-                      <td className="font-semibold text-zinc-900">{g.symbol}</td>
-                      <td>{formatDate(g.sale_date)}</td>
-                      <td>{formatDate(g.purchase_date)}</td>
-                      <td className="text-right">{g.shares_sold.toFixed(2)}</td>
-                      <td className="text-right">{formatCurrency(g.proceeds)}</td>
-                      <td className="text-right">{formatCurrency(g.cost_basis)}</td>
-                      <td className={`text-right ${getValueClass(g.adjusted_gain_loss)}`}>
-                        {formatCurrency(g.adjusted_gain_loss)}
-                      </td>
-                      <td className="text-center">
-                        <span className={`badge ${g.is_short_term ? 'badge-warning' : 'badge-success'}`}>
-                          {g.is_short_term ? 'Short' : 'Long'}
-                        </span>
-                      </td>
-                      <td className="text-center">
-                        {g.is_wash_sale && (
-                          <span className="badge badge-danger">
-                            {formatCurrency(g.wash_sale_disallowed)}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {realizedGains.length === 0 && (
-                    <tr>
-                      <td colSpan={9}>
-                        <div className="empty-state">
-                          <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                          </svg>
-                          <p className="empty-state-title">No realized gains</p>
-                          <p className="empty-state-description">No realized gains/losses for {taxYear}.</p>
-                        </div>
-                      </td>
-                    </tr>
+          <div className="space-y-4">
+            {/* Info banner + rebuild button */}
+            <div className="card">
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className="text-sm text-zinc-600">
+                    Realized gains are computed from your uploaded transactions using FIFO lot matching.
+                  </p>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Click &quot;Recompute&quot; to rebuild from the latest transaction data.
+                  </p>
+                </div>
+                <button
+                  onClick={handleRebuildRealizedGains}
+                  disabled={buildingLots}
+                  className="btn btn-secondary whitespace-nowrap"
+                >
+                  {buildingLots ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Computing...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Recompute from Transactions
+                    </>
                   )}
-                </tbody>
-              </table>
+                </button>
+              </div>
+            </div>
+
+            <div className="card p-0 overflow-hidden">
+              <div className="table-container mx-0">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Account</th>
+                      <th>Sale Date</th>
+                      <th>Purchase Date</th>
+                      <th className="text-right">Shares</th>
+                      <th className="text-right">Proceeds</th>
+                      <th className="text-right">Cost Basis</th>
+                      <th className="text-right">Gain/Loss</th>
+                      <th className="text-center">Term</th>
+                      <th className="text-center">Wash Sale</th>
+                    </tr>
+                  </thead>
+                  <tbody className="tabular-nums">
+                    {realizedGains.map((g) => (
+                      <tr key={g.id}>
+                        <td className="font-semibold text-zinc-900">{g.symbol}</td>
+                        <td className="text-zinc-600 text-sm">{g.account_number || '-'}</td>
+                        <td>{formatDate(g.sale_date)}</td>
+                        <td>{formatDate(g.purchase_date)}</td>
+                        <td className="text-right">{g.shares_sold.toFixed(2)}</td>
+                        <td className="text-right">{formatCurrency(g.proceeds)}</td>
+                        <td className="text-right">{formatCurrency(g.cost_basis)}</td>
+                        <td className={`text-right ${getValueClass(g.adjusted_gain_loss)}`}>
+                          {formatCurrency(g.adjusted_gain_loss)}
+                        </td>
+                        <td className="text-center">
+                          <span className={`badge ${g.is_short_term ? 'badge-warning' : 'badge-success'}`}>
+                            {g.is_short_term ? 'Short' : 'Long'}
+                          </span>
+                        </td>
+                        <td className="text-center">
+                          {g.is_wash_sale && (
+                            <span className="badge badge-danger">
+                              {formatCurrency(g.wash_sale_disallowed)}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {realizedGains.length === 0 && (
+                      <tr>
+                        <td colSpan={10}>
+                          <div className="empty-state">
+                            <svg className="empty-state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                            </svg>
+                            <p className="empty-state-title">No realized gains</p>
+                            <p className="empty-state-description">
+                              No realized gains/losses for {taxYear}. Upload transactions and click &quot;Recompute from Transactions&quot; to generate.
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
