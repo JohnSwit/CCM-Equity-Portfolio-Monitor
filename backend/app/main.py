@@ -203,21 +203,21 @@ async def startup_event():
     # Ensure tax_lots table has new columns
     ensure_tax_lot_columns()
 
-    # Create default admin user if not exists
+    # Create default admin user if no users exist at all
     db = next(get_db())
     try:
-        admin = db.query(User).filter(User.email == "admin@example.com").first()
-        if not admin:
+        user_count = db.query(User).count()
+        if user_count == 0:
             admin = User(
-                email="admin@example.com",
-                hashed_password=get_password_hash("admin"),
+                email="CCMteam770",
+                hashed_password=get_password_hash(settings.ADMIN_PASSWORD or "admin"),
                 full_name="Admin User",
                 is_active=True,
                 is_admin=True
             )
             db.add(admin)
             db.commit()
-            print("Created default admin user: admin@example.com / admin")
+            logger.info("Created default admin user")
     finally:
         db.close()
 

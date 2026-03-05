@@ -52,13 +52,13 @@ export default function Login() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="label">Email</label>
+              <label className="label">Username</label>
               <input
-                type="email"
+                type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="input"
-                placeholder="Enter your email"
+                placeholder="Enter your username"
                 required
               />
             </div>
@@ -91,12 +91,6 @@ export default function Login() {
               ) : 'Sign In'}
             </button>
           </form>
-
-          <div className="mt-6 pt-6 border-t border-zinc-200">
-            <p className="text-xs text-zinc-500 text-center">
-              Default credentials: <code className="bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-700">admin@example.com</code> / <code className="bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-700">admin</code>
-            </p>
-          </div>
         </div>
       </div>
     </div>

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     AZURE_CLIENT_ID: str = ""
     AZURE_CLIENT_SECRET: str = ""
 
+    # Admin
+    ADMIN_PASSWORD: str = "admin"
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000"
 

@@ -202,7 +202,7 @@ class APIClient {
   }
 
   async getImportHistory(limit: number = 50) {
-    const response = await this.client.get('/imports', {
+    const response = await this.client.get('/imports/', {
       params: { limit },
     });
     return response.data;
@@ -251,7 +251,7 @@ class APIClient {
     limit?: number;
     offset?: number;
   }) {
-    const response = await this.client.get('/transactions', { params });
+    const response = await this.client.get('/transactions/', { params });
     return response.data;
   }
 
