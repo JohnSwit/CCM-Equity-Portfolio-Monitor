@@ -94,6 +94,7 @@ export default function Dashboard() {
   const [selectedView, setSelectedView] = useState<any>(null);
   const [summary, setSummary] = useState<any>(null);
   const [returns, setReturns] = useState<any[]>([]);
+  const [portfolioValues, setPortfolioValues] = useState<any[]>([]);
   const [benchmarkReturns, setBenchmarkReturns] = useState<any>({});
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
@@ -149,6 +150,7 @@ export default function Dashboard() {
     // Clear previous data immediately so stale data doesn't persist
     setSummary(null);
     setReturns([]);
+    setPortfolioValues([]);
     setBenchmarkReturns({});
     setHoldings(null);
     setRisk(null);
@@ -157,9 +159,10 @@ export default function Dashboard() {
     setLoading(true);
 
     try {
-      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
+      const [summaryData, returnsData, portfolioValuesData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
         api.getSummary(view.view_type, view.view_id).catch(() => null),
         api.getReturns(view.view_type, view.view_id).catch(() => []),
+        api.getPortfolioValues(view.view_type, view.view_id).catch(() => []),
         api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
         api.getHoldings(view.view_type, view.view_id).catch(() => null),
         api.getRisk(view.view_type, view.view_id).catch(() => null),
@@ -172,6 +175,7 @@ export default function Dashboard() {
 
       setSummary(summaryData);
       setReturns(returnsData || []);
+      setPortfolioValues(portfolioValuesData || []);
       setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
@@ -246,10 +250,12 @@ export default function Dashboard() {
           return normalizedPoint;
         });
     } else {
-      // Simple mode — daily cumulative simple returns (V_t / V_0)
-      // Uses the same daily index values as TWR but shows growth-of-$1 from each series' start
+      // Simple mode — uses actual portfolio values (V_t / V_0) for simple returns
+      // Portfolio values include cash flow effects (deposits, withdrawals, trades)
+      // Benchmarks still use their own index values for comparison
       const dataByDate: any = {};
-      returns.forEach((r: any) => {
+      const simpleSource = portfolioValues.length > 0 ? portfolioValues : returns;
+      simpleSource.forEach((r: any) => {
         dataByDate[r.date] = { date: r.date, Portfolio: r.index_value };
       });
 
@@ -301,7 +307,7 @@ export default function Dashboard() {
           return normalizedPoint;
         });
     }
-  }, [returns, benchmarkReturns, returnMode]);
+  }, [returns, portfolioValues, benchmarkReturns, returnMode]);
 
   const viewOptions = useMemo(() => views.map((v) => ({
     value: v,

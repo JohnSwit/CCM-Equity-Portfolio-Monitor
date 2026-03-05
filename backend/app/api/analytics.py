@@ -226,6 +226,58 @@ def get_returns(
     ]
 
 
+@router.get("/portfolio-values")
+def get_portfolio_values(
+    view_type: str = Query(...),
+    view_id: int = Query(...),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get portfolio values time series for simple return calculation.
+    Simple return = V_t / V_0 (actual portfolio value growth including cash flows)."""
+    vt = parse_view_type(view_type)
+    db_vt = get_db_view_type(vt)
+
+    query = db.query(
+        PortfolioValueEOD.date, PortfolioValueEOD.total_value
+    ).filter(
+        and_(
+            PortfolioValueEOD.view_type == db_vt,
+            PortfolioValueEOD.view_id == view_id,
+            PortfolioValueEOD.total_value > 0
+        )
+    )
+
+    if start_date:
+        query = query.filter(PortfolioValueEOD.date >= start_date)
+    if end_date:
+        query = query.filter(PortfolioValueEOD.date <= end_date)
+
+    values = query.order_by(PortfolioValueEOD.date).all()
+
+    if not values:
+        return []
+
+    # Compute simple daily returns and cumulative index from portfolio values
+    v0 = values[0][1]  # First portfolio value
+    result = []
+    prev_value = None
+    for v_date, v_total in values:
+        daily_return = 0.0
+        if prev_value and prev_value > 0:
+            daily_return = (v_total / prev_value) - 1.0
+        result.append({
+            'date': v_date,
+            'return_value': daily_return,
+            'index_value': v_total / v0  # Normalized to 1.0 at start
+        })
+        prev_value = v_total
+
+    return result
+
+
 @router.get("/benchmark-returns")
 def get_benchmark_returns(
     benchmark_codes: str = Query(...),  # Comma-separated: "SPY,QQQ,INDU"

@@ -156,6 +156,10 @@ class APIClient {
     return this.cachedGet('/analytics/returns', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate });
   }
 
+  async getPortfolioValues(viewType: string, viewId: number, startDate?: string, endDate?: string) {
+    return this.cachedGet('/analytics/portfolio-values', { view_type: viewType, view_id: viewId, start_date: startDate, end_date: endDate });
+  }
+
   async getHoldings(viewType: string, viewId: number, asOfDate?: string) {
     return this.cachedGet('/analytics/holdings', { view_type: viewType, view_id: viewId, as_of_date: asOfDate });
   }
