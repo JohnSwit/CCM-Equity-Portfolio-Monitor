@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, Account, Security, PricesEOD
+from app.models import User, Account, Security, PricesEOD, PortfolioValueEOD, ViewType
 import logging
 
 logger = logging.getLogger(__name__)
@@ -149,8 +149,15 @@ async def get_accounts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ) -> List[Dict[str, Any]]:
-    """Get list of accounts for dropdown"""
-    accounts = db.query(Account).all()
+    """Get list of accounts for dropdown (only accounts with portfolio values)"""
+    accounts_with_portfolio = db.query(PortfolioValueEOD.view_id).filter(
+        PortfolioValueEOD.view_type == ViewType.ACCOUNT
+    ).distinct().subquery()
+
+    accounts = db.query(Account).filter(
+        Account.id.in_(db.query(accounts_with_portfolio.c.view_id))
+    ).order_by(Account.account_number).all()
+
     return [
         {
             "id": a.id,

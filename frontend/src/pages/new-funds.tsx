@@ -1,6 +1,32 @@
 import { useState, useEffect, Fragment } from 'react';
+import dynamic from 'next/dynamic';
 import Layout from '../components/Layout';
 import { api } from '../lib/api';
+
+const CreatableSelect = dynamic(() => import('react-select/creatable'), { ssr: false }) as any;
+
+const selectStyles = {
+  control: (base: any, state: any) => ({
+    ...base,
+    borderColor: state.isFocused ? '#3b82f6' : '#e4e4e7',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(59, 130, 246, 0.1)' : 'none',
+    borderRadius: '0.5rem',
+    minHeight: '42px',
+    '&:hover': { borderColor: '#a1a1aa' },
+  }),
+  option: (base: any, state: any) => ({
+    ...base,
+    backgroundColor: state.isSelected ? '#3b82f6' : state.isFocused ? '#f4f4f5' : 'white',
+    color: state.isSelected ? 'white' : '#27272a',
+    padding: '8px 12px',
+  }),
+  menu: (base: any) => ({
+    ...base,
+    borderRadius: '0.5rem',
+    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+    border: '1px solid #e4e4e7',
+  }),
+};
 
 interface Industry {
   industry: string;
@@ -520,22 +546,40 @@ export default function NewFundsPage() {
 
             {/* Account Selector */}
             <div>
-              <label className="label">3. Select Account</label>
-              <select
-                value={selectedAccount?.id || ''}
-                onChange={(e) => {
-                  const account = accounts.find(a => a.id === parseInt(e.target.value));
-                  setSelectedAccount(account || null);
+              <label className="label">3. Select or Type Account</label>
+              <CreatableSelect
+                options={accounts.map(a => ({
+                  value: a,
+                  label: `${a.name} (${a.account_number})`
+                }))}
+                value={selectedAccount ? {
+                  value: selectedAccount,
+                  label: selectedAccount.name
+                    ? `${selectedAccount.name} (${selectedAccount.account_number})`
+                    : selectedAccount.account_number
+                } : null}
+                onChange={(option: any) => {
+                  if (option) {
+                    setSelectedAccount(option.value);
+                  } else {
+                    setSelectedAccount(null);
+                  }
                 }}
-                className="select"
-              >
-                <option value="">Select account...</option>
-                {accounts.map(account => (
-                  <option key={account.id} value={account.id}>
-                    {account.name} ({account.account_number})
-                  </option>
-                ))}
-              </select>
+                onCreateOption={(inputValue: string) => {
+                  const newAccount: Account = {
+                    id: 0,
+                    account_number: inputValue,
+                    name: ''
+                  };
+                  setSelectedAccount(newAccount);
+                }}
+                formatCreateLabel={(inputValue: string) => `Use account: ${inputValue}`}
+                styles={selectStyles}
+                isClearable
+                isSearchable
+                placeholder="Select or type account number..."
+                className="w-full"
+              />
             </div>
 
             {/* Total Amount */}

@@ -516,7 +516,8 @@ export default function PortfolioStatisticsPage() {
                           <tr>
                             <th>Start Date</th>
                             <th>End Date</th>
-                            <th className="text-right">Max Drawdown</th>
+                            <th className="text-right">Deepest Drawdown</th>
+                            <th className="text-right">Current</th>
                             <th className="text-right">Duration (Days)</th>
                             <th>Status</th>
                           </tr>
@@ -527,6 +528,13 @@ export default function PortfolioStatisticsPage() {
                               <td>{format(new Date(period.start_date), 'MMM d, yyyy')}</td>
                               <td>{format(new Date(period.end_date), 'MMM d, yyyy')}</td>
                               <td className="text-right font-semibold text-red-600 tabular-nums">{formatPercent(period.max_drawdown)}</td>
+                              <td className="text-right tabular-nums">
+                                {period.ongoing ? (
+                                  <span className="font-semibold text-orange-600">{formatPercent(drawdownData.current_drawdown)}</span>
+                                ) : (
+                                  <span className="text-zinc-400">-</span>
+                                )}
+                              </td>
                               <td className="text-right tabular-nums">{period.days}</td>
                               <td>
                                 {period.ongoing ? (

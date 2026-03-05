@@ -4,7 +4,7 @@ from sqlalchemy import func, exists
 from typing import List
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, Account, Group, GroupMember, GroupType, Transaction, PositionsEOD
+from app.models import User, Account, Group, GroupMember, GroupType, Transaction, PositionsEOD, PortfolioValueEOD, ViewType
 from app.models.schemas import (
     AccountResponse, GroupResponse, GroupCreate, GroupMemberAdd
 )
@@ -121,16 +121,14 @@ def get_all_views(
     if include_empty:
         accounts = db.query(Account).order_by(Account.display_name).all()
     else:
-        # Only return accounts that have at least one transaction OR at least one position
-        accounts_with_transactions = db.query(Transaction.account_id).distinct().subquery()
-        accounts_with_positions = db.query(PositionsEOD.account_id).distinct().subquery()
+        # Only return accounts that have portfolio values
+        accounts_with_portfolio = db.query(PortfolioValueEOD.view_id).filter(
+            PortfolioValueEOD.view_type == ViewType.ACCOUNT
+        ).distinct().subquery()
 
         accounts = db.query(Account).filter(
             Account.id.in_(
-                db.query(accounts_with_transactions.c.account_id)
-            ) |
-            Account.id.in_(
-                db.query(accounts_with_positions.c.account_id)
+                db.query(accounts_with_portfolio.c.view_id)
             )
         ).order_by(Account.display_name).all()
 

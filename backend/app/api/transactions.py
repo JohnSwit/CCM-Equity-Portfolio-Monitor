@@ -6,7 +6,7 @@ from datetime import date
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models import User, Transaction, Account, Security, ImportLog, TaxLot, RealizedGain, WashSaleViolation, AccountInception, GroupMember, PositionsEOD
+from app.models import User, Transaction, Account, Security, ImportLog, TaxLot, RealizedGain, WashSaleViolation, AccountInception, GroupMember, PositionsEOD, PortfolioValueEOD, ViewType
 from app.models.bulk_import import ImportedTransaction
 from app.workers.jobs import clear_analytics_for_account
 import logging
@@ -183,12 +183,19 @@ def get_accounts_with_transaction_counts(
     Get all accounts with their transaction counts.
     Useful for showing which accounts have data.
     """
+    # Only return accounts that have portfolio values
+    accounts_with_portfolio = db.query(PortfolioValueEOD.view_id).filter(
+        PortfolioValueEOD.view_type == ViewType.ACCOUNT
+    ).distinct().subquery()
+
     accounts = db.query(
         Account.id,
         Account.account_number,
         Account.display_name,
         func.count(Transaction.id).label('transaction_count')
-    ).outerjoin(Transaction).group_by(
+    ).join(Transaction).filter(
+        Account.id.in_(db.query(accounts_with_portfolio.c.view_id))
+    ).group_by(
         Account.id,
         Account.account_number,
         Account.display_name
