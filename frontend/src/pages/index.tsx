@@ -94,13 +94,11 @@ export default function Dashboard() {
   const [selectedView, setSelectedView] = useState<any>(null);
   const [summary, setSummary] = useState<any>(null);
   const [returns, setReturns] = useState<any[]>([]);
-  const [portfolioValues, setPortfolioValues] = useState<any[]>([]);
   const [benchmarkReturns, setBenchmarkReturns] = useState<any>({});
   const [holdings, setHoldings] = useState<any>(null);
   const [risk, setRisk] = useState<any>(null);
   const [unpriced, setUnpriced] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [returnMode, setReturnMode] = useState<'TWR' | 'Simple'>('TWR');
 
   // Donut chart states
   const [sectorViewMode, setSectorViewMode] = useState<SectorViewMode>('sector');
@@ -150,7 +148,6 @@ export default function Dashboard() {
     // Clear previous data immediately so stale data doesn't persist
     setSummary(null);
     setReturns([]);
-    setPortfolioValues([]);
     setBenchmarkReturns({});
     setHoldings(null);
     setRisk(null);
@@ -159,10 +156,9 @@ export default function Dashboard() {
     setLoading(true);
 
     try {
-      const [summaryData, returnsData, portfolioValuesData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
+      const [summaryData, returnsData, benchmarksData, holdingsData, riskData, unpricedData, sectorWeights] = await Promise.all([
         api.getSummary(view.view_type, view.view_id).catch(() => null),
         api.getReturns(view.view_type, view.view_id).catch(() => []),
-        api.getPortfolioValues(view.view_type, view.view_id).catch(() => []),
         api.getBenchmarkReturns(['SPY', 'QQQ', 'INDU']).catch(() => ({})),
         api.getHoldings(view.view_type, view.view_id).catch(() => null),
         api.getRisk(view.view_type, view.view_id).catch(() => null),
@@ -175,7 +171,6 @@ export default function Dashboard() {
 
       setSummary(summaryData);
       setReturns(returnsData || []);
-      setPortfolioValues(portfolioValuesData || []);
       setBenchmarkReturns(benchmarksData);
       setHoldings(holdingsData);
       setRisk(riskData);
@@ -195,119 +190,60 @@ export default function Dashboard() {
   const chartData = useMemo(() => {
     if (returns.length === 0) return [];
 
-    if (returnMode === 'TWR') {
-      // Merge and normalize TWR data
-      const dataByDate: any = {};
-      returns.forEach((r: any) => {
-        dataByDate[r.date] = { date: r.date, Portfolio: r.index_value };
-      });
+    // Merge and normalize TWR data
+    const dataByDate: any = {};
+    returns.forEach((r: any) => {
+      dataByDate[r.date] = { date: r.date, Portfolio: r.index_value };
+    });
 
-      ['SPY', 'QQQ', 'INDU'].forEach((code) => {
-        if (benchmarkReturns[code]) {
-          benchmarkReturns[code].forEach((r: any) => {
-            if (!dataByDate[r.date]) dataByDate[r.date] = { date: r.date };
-            dataByDate[r.date][code] = r.index_value;
-          });
-        }
-      });
-
-      const merged = Object.values(dataByDate).sort((a: any, b: any) =>
-        a.date.localeCompare(b.date)
-      );
-
-      if (merged.length === 0) return [];
-
-      const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
-      const availableSeries = allSeries.filter(s =>
-        merged.some((point: any) => point[s] !== undefined && point[s] !== null)
-      );
-
-      const firstPortfolioDate = merged.find((point: any) =>
-        point.Portfolio !== undefined && point.Portfolio !== null
-      ) as { date: string; [key: string]: any } | undefined;
-
-      if (!firstPortfolioDate) return [];
-
-      const baselineValues: any = {};
-      availableSeries.forEach(s => {
-        const firstWithSeries = merged.find((point: any) =>
-          point.date >= firstPortfolioDate.date &&
-          point[s] !== undefined &&
-          point[s] !== null
-        ) as { [key: string]: any } | undefined;
-        baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
-      });
-
-      return merged
-        .filter((point: any) => point.date >= firstPortfolioDate.date)
-        .map((point: any) => {
-          const normalizedPoint: any = { date: point.date };
-          availableSeries.forEach(s => {
-            if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
-              normalizedPoint[s] = point[s] / baselineValues[s];
-            }
-          });
-          return normalizedPoint;
+    ['SPY', 'QQQ', 'INDU'].forEach((code) => {
+      if (benchmarkReturns[code]) {
+        benchmarkReturns[code].forEach((r: any) => {
+          if (!dataByDate[r.date]) dataByDate[r.date] = { date: r.date };
+          dataByDate[r.date][code] = r.index_value;
         });
-    } else {
-      // Simple mode — uses actual portfolio values (V_t / V_0) for simple returns
-      // Portfolio values include cash flow effects (deposits, withdrawals, trades)
-      // Benchmarks still use their own index values for comparison
-      const dataByDate: any = {};
-      const simpleSource = portfolioValues.length > 0 ? portfolioValues : returns;
-      simpleSource.forEach((r: any) => {
-        dataByDate[r.date] = { date: r.date, Portfolio: r.index_value };
-      });
+      }
+    });
 
-      ['SPY', 'QQQ', 'INDU'].forEach((code) => {
-        if (benchmarkReturns[code]) {
-          benchmarkReturns[code].forEach((r: any) => {
-            if (!dataByDate[r.date]) dataByDate[r.date] = { date: r.date };
-            dataByDate[r.date][code] = r.index_value;
-          });
-        }
-      });
+    const merged = Object.values(dataByDate).sort((a: any, b: any) =>
+      a.date.localeCompare(b.date)
+    );
 
-      const merged = Object.values(dataByDate).sort((a: any, b: any) =>
-        a.date.localeCompare(b.date)
-      );
+    if (merged.length === 0) return [];
 
-      if (merged.length === 0) return [];
+    const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
+    const availableSeries = allSeries.filter(s =>
+      merged.some((point: any) => point[s] !== undefined && point[s] !== null)
+    );
 
-      const allSeries = ['Portfolio', 'SPY', 'QQQ', 'INDU'];
-      const availableSeries = allSeries.filter(s =>
-        merged.some((point: any) => point[s] !== undefined && point[s] !== null)
-      );
+    const firstPortfolioDate = merged.find((point: any) =>
+      point.Portfolio !== undefined && point.Portfolio !== null
+    ) as { date: string; [key: string]: any } | undefined;
 
-      const firstPortfolioDate = merged.find((point: any) =>
-        point.Portfolio !== undefined && point.Portfolio !== null
-      ) as { date: string; [key: string]: any } | undefined;
+    if (!firstPortfolioDate) return [];
 
-      if (!firstPortfolioDate) return [];
+    const baselineValues: any = {};
+    availableSeries.forEach(s => {
+      const firstWithSeries = merged.find((point: any) =>
+        point.date >= firstPortfolioDate.date &&
+        point[s] !== undefined &&
+        point[s] !== null
+      ) as { [key: string]: any } | undefined;
+      baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
+    });
 
-      const baselineValues: any = {};
-      availableSeries.forEach(s => {
-        const firstWithSeries = merged.find((point: any) =>
-          point.date >= firstPortfolioDate.date &&
-          point[s] !== undefined &&
-          point[s] !== null
-        ) as { [key: string]: any } | undefined;
-        baselineValues[s] = firstWithSeries ? firstWithSeries[s] : 1.0;
-      });
-
-      return merged
-        .filter((point: any) => point.date >= firstPortfolioDate.date)
-        .map((point: any) => {
-          const normalizedPoint: any = { date: point.date };
-          availableSeries.forEach(s => {
-            if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
-              normalizedPoint[s] = point[s] / baselineValues[s];
-            }
-          });
-          return normalizedPoint;
+    return merged
+      .filter((point: any) => point.date >= firstPortfolioDate.date)
+      .map((point: any) => {
+        const normalizedPoint: any = { date: point.date };
+        availableSeries.forEach(s => {
+          if (point[s] !== undefined && point[s] !== null && baselineValues[s]) {
+            normalizedPoint[s] = point[s] / baselineValues[s];
+          }
         });
-    }
-  }, [returns, portfolioValues, benchmarkReturns, returnMode]);
+        return normalizedPoint;
+      });
+  }, [returns, benchmarkReturns]);
 
   const viewOptions = useMemo(() => views.map((v) => ({
     value: v,
@@ -611,21 +547,7 @@ export default function Dashboard() {
             {chartData.length > 0 && (
               <div className="card">
                 <div className="card-header">
-                  <h3 className="card-title">Performance vs Benchmarks</h3>
-                  <div className="pill-tabs">
-                    <button
-                      onClick={() => setReturnMode('TWR')}
-                      className={`pill-tab ${returnMode === 'TWR' ? 'pill-tab-active' : ''}`}
-                    >
-                      TWR
-                    </button>
-                    <button
-                      onClick={() => setReturnMode('Simple')}
-                      className={`pill-tab ${returnMode === 'Simple' ? 'pill-tab-active' : ''}`}
-                    >
-                      Simple
-                    </button>
-                  </div>
+                  <h3 className="card-title">Performance vs Benchmarks (TWR)</h3>
                 </div>
                 <ResponsiveContainer width="100%" height={360}>
                   <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
