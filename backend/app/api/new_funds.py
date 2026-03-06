@@ -13,8 +13,10 @@ from sqlalchemy import desc
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.auth import get_current_user
 from app.models import User, Account, Security, PricesEOD, PortfolioValueEOD, ViewType
+import requests as http_requests
 import logging
 
 logger = logging.getLogger(__name__)
@@ -340,6 +342,108 @@ async def calculate_allocation(
     }
 
 
+def _fetch_live_price(ticker: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch live/latest price from Tiingo IEX endpoint.
+    Returns dict with price and timestamp, or None on failure.
+    """
+    api_key = settings.TIINGO_API_KEY
+    if not api_key:
+        logger.warning("No Tiingo API key configured, cannot fetch live price")
+        return None
+
+    try:
+        url = f"https://api.tiingo.com/iex/{ticker}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Token {api_key}"
+        }
+        resp = http_requests.get(url, headers=headers, timeout=10)
+
+        if resp.status_code == 404:
+            # Ticker not found on IEX - try Tiingo daily endpoint for last close
+            return _fetch_tiingo_daily_latest(ticker, api_key)
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data:
+            return _fetch_tiingo_daily_latest(ticker, api_key)
+
+        # IEX returns a list with one element
+        quote = data[0] if isinstance(data, list) else data
+
+        # Use tngoLast (last trade price) or last, falling back to prevClose
+        price = quote.get("tngoLast") or quote.get("last") or quote.get("prevClose")
+        if not price or price <= 0:
+            price = quote.get("prevClose")
+
+        if not price or price <= 0:
+            return _fetch_tiingo_daily_latest(ticker, api_key)
+
+        timestamp = quote.get("timestamp", "")
+        return {
+            "price": float(price),
+            "timestamp": timestamp,
+            "source": "tiingo_iex"
+        }
+
+    except Exception as e:
+        logger.warning(f"Live price fetch failed for {ticker}: {e}")
+        return _fetch_tiingo_daily_latest(ticker, api_key)
+
+
+def _fetch_tiingo_daily_latest(ticker: str, api_key: str) -> Optional[Dict[str, Any]]:
+    """
+    Fallback: fetch the latest EOD price from Tiingo daily endpoint.
+    Works for tickers not on IEX (mutual funds, international, etc).
+    """
+    try:
+        url = f"https://api.tiingo.com/tiingo/daily/{ticker}/prices"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Token {api_key}"
+        }
+        resp = http_requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        if not data:
+            return None
+
+        latest = data[-1] if isinstance(data, list) else data
+        price = latest.get("close") or latest.get("adjClose")
+        if not price or price <= 0:
+            return None
+
+        return {
+            "price": float(price),
+            "timestamp": latest.get("date", ""),
+            "source": "tiingo_daily"
+        }
+    except Exception as e:
+        logger.warning(f"Tiingo daily fallback failed for {ticker}: {e}")
+        return None
+
+
+def _fetch_ticker_meta(ticker: str, api_key: str) -> Optional[str]:
+    """Fetch security name from Tiingo meta endpoint."""
+    try:
+        url = f"https://api.tiingo.com/tiingo/daily/{ticker}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Token {api_key}"
+        }
+        resp = http_requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("name", "")
+    except Exception:
+        pass
+    return None
+
+
 @router.post("/get-ticker-price")
 async def get_ticker_price(
     ticker: str,
@@ -347,35 +451,56 @@ async def get_ticker_price(
     current_user: User = Depends(get_current_user)
 ) -> Dict[str, Any]:
     """
-    Get current price for a ticker to calculate share count.
+    Get live price for a ticker. Tries Tiingo IEX (real-time) first,
+    then Tiingo daily, then falls back to database EOD prices.
+    Also supports tickers not yet in the database.
     """
     # Normalize ticker
     ticker = ticker.upper().strip()
 
-    # Find security
+    # Look up security name from database (if exists)
     security = db.query(Security).filter(Security.symbol == ticker).first()
     if not security:
-        # Try with dot notation
         ticker_alt = ticker.replace('-', '.')
         security = db.query(Security).filter(Security.symbol == ticker_alt).first()
 
-    if not security:
-        raise HTTPException(status_code=404, detail=f"Ticker {ticker} not found in database")
+    security_name = security.asset_name if security else None
 
-    # Get latest price
-    latest_price = db.query(PricesEOD).filter(
-        PricesEOD.security_id == security.id
-    ).order_by(desc(PricesEOD.date)).first()
+    # Try live price from Tiingo
+    live = _fetch_live_price(ticker)
+    if live:
+        # If we don't have a security name from DB, fetch from Tiingo meta
+        if not security_name:
+            security_name = _fetch_ticker_meta(ticker, settings.TIINGO_API_KEY)
 
-    if not latest_price:
-        raise HTTPException(status_code=404, detail=f"No price data for {ticker}")
+        return {
+            "ticker": ticker,
+            "price": live["price"],
+            "price_date": live["timestamp"][:10] if live["timestamp"] else date.today().isoformat(),
+            "security_name": security_name or ticker,
+            "source": live["source"]
+        }
 
-    return {
-        "ticker": ticker,
-        "price": float(latest_price.close),
-        "price_date": latest_price.date.isoformat(),
-        "security_name": security.asset_name
-    }
+    # Fallback to database EOD price
+    if security:
+        latest_price = db.query(PricesEOD).filter(
+            PricesEOD.security_id == security.id
+        ).order_by(desc(PricesEOD.date)).first()
+
+        if latest_price:
+            logger.info(f"Using database EOD price for {ticker} (live fetch failed)")
+            return {
+                "ticker": ticker,
+                "price": float(latest_price.close),
+                "price_date": latest_price.date.isoformat(),
+                "security_name": security_name or ticker,
+                "source": "database_eod"
+            }
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Could not fetch price for {ticker}. Verify the ticker symbol is correct."
+    )
 
 
 @router.post("/calculate-shares")
