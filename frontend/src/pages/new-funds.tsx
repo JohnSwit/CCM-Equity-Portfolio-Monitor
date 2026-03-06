@@ -900,10 +900,23 @@ export default function NewFundsPage() {
                             <td className="font-medium text-zinc-900">{trade.ticker}</td>
                             <td className="text-zinc-600">{trade.security_name || '-'}</td>
                             <td className="text-right text-zinc-600">${trade.price.toFixed(2)}</td>
-                            <td className="text-right font-medium">{trade.shares.toLocaleString()}</td>
-                            <td className="text-right font-medium">{formatCurrency(trade.market_value)}</td>
+                            <td className="text-right">
+                              <input
+                                type="number"
+                                value={trade.shares}
+                                min={0}
+                                onChange={(e) => {
+                                  const newShares = parseInt(e.target.value) || 0;
+                                  setTickerAllocations(prev => prev.map(a =>
+                                    a.id === trade.id ? { ...a, shares: newShares } : a
+                                  ));
+                                }}
+                                className="w-20 px-2 py-1 text-sm text-right border border-zinc-300 rounded font-medium tabular-nums"
+                              />
+                            </td>
+                            <td className="text-right font-medium">{formatCurrency(trade.shares * trade.price)}</td>
                             <td className="text-right text-zinc-600">
-                              {totalMarketValue > 0 ? ((trade.market_value / totalMarketValue) * 100).toFixed(1) : '0.0'}%
+                              {totalMarketValue > 0 ? (((trade.shares * trade.price) / totalMarketValue) * 100).toFixed(1) : '0.0'}%
                             </td>
                           </tr>
                         ))}
