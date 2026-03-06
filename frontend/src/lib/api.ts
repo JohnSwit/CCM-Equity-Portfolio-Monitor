@@ -240,6 +240,11 @@ class APIClient {
     return response.data;
   }
 
+  async getJobRunningStatus() {
+    const response = await this.client.get('/jobs/running-status');
+    return response.data;
+  }
+
   async classifySecurities() {
     const response = await this.client.post('/jobs/classify-securities?unclassified_only=true');
     return response.data;

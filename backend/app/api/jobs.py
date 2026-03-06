@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime, date
 from typing import Optional
 import asyncio
+import threading
 import logging
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.api.auth import get_current_user
 from app.models import User
 from app.models.schemas import JobRunResponse
@@ -12,6 +13,16 @@ from app.models.schemas import JobRunResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# In-memory job status tracker for background jobs
+_job_status = {
+    "running": False,
+    "job_name": None,
+    "started_at": None,
+    "completed_at": None,
+    "status": None,  # "running", "success", "failed"
+    "message": None,
+}
 
 
 def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
@@ -24,6 +35,60 @@ def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+def _run_job_in_background(job_name: str):
+    """Run a job in a background thread with its own DB session and event loop."""
+    global _job_status
+    db = SessionLocal()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        if job_name == "market_data_update":
+            from app.workers.jobs import market_data_update_job
+            loop.run_until_complete(market_data_update_job(db))
+            message = "Market data update completed successfully"
+
+        elif job_name == "recompute_analytics":
+            from app.workers.jobs import recompute_analytics_job
+            loop.run_until_complete(recompute_analytics_job(db))
+            message = "Analytics recomputation completed successfully"
+
+        elif job_name == "force_refresh_prices":
+            from app.workers.jobs import force_refresh_prices_job
+            loop.run_until_complete(force_refresh_prices_job(db))
+            message = "Force refresh of all prices completed successfully"
+
+        elif job_name == "reset_returns":
+            from app.workers.jobs import clear_all_returns, recompute_analytics_job
+            clear_all_returns(db)
+            loop.run_until_complete(recompute_analytics_job(db))
+            message = "Returns reset and recomputed successfully"
+
+        else:
+            message = f"Unknown job: {job_name}"
+
+        _job_status.update({
+            "running": False,
+            "completed_at": datetime.utcnow().isoformat(),
+            "status": "success",
+            "message": message,
+        })
+        logger.info(f"Background job '{job_name}' completed: {message}")
+
+    except Exception as e:
+        _job_status.update({
+            "running": False,
+            "completed_at": datetime.utcnow().isoformat(),
+            "status": "failed",
+            "message": f"Job failed: {str(e)}",
+        })
+        logger.error(f"Background job '{job_name}' failed: {e}", exc_info=True)
+
+    finally:
+        db.close()
+        loop.close()
+
+
 @router.post("/run", response_model=JobRunResponse)
 async def run_job(
     job_name: str = Query(..., regex="^(market_data_update|recompute_analytics|force_refresh_prices|reset_returns)$"),
@@ -31,53 +96,50 @@ async def run_job(
     current_user: User = Depends(get_admin_user)
 ):
     """
-    Trigger a job manually:
+    Trigger a job manually (runs in background):
     - market_data_update: Fetch latest market data
     - recompute_analytics: Recompute positions, returns, and analytics
     - force_refresh_prices: Delete all prices and re-fetch from Tiingo (use if data is stale/corrupt)
     - reset_returns: Clear ALL returns and recompute from scratch (use after TWR index fix)
+
+    Returns immediately. Poll /jobs/running-status to check progress.
     """
+    global _job_status
+
+    if _job_status["running"]:
+        return JobRunResponse(
+            status="already_running",
+            message=f"A job is already running: {_job_status['job_name']} (started {_job_status['started_at']})",
+            started_at=datetime.fromisoformat(_job_status['started_at']) if _job_status['started_at'] else datetime.utcnow()
+        )
+
     started_at = datetime.utcnow()
+    _job_status.update({
+        "running": True,
+        "job_name": job_name,
+        "started_at": started_at.isoformat(),
+        "completed_at": None,
+        "status": "running",
+        "message": f"Job '{job_name}' started",
+    })
 
-    try:
-        if job_name == "market_data_update":
-            from app.workers.jobs import market_data_update_job
-            await market_data_update_job(db)
-            message = "Market data update completed successfully"
+    # Launch job in a background thread
+    thread = threading.Thread(target=_run_job_in_background, args=(job_name,), daemon=True)
+    thread.start()
 
-        elif job_name == "recompute_analytics":
-            from app.workers.jobs import recompute_analytics_job
-            await recompute_analytics_job(db)
-            message = "Analytics recomputation completed successfully"
+    return JobRunResponse(
+        status="started",
+        message=f"Job '{job_name}' started in background. Poll /jobs/running-status to check progress.",
+        started_at=started_at
+    )
 
-        elif job_name == "force_refresh_prices":
-            from app.workers.jobs import force_refresh_prices_job
-            await force_refresh_prices_job(db)
-            message = "Force refresh of all prices completed successfully"
 
-        elif job_name == "reset_returns":
-            from app.workers.jobs import clear_all_returns, recompute_analytics_job
-            # First clear all returns data
-            clear_all_returns(db)
-            # Then recompute everything
-            await recompute_analytics_job(db)
-            message = "Returns reset and recomputed successfully"
-
-        else:
-            raise HTTPException(status_code=400, detail="Invalid job name")
-
-        return JobRunResponse(
-            status="success",
-            message=message,
-            started_at=started_at
-        )
-
-    except Exception as e:
-        return JobRunResponse(
-            status="failed",
-            message=f"Job failed: {str(e)}",
-            started_at=started_at
-        )
+@router.get("/running-status")
+async def get_running_status(
+    current_user: User = Depends(get_current_user)
+):
+    """Get the status of the currently running or last completed background job."""
+    return _job_status
 
 
 # =============================================================================

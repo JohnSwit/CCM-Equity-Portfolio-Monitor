@@ -162,19 +162,41 @@ export default function Upload() {
   };
 
   const handleRunMarketDataUpdate = async () => {
-    if (!confirm('Run market data update? This will fetch the latest prices for all securities.')) return;
+    if (!confirm('Run market data update? This will fetch the latest prices for all securities. This may take several minutes.')) return;
 
     setRunningJob(true);
     setJobResult(null);
     try {
       const data = await api.runJob('market_data_update');
-      setJobResult(data);
-      alert('Market data update completed: ' + data.message);
+
+      if (data.status === 'already_running') {
+        alert('A job is already running: ' + data.message);
+        // Still poll for completion
+      }
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusData = await api.getJobRunningStatus();
+          if (!statusData.running) {
+            clearInterval(pollInterval);
+            setRunningJob(false);
+            setJobResult(statusData);
+            if (statusData.status === 'success') {
+              alert('Market data update completed: ' + statusData.message);
+            } else {
+              alert('Job finished with status: ' + statusData.message);
+            }
+          }
+        } catch (pollErr) {
+          // Silently retry polling
+        }
+      }, 5000); // Poll every 5 seconds
+
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || error.message || 'Unknown error';
-      alert('Job failed: ' + errorMsg);
+      alert('Job failed to start: ' + errorMsg);
       setJobResult({ status: 'failed', message: errorMsg });
-    } finally {
       setRunningJob(false);
     }
   };
