@@ -39,32 +39,39 @@ async def check_and_run_if_stale():
     """
     try:
         from app.core.database import SessionLocal
-        from app.models import PricesEOD
+        from app.models import PricesEOD, ReturnsEOD
         from sqlalchemy import func
 
         db = SessionLocal()
         try:
             latest_price_date = db.query(func.max(PricesEOD.date)).scalar()
+            latest_return_date = db.query(func.max(ReturnsEOD.date)).scalar()
 
             if latest_price_date is None:
                 logger.info("No price data found - skipping staleness check")
                 return
 
             today = date.today()
-            days_since_update = (today - latest_price_date).days
+            days_since_prices = (today - latest_price_date).days
+            days_since_returns = (today - latest_return_date).days if latest_return_date else 999
 
-            # Consider data stale if more than 1 calendar day old
-            # (accounts for weekends: if last update is Friday and today is Monday, that's 3 days)
-            if days_since_update > 1:
+            # Consider data stale if prices OR returns are more than 1 calendar day old
+            # Also trigger if returns lag behind prices (analytics didn't complete)
+            prices_stale = days_since_prices > 1
+            returns_lag = latest_return_date and latest_price_date and latest_return_date < latest_price_date
+
+            if prices_stale or returns_lag:
                 logger.info(
-                    f"Market data is stale! Latest price date: {latest_price_date} "
-                    f"({days_since_update} days ago). Triggering immediate update..."
+                    f"Data needs update! Prices: {latest_price_date} ({days_since_prices}d ago), "
+                    f"Returns: {latest_return_date} ({days_since_returns}d ago). "
+                    f"Prices stale: {prices_stale}, Returns lagging: {returns_lag}. "
+                    f"Triggering immediate update..."
                 )
                 await run_daily_jobs()
             else:
                 logger.info(
-                    f"Market data is current (latest: {latest_price_date}, "
-                    f"{days_since_update} day(s) ago). No immediate update needed."
+                    f"Market data is current (prices: {latest_price_date}, "
+                    f"returns: {latest_return_date}). No immediate update needed."
                 )
         finally:
             db.close()

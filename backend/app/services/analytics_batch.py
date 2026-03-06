@@ -351,8 +351,8 @@ class BatchAnalyticsService:
                     # We start from inception date to capture all inception positions
                     incremental_start = None  # Full rebuild for inception accounts
                 elif last_pos_date and info['last_txn_date']:
-                    if last_pos_date >= info['last_txn_date'] and last_pos_date >= end_date - timedelta(days=5):
-                        # Positions are up to date, skip
+                    if last_pos_date >= info['last_txn_date'] and last_pos_date >= end_date - timedelta(days=1):
+                        # Positions are truly up to date (within 1 day of target), skip
                         accounts_skipped += 1
                         continue
                     elif last_pos_date >= info['last_txn_date']:
