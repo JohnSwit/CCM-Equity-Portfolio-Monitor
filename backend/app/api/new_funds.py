@@ -199,6 +199,7 @@ async def parse_portfolio_csv(
 
         # Parse CSV
         reader = csv.DictReader(io.StringIO(text))
+        parsed_rows = []
         allocations = []
         errors = []
 
@@ -242,45 +243,65 @@ async def parse_portfolio_csv(
                             pass
 
             if ticker and industry and pct_allocation is not None:
-                # Look up price for this ticker
-                price = 0.0
-                security_name = None
-
-                security = db.query(Security).filter(Security.symbol == ticker).first()
-                if not security:
-                    # Try with dot notation
-                    ticker_alt = ticker.replace('-', '.')
-                    security = db.query(Security).filter(Security.symbol == ticker_alt).first()
-
-                if security:
-                    latest_price = db.query(PricesEOD).filter(
-                        PricesEOD.security_id == security.id
-                    ).order_by(desc(PricesEOD.date)).first()
-
-                    if latest_price:
-                        price = float(latest_price.close)
-                    security_name = security.asset_name
-
-                allocations.append({
+                parsed_rows.append({
                     "ticker": ticker,
                     "industry": industry,
                     "pct_of_industry": pct_allocation,
-                    "price": price,
-                    "security_name": security_name,
-                    "dollar_amount": 0.0,  # Will be calculated on frontend
-                    "shares": 0  # Will be calculated on frontend
                 })
             else:
                 if ticker or industry or pct_allocation is not None:
                     errors.append(f"Row {row_num}: Missing required fields (ticker={ticker}, industry={industry}, allocation={pct_allocation})")
 
-        if not allocations and not errors:
+        if not parsed_rows and not errors:
             raise HTTPException(
                 status_code=400,
                 detail="Could not parse any allocations from CSV. Expected columns: Ticker, Industry, Allocation"
             )
 
-        logger.info(f"Parsed {len(allocations)} ticker allocations from portfolio CSV")
+        # Batch-fetch live prices for all tickers in one API call
+        unique_tickers = list(set(row["ticker"] for row in parsed_rows))
+        live_prices = _fetch_live_prices_batch(unique_tickers)
+
+        # Build allocations with live prices
+        for row in parsed_rows:
+            ticker = row["ticker"]
+            price = 0.0
+            security_name = None
+
+            if ticker in live_prices:
+                price = live_prices[ticker]["price"]
+
+            # Get security name from DB first
+            security = db.query(Security).filter(Security.symbol == ticker).first()
+            if not security:
+                ticker_alt = ticker.replace('-', '.')
+                security = db.query(Security).filter(Security.symbol == ticker_alt).first()
+
+            if security:
+                security_name = security.asset_name
+                # If live price wasn't available, fall back to DB EOD
+                if price == 0.0:
+                    latest_price = db.query(PricesEOD).filter(
+                        PricesEOD.security_id == security.id
+                    ).order_by(desc(PricesEOD.date)).first()
+                    if latest_price:
+                        price = float(latest_price.close)
+            elif price > 0.0:
+                # Ticker not in DB but we got a live price — fetch name from Tiingo
+                security_name = _fetch_ticker_meta(ticker, settings.TIINGO_API_KEY)
+
+            allocations.append({
+                "ticker": ticker,
+                "industry": row["industry"],
+                "pct_of_industry": row["pct_of_industry"],
+                "price": price,
+                "security_name": security_name,
+                "dollar_amount": 0.0,
+                "shares": 0
+            })
+
+        logger.info(f"Parsed {len(allocations)} ticker allocations from portfolio CSV "
+                     f"({len(live_prices)}/{len(unique_tickers)} got live prices)")
         if errors:
             logger.warning(f"Portfolio CSV parsing had {len(errors)} errors")
 
@@ -442,6 +463,57 @@ def _fetch_ticker_meta(ticker: str, api_key: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def _fetch_live_prices_batch(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Fetch live prices for multiple tickers in a single Tiingo IEX API call.
+    Returns dict mapping ticker -> {price, timestamp, source}.
+    Tickers not found on IEX are tried individually via Tiingo daily.
+    """
+    api_key = settings.TIINGO_API_KEY
+    if not api_key or not tickers:
+        return {}
+
+    results: Dict[str, Dict[str, Any]] = {}
+    tickers_str = ",".join(tickers)
+
+    try:
+        url = f"https://api.tiingo.com/iex/?tickers={tickers_str}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Token {api_key}"
+        }
+        resp = http_requests.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if data and isinstance(data, list):
+            for quote in data:
+                sym = quote.get("ticker", "").upper()
+                price = quote.get("tngoLast") or quote.get("last") or quote.get("prevClose")
+                if sym and price and price > 0:
+                    results[sym] = {
+                        "price": float(price),
+                        "timestamp": quote.get("timestamp", ""),
+                        "source": "tiingo_iex"
+                    }
+
+        logger.info(f"Batch IEX fetch: requested {len(tickers)}, got {len(results)} prices")
+
+    except Exception as e:
+        logger.warning(f"Batch IEX fetch failed: {e}")
+
+    # For any tickers not found on IEX, try Tiingo daily individually
+    missing = [t for t in tickers if t not in results]
+    if missing:
+        logger.info(f"Fetching {len(missing)} missing tickers from Tiingo daily")
+        for ticker in missing:
+            daily = _fetch_tiingo_daily_latest(ticker, api_key)
+            if daily:
+                results[ticker] = daily
+
+    return results
 
 
 @router.post("/get-ticker-price")
