@@ -66,6 +66,7 @@ export default function NewFundsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   // Load accounts on mount
   useEffect(() => {
@@ -812,37 +813,117 @@ export default function NewFundsPage() {
           </div>
         )}
 
-        {/* Execute Button */}
-        {tickerAllocations.length > 0 && (
-          <div className="card">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-zinc-900">Ready to Execute</h3>
-                <p className="text-sm text-zinc-500">
-                  {tickerAllocations.filter(a => a.ticker && a.shares > 0).length} tickers with{' '}
-                  <span className="font-medium tabular-nums">
-                    {tickerAllocations.filter(a => a.shares > 0).reduce((sum, a) => sum + a.shares, 0).toLocaleString()}
-                  </span> total shares
-                </p>
+        {/* Execute Button & Trade Preview */}
+        {tickerAllocations.length > 0 && (() => {
+          const validTrades = tickerAllocations
+            .filter(a => a.ticker && a.shares > 0)
+            .map(a => ({
+              ...a,
+              market_value: a.shares * a.price
+            }))
+            .sort((a, b) => b.market_value - a.market_value);
+          const totalMarketValue = validTrades.reduce((sum, t) => sum + t.market_value, 0);
+          const totalShares = validTrades.reduce((sum, t) => sum + t.shares, 0);
+
+          return (
+            <div className="card">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-zinc-900">Ready to Execute</h3>
+                  <p className="text-sm text-zinc-500">
+                    {validTrades.length} tickers with{' '}
+                    <span className="font-medium tabular-nums">
+                      {totalShares.toLocaleString()}
+                    </span> total shares
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowPreview(!showPreview)}
+                    className="btn btn-secondary"
+                  >
+                    {showPreview ? 'Hide Preview' : 'Preview Trade'}
+                  </button>
+                  <button
+                    onClick={handleExecute}
+                    disabled={loading || !selectedAccount}
+                    className="btn btn-primary"
+                  >
+                    {loading ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Generating...
+                      </>
+                    ) : 'Download Schwab CSV'}
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={handleExecute}
-                disabled={loading || !selectedAccount}
-                className="btn btn-primary"
-              >
-                {loading ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Generating...
-                  </>
-                ) : 'Download Schwab CSV'}
-              </button>
+
+              {/* Trade Preview Panel */}
+              {showPreview && (
+                <div className="mt-6 border-t border-zinc-200 pt-6">
+                  {/* Summary Stats */}
+                  <div className="grid grid-cols-3 gap-4 mb-5">
+                    <div className="text-center p-3 bg-blue-50 rounded-lg">
+                      <div className="text-xs text-blue-600 font-medium uppercase tracking-wider">Tickers</div>
+                      <div className="text-xl font-bold text-blue-900 tabular-nums">{validTrades.length}</div>
+                    </div>
+                    <div className="text-center p-3 bg-emerald-50 rounded-lg">
+                      <div className="text-xs text-emerald-600 font-medium uppercase tracking-wider">Total Shares</div>
+                      <div className="text-xl font-bold text-emerald-900 tabular-nums">{totalShares.toLocaleString()}</div>
+                    </div>
+                    <div className="text-center p-3 bg-violet-50 rounded-lg">
+                      <div className="text-xs text-violet-600 font-medium uppercase tracking-wider">Total Market Value</div>
+                      <div className="text-xl font-bold text-violet-900 tabular-nums">{formatCurrency(totalMarketValue)}</div>
+                    </div>
+                  </div>
+
+                  {/* Trade Table */}
+                  <div className="table-container mx-0">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Ticker</th>
+                          <th>Company</th>
+                          <th className="text-right">Price</th>
+                          <th className="text-right">Shares</th>
+                          <th className="text-right">Market Value</th>
+                          <th className="text-right">% of Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="tabular-nums">
+                        {validTrades.map((trade) => (
+                          <tr key={trade.id}>
+                            <td className="font-medium text-zinc-900">{trade.ticker}</td>
+                            <td className="text-zinc-600">{trade.security_name || '-'}</td>
+                            <td className="text-right text-zinc-600">${trade.price.toFixed(2)}</td>
+                            <td className="text-right font-medium">{trade.shares.toLocaleString()}</td>
+                            <td className="text-right font-medium">{formatCurrency(trade.market_value)}</td>
+                            <td className="text-right text-zinc-600">
+                              {totalMarketValue > 0 ? ((trade.market_value / totalMarketValue) * 100).toFixed(1) : '0.0'}%
+                            </td>
+                          </tr>
+                        ))}
+                        {/* Total Row */}
+                        <tr className="border-t-2 border-zinc-300 bg-zinc-50 font-bold">
+                          <td className="text-zinc-900">Total</td>
+                          <td></td>
+                          <td></td>
+                          <td className="text-right text-zinc-900">{totalShares.toLocaleString()}</td>
+                          <td className="text-right text-zinc-900">{formatCurrency(totalMarketValue)}</td>
+                          <td className="text-right text-zinc-900">100.0%</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Help Section */}
         <div className="card bg-zinc-50 border-zinc-200">
