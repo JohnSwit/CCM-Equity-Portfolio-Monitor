@@ -71,8 +71,9 @@ BENCHMARK_CONFIGS = {
     'ACWI': {'symbol': 'ACWI', 'name': 'MSCI ACWI'},
 }
 
-# Risk-free rate proxy (we'll use 0 for now, could fetch from FRED)
-RISK_FREE_RATE_ANNUAL = 0.05  # 5% annual, can be updated
+# Risk-free rate from configuration (configurable via RISK_FREE_RATE_ANNUAL env var)
+from app.core.config import settings as _settings
+RISK_FREE_RATE_ANNUAL = _settings.RISK_FREE_RATE_ANNUAL
 
 
 class FactorBenchmarkingService:
@@ -519,9 +520,21 @@ class FactorBenchmarkingService:
             logger.warning("No factor returns available")
             return None
 
-        # Align dates
+        # Align dates — inner join matches portfolio and factor return dates
+        pre_merge_port = len(port_df)
+        pre_merge_factor = len(factor_df)
         merged = port_df.join(factor_df, how='inner')
+
+        pre_dropna = len(merged)
         merged = merged.dropna()
+
+        if pre_merge_port - len(merged) > 0 or pre_merge_factor - len(merged) > 0:
+            logger.info(
+                f"Factor regression data alignment: portfolio={pre_merge_port}, factors={pre_merge_factor}, "
+                f"joined={pre_dropna}, after_dropna={len(merged)} "
+                f"(dropped {pre_merge_port - len(merged)} portfolio / "
+                f"{pre_merge_factor - len(merged)} factor dates)"
+            )
 
         if len(merged) < 30:
             logger.warning(f"Insufficient aligned data points: {len(merged)}")

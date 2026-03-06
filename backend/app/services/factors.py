@@ -141,6 +141,7 @@ class FactorsEngine:
 
         # Compute factor returns
         factor_returns = []
+        skipped_count = 0
 
         for date_val in returns_wide.index[1:]:  # Skip first (NaN)
             if pd.isna(date_val):
@@ -154,20 +155,41 @@ class FactorsEngine:
 
             spy_return = returns['SPY']
 
+            # Check all required ETFs have valid data before computing spreads.
+            # Skip dates with any missing ETF data to avoid biasing regression
+            # (previously set missing to 0, which corrupted factor returns).
+            etf_symbols = ['IWM', 'IVE', 'IVW', 'QUAL', 'SPLV', 'MTUM']
+            missing_etf = False
+            for etf in etf_symbols:
+                val = returns.get(etf)
+                if val is None or pd.isna(val):
+                    missing_etf = True
+                    break
+
+            if missing_etf:
+                skipped_count += 1
+                continue
+
             factors = {
                 'MKT': spy_return,
-                'SIZE': returns.get('IWM', 0) - spy_return if not pd.isna(returns.get('IWM')) else 0,
-                'VALUE': returns.get('IVE', 0) - spy_return if not pd.isna(returns.get('IVE')) else 0,
-                'GROWTH': returns.get('IVW', 0) - spy_return if not pd.isna(returns.get('IVW')) else 0,
-                'QUALITY': returns.get('QUAL', 0) - spy_return if not pd.isna(returns.get('QUAL')) else 0,
-                'VOL': returns.get('SPLV', 0) - spy_return if not pd.isna(returns.get('SPLV')) else 0,
-                'MOM': returns.get('MTUM', 0) - spy_return if not pd.isna(returns.get('MTUM')) else 0,
+                'SIZE': returns['IWM'] - spy_return,
+                'VALUE': returns['IVE'] - spy_return,
+                'GROWTH': returns['IVW'] - spy_return,
+                'QUALITY': returns['QUAL'] - spy_return,
+                'VOL': returns['SPLV'] - spy_return,
+                'MOM': returns['MTUM'] - spy_return,
             }
 
             factor_returns.append({
                 'date': date_val,
                 'factors': factors
             })
+
+        if skipped_count > 0:
+            logger.warning(
+                f"Skipped {skipped_count} dates with missing ETF data "
+                f"(computed {len(factor_returns)} valid factor return dates)"
+            )
 
         # Store factor returns
         count = 0
@@ -246,8 +268,17 @@ class FactorsEngine:
 
         factor_df = pd.DataFrame(factor_data)
 
-        # Merge
+        # Merge — inner join aligns dates between portfolio and factor returns
+        pre_merge_port = len(port_df)
+        pre_merge_factor = len(factor_df)
         merged = port_df.merge(factor_df, on='date', how='inner')
+
+        if pre_merge_port - len(merged) > 0 or pre_merge_factor - len(merged) > 0:
+            logger.info(
+                f"Factor regression merge: portfolio={pre_merge_port}, factors={pre_merge_factor}, "
+                f"aligned={len(merged)} (dropped {pre_merge_port - len(merged)} portfolio / "
+                f"{pre_merge_factor - len(merged)} factor dates)"
+            )
 
         if len(merged) < 60:
             return None
