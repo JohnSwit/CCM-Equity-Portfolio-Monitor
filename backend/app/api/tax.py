@@ -367,6 +367,10 @@ def simulate_selected_lots(
     if missing_ids:
         logger.warning(f"Some lot IDs not found or already closed: {missing_ids}")
 
+    # Batch-fetch all prices in one query instead of N+1
+    security_ids = list(set(lot.security_id for lot in lots))
+    price_map = tax_service._get_current_prices_batch(security_ids)
+
     # Build per-lot analysis
     lot_results = []
     totals = {
@@ -381,7 +385,7 @@ def simulate_selected_lots(
     }
 
     for lot in lots:
-        current_price = tax_service._get_current_price(lot.security_id)
+        current_price = price_map.get(lot.security_id)
         if not current_price:
             lot_results.append({
                 "lot_id": lot.id,

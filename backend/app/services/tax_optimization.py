@@ -255,12 +255,15 @@ class TaxService:
 
         lots = query.order_by(TaxLot.purchase_date).all()
 
+        # Batch-fetch all prices in one query instead of N+1
+        security_ids = list(set(lot.security_id for lot in lots))
+        price_map = self._get_current_prices_batch(security_ids)
+
         result = []
         today = date.today()
 
         for lot in lots:
-            # Get current price
-            current_price = self._get_current_price(lot.security_id)
+            current_price = price_map.get(lot.security_id)
             current_value = lot.remaining_shares * current_price if current_price else None
             unrealized = (current_value - lot.remaining_cost_basis) if current_value else None
             unrealized_pct = (unrealized / lot.remaining_cost_basis * 100) if unrealized and lot.remaining_cost_basis else None
@@ -776,3 +779,33 @@ class TaxService:
         ).order_by(PricesEOD.date.desc()).first()
 
         return price[0] if price else None
+
+    def _get_current_prices_batch(self, security_ids: List[int]) -> Dict[int, float]:
+        """
+        Get the most recent price for multiple securities in a single query.
+        Returns dict mapping security_id -> latest close price.
+        """
+        if not security_ids:
+            return {}
+
+        # Subquery: max date per security
+        subq = (
+            self.db.query(
+                PricesEOD.security_id,
+                func.max(PricesEOD.date).label("max_date")
+            )
+            .filter(PricesEOD.security_id.in_(security_ids))
+            .group_by(PricesEOD.security_id)
+            .subquery()
+        )
+
+        rows = (
+            self.db.query(PricesEOD.security_id, PricesEOD.close)
+            .join(subq, and_(
+                PricesEOD.security_id == subq.c.security_id,
+                PricesEOD.date == subq.c.max_date
+            ))
+            .all()
+        )
+
+        return {row.security_id: row.close for row in rows}
