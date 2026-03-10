@@ -331,11 +331,17 @@ class PortfolioStatisticsEngine:
         view_type: ViewType,
         view_id: int,
         confidence_levels: List[float] = [0.95, 0.99],
-        window: int = 252
+        window: int = 2520
     ) -> Dict:
         """
-        Calculate Value at Risk (VaR) and Conditional Value at Risk (CVaR/Expected Shortfall).
+        Calculate comprehensive tail risk metrics:
+        - Historical VaR and CVaR at multiple confidence levels
+        - Parametric (Gaussian) VaR using mean and std deviation
+        - Standard deviation stress scenarios (1/2/3 sigma moves)
+        - Distribution statistics (skewness, kurtosis)
         """
+        from scipy import stats as sp_stats
+
         # Get returns
         returns = self.db.query(ReturnsEOD).filter(
             and_(
@@ -344,21 +350,71 @@ class PortfolioStatisticsEngine:
             )
         ).order_by(desc(ReturnsEOD.date)).limit(window).all()
 
-        if len(returns) < 20:
-            return {'error': 'Insufficient data'}
+        if len(returns) < 63:
+            return {'error': 'Insufficient data (need at least 63 trading days)'}
 
         returns_arr = np.array([r.twr_return for r in reversed(returns)])
+        n_obs = len(returns_arr)
 
-        results = {}
+        # Distribution statistics
+        mu = float(np.mean(returns_arr))
+        sigma = float(np.std(returns_arr, ddof=1))
+        skew = float(sp_stats.skew(returns_arr))
+        kurt = float(sp_stats.kurtosis(returns_arr))  # excess kurtosis
+
+        results = {
+            'observation_count': n_obs,
+            'daily_mean': mu,
+            'daily_std': sigma,
+            'annualized_vol': sigma * np.sqrt(252),
+            'skewness': skew,
+            'excess_kurtosis': kurt,
+        }
+
+        # Historical and Parametric VaR/CVaR at each confidence level
         for conf in confidence_levels:
-            # Historical VaR
-            var = np.percentile(returns_arr, (1 - conf) * 100)
+            alpha = 1 - conf
 
-            # CVaR (Expected Shortfall) - average of returns worse than VaR
-            cvar = np.mean(returns_arr[returns_arr <= var])
+            # Historical VaR (empirical percentile)
+            hist_var = float(np.percentile(returns_arr, alpha * 100))
 
-            results[f'var_{int(conf*100)}'] = float(var)
-            results[f'cvar_{int(conf*100)}'] = float(cvar)
+            # Historical CVaR (expected shortfall) - mean of returns <= VaR
+            tail = returns_arr[returns_arr <= hist_var]
+            hist_cvar = float(np.mean(tail)) if len(tail) > 0 else hist_var
+
+            # Parametric VaR (Gaussian)
+            z = sp_stats.norm.ppf(alpha)
+            param_var = float(mu + z * sigma)
+
+            # Parametric CVaR (Gaussian)
+            # E[X | X <= VaR] = mu - sigma * phi(z) / alpha
+            param_cvar = float(mu - sigma * sp_stats.norm.pdf(z) / alpha)
+
+            conf_key = int(conf * 100)
+            results[f'var_{conf_key}'] = hist_var
+            results[f'cvar_{conf_key}'] = hist_cvar
+            results[f'parametric_var_{conf_key}'] = param_var
+            results[f'parametric_cvar_{conf_key}'] = param_cvar
+
+        # Standard deviation stress scenarios (daily moves)
+        results['stress_1sigma'] = float(mu - 1 * sigma)
+        results['stress_2sigma'] = float(mu - 2 * sigma)
+        results['stress_3sigma'] = float(mu - 3 * sigma)
+
+        # Count of actual occurrences beyond each sigma threshold
+        results['count_beyond_1sigma'] = int(np.sum(returns_arr < (mu - 1 * sigma)))
+        results['count_beyond_2sigma'] = int(np.sum(returns_arr < (mu - 2 * sigma)))
+        results['count_beyond_3sigma'] = int(np.sum(returns_arr < (mu - 3 * sigma)))
+
+        # Worst observed days
+        sorted_returns = np.sort(returns_arr)
+        results['worst_day'] = float(sorted_returns[0])
+        results['worst_5_avg'] = float(np.mean(sorted_returns[:5]))
+        results['worst_10_avg'] = float(np.mean(sorted_returns[:10]))
+
+        # Expected vs actual: under Gaussian, how many days should exceed 2/3 sigma?
+        results['expected_beyond_2sigma'] = round(n_obs * sp_stats.norm.cdf(-2), 1)
+        results['expected_beyond_3sigma'] = round(n_obs * sp_stats.norm.cdf(-3), 1)
 
         return results
 

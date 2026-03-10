@@ -111,7 +111,7 @@ def get_var_cvar(
     view_type: str,
     view_id: int,
     confidence_levels: str = Query('95,99', description="Comma-separated confidence levels (e.g., '95,99')"),
-    window: int = Query(252, ge=20, le=1000),
+    window: int = Query(2520, ge=63, le=5040),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -151,7 +151,7 @@ def get_comprehensive_statistics(
     view_type: str,
     view_id: int,
     benchmark: str = Query('SPY'),
-    window: int = Query(252, ge=20, le=1000),
+    window: int = Query(2520, ge=63, le=5040),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):

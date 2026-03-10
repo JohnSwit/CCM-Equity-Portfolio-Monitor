@@ -71,7 +71,7 @@ export default function PortfolioStatisticsPage() {
   const [selectedView, setSelectedView] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [benchmark, setBenchmark] = useState('SP500');
-  const [window, setWindow] = useState(252);
+  const [window, setWindow] = useState(2520);
 
   // Statistics data
   const [contributionData, setContributionData] = useState<any>(null);
@@ -395,10 +395,11 @@ export default function PortfolioStatisticsPage() {
                 onChange={(e) => setWindow(Number(e.target.value))}
                 className="select"
               >
-                <option value="63">3 Months (~63 days)</option>
-                <option value="126">6 Months (~126 days)</option>
                 <option value="252">1 Year (~252 days)</option>
                 <option value="504">2 Years (~504 days)</option>
+                <option value="1260">5 Years (~1,260 days)</option>
+                <option value="2520">10 Years (~2,520 days)</option>
+                <option value="5040">20 Years (~5,040 days)</option>
               </select>
             </div>
           </div>
@@ -555,33 +556,117 @@ export default function PortfolioStatisticsPage() {
 
             {/* VaR & CVaR */}
             {varData && !varData.error && (
-              <div className="card">
-                <div className="card-header">
-                  <h2 className="card-title">Tail Risk (VaR & CVaR)</h2>
-                  <span className="text-xs text-zinc-500">Historical simulation | {window} days</span>
+              <div className="space-y-4">
+                {/* Historical VaR/CVaR */}
+                <div className="card">
+                  <div className="card-header">
+                    <h2 className="card-title">Tail Risk (VaR & CVaR)</h2>
+                    <span className="text-xs text-zinc-500">
+                      {varData.observation_count ? `${varData.observation_count} trading days` : `${window} days`} | Historical & Parametric
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="metric-card metric-card-red">
+                      <div className="metric-label">VaR 95% (Historical)</div>
+                      <div className="metric-value-lg">{formatPercent(varData.var_95)}</div>
+                      <div className="text-xs text-zinc-500 mt-1">1-day, 95% confidence</div>
+                    </div>
+                    <div className="metric-card metric-card-red">
+                      <div className="metric-label">CVaR 95% (Historical)</div>
+                      <div className="metric-value-lg">{formatPercent(varData.cvar_95)}</div>
+                      <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
+                    </div>
+                    <div className="metric-card metric-card-red">
+                      <div className="metric-label">VaR 99% (Historical)</div>
+                      <div className="metric-value-lg">{formatPercent(varData.var_99)}</div>
+                      <div className="text-xs text-zinc-500 mt-1">1-day, 99% confidence</div>
+                    </div>
+                    <div className="metric-card metric-card-red">
+                      <div className="metric-label">CVaR 99% (Historical)</div>
+                      <div className="metric-value-lg">{formatPercent(varData.cvar_99)}</div>
+                      <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
+                    </div>
+                  </div>
+                  {/* Parametric (Gaussian) VaR */}
+                  {varData.parametric_var_95 != null && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                      <div className="metric-card metric-card-orange">
+                        <div className="metric-label">VaR 95% (Parametric)</div>
+                        <div className="metric-value-lg">{formatPercent(varData.parametric_var_95)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">Gaussian assumption</div>
+                      </div>
+                      <div className="metric-card metric-card-orange">
+                        <div className="metric-label">CVaR 95% (Parametric)</div>
+                        <div className="metric-value-lg">{formatPercent(varData.parametric_cvar_95)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">Gaussian expected shortfall</div>
+                      </div>
+                      <div className="metric-card metric-card-orange">
+                        <div className="metric-label">VaR 99% (Parametric)</div>
+                        <div className="metric-value-lg">{formatPercent(varData.parametric_var_99)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">Gaussian assumption</div>
+                      </div>
+                      <div className="metric-card metric-card-orange">
+                        <div className="metric-label">CVaR 99% (Parametric)</div>
+                        <div className="metric-value-lg">{formatPercent(varData.parametric_cvar_99)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">Gaussian expected shortfall</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="metric-card metric-card-red">
-                    <div className="metric-label">VaR 95%</div>
-                    <div className="metric-value-lg">{formatPercent(varData.var_95)}</div>
-                    <div className="text-xs text-zinc-500 mt-1">1-day, 95% confidence</div>
+
+                {/* Stress Scenarios & Distribution */}
+                {varData.stress_1sigma != null && (
+                  <div className="card">
+                    <div className="card-header">
+                      <h2 className="card-title">Stress Scenarios & Distribution</h2>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      <div className="metric-card">
+                        <div className="metric-label">1-Sigma Down</div>
+                        <div className="metric-value-lg text-amber-600">{formatPercent(varData.stress_1sigma)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">
+                          {varData.count_beyond_1sigma} actual occurrences
+                        </div>
+                      </div>
+                      <div className="metric-card">
+                        <div className="metric-label">2-Sigma Down</div>
+                        <div className="metric-value-lg text-orange-600">{formatPercent(varData.stress_2sigma)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">
+                          {varData.count_beyond_2sigma} actual vs {varData.expected_beyond_2sigma} expected
+                        </div>
+                      </div>
+                      <div className="metric-card">
+                        <div className="metric-label">3-Sigma Down</div>
+                        <div className="metric-value-lg text-red-600">{formatPercent(varData.stress_3sigma)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">
+                          {varData.count_beyond_3sigma} actual vs {varData.expected_beyond_3sigma} expected
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                      <div className="metric-card">
+                        <div className="metric-label">Worst Day</div>
+                        <div className="metric-value-lg text-red-700">{formatPercent(varData.worst_day)}</div>
+                      </div>
+                      <div className="metric-card">
+                        <div className="metric-label">Worst 5 Avg</div>
+                        <div className="metric-value-lg text-red-600">{formatPercent(varData.worst_5_avg)}</div>
+                      </div>
+                      <div className="metric-card">
+                        <div className="metric-label">Annualized Vol</div>
+                        <div className="metric-value-lg">{formatPercent(varData.annualized_vol)}</div>
+                      </div>
+                      <div className="metric-card">
+                        <div className="metric-label">Skew / Kurtosis</div>
+                        <div className="metric-value-lg">{varData.skewness?.toFixed(2)} / {varData.excess_kurtosis?.toFixed(2)}</div>
+                        <div className="text-xs text-zinc-500 mt-1">
+                          {(varData.skewness ?? 0) < -0.5 ? 'Left-skewed (fat left tail)' : (varData.skewness ?? 0) > 0.5 ? 'Right-skewed' : 'Roughly symmetric'}
+                          {(varData.excess_kurtosis ?? 0) > 1 ? ' | Fat tails' : ''}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="metric-card metric-card-red">
-                    <div className="metric-label">CVaR 95%</div>
-                    <div className="metric-value-lg">{formatPercent(varData.cvar_95)}</div>
-                    <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
-                  </div>
-                  <div className="metric-card metric-card-red">
-                    <div className="metric-label">VaR 99%</div>
-                    <div className="metric-value-lg">{formatPercent(varData.var_99)}</div>
-                    <div className="text-xs text-zinc-500 mt-1">1-day, 99% confidence</div>
-                  </div>
-                  <div className="metric-card metric-card-red">
-                    <div className="metric-label">CVaR 99%</div>
-                    <div className="metric-value-lg">{formatPercent(varData.cvar_99)}</div>
-                    <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
-                  </div>
-                </div>
+                )}
               </div>
             )}
 
