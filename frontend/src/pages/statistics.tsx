@@ -1399,49 +1399,77 @@ export default function PortfolioStatisticsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.entries(factorBenchmarking.factor_contributions || {})
-                          .filter(([_, factor]: [string, any]) => !hideInsignificant || factor.p_value < 0.10)
-                          .sort((a: any, b: any) => {
-                            const [_, fa] = a;
-                            const [__, fb] = b;
-                            if (factorSortBy === 'contribution') return Math.abs(fb.contribution) - Math.abs(fa.contribution);
-                            if (factorSortBy === 'beta') return Math.abs(fb.beta) - Math.abs(fa.beta);
-                            if (factorSortBy === 't_stat') return Math.abs(fb.t_stat) - Math.abs(fa.t_stat);
-                            return fa.name.localeCompare(fb.name);
-                          })
-                          .map(([key, factor]: [string, any]) => (
-                          <tr key={key}>
-                            <td className="font-medium text-zinc-900">{factor.name}</td>
-                            <td className="text-right tabular-nums">{factor.beta?.toFixed(3)}</td>
-                            <td className="text-right text-xs text-zinc-500 tabular-nums">
-                              [{factor.beta_ci?.lower?.toFixed(2)}, {factor.beta_ci?.upper?.toFixed(2)}]
-                            </td>
-                            <td className={`text-right tabular-nums ${(factor.factor_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
-                              {factor.factor_return?.toFixed(2)}%
-                            </td>
-                            <td className={`text-right font-semibold tabular-nums ${(factor.contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
-                              {factor.contribution?.toFixed(2)}%
-                            </td>
-                            <td className="text-right tabular-nums">
-                              {factor.contribution_pct?.toFixed(1)}%
-                            </td>
-                            <td className="text-right tabular-nums">{factor.t_stat?.toFixed(2)}</td>
-                            <td className={`text-right tabular-nums ${factor.vif > 10 ? 'text-red-600 font-bold' : factor.vif > 5 ? 'text-amber-600' : ''}`}>
-                              {factor.vif?.toFixed(1)}
-                            </td>
-                            <td className="text-right">
-                              {factor.p_value < 0.01 ? (
-                                <span className="badge badge-success">***</span>
-                              ) : factor.p_value < 0.05 ? (
-                                <span className="badge badge-success">**</span>
-                              ) : factor.p_value < 0.10 ? (
-                                <span className="badge badge-warning">*</span>
-                              ) : (
-                                <span className="text-zinc-400">-</span>
+                        {(() => {
+                          const allFactors = Object.entries(factorBenchmarking.factor_contributions || {})
+                            .filter(([_, factor]: [string, any]) => !hideInsignificant || factor.p_value < 0.10)
+                            .sort((a: any, b: any) => {
+                              const [_, fa] = a;
+                              const [__, fb] = b;
+                              if (factorSortBy === `contribution`) return Math.abs(fb.contribution) - Math.abs(fa.contribution);
+                              if (factorSortBy === `beta`) return Math.abs(fb.beta) - Math.abs(fa.beta);
+                              if (factorSortBy === `t_stat`) return Math.abs(fb.t_stat) - Math.abs(fa.t_stat);
+                              return fa.name.localeCompare(fb.name);
+                            });
+                          const styleFactors = allFactors.filter(([_, f]: [string, any]) => (f.category || `style`) === `style`);
+                          const macroFactors = allFactors.filter(([_, f]: [string, any]) => f.category === `macro`);
+
+                          const renderFactorRow = ([key, factor]: [string, any]) => (
+                            <tr key={key}>
+                              <td className="font-medium text-zinc-900">{factor.name}</td>
+                              <td className="text-right tabular-nums">{factor.beta?.toFixed(3)}</td>
+                              <td className="text-right text-xs text-zinc-500 tabular-nums">
+                                [{factor.beta_ci?.lower?.toFixed(2)}, {factor.beta_ci?.upper?.toFixed(2)}]
+                              </td>
+                              <td className={`text-right tabular-nums ${(factor.factor_return || 0) >= 0 ? `value-positive` : `value-negative`}`}>
+                                {factor.factor_return?.toFixed(2)}%
+                              </td>
+                              <td className={`text-right font-semibold tabular-nums ${(factor.contribution || 0) >= 0 ? `value-positive` : `value-negative`}`}>
+                                {factor.contribution?.toFixed(2)}%
+                              </td>
+                              <td className="text-right tabular-nums">
+                                {factor.contribution_pct?.toFixed(1)}%
+                              </td>
+                              <td className="text-right tabular-nums">{factor.t_stat?.toFixed(2)}</td>
+                              <td className={`text-right tabular-nums ${factor.vif > 10 ? `text-red-600 font-bold` : factor.vif > 5 ? `text-amber-600` : ``}`}>
+                                {factor.vif?.toFixed(1)}
+                              </td>
+                              <td className="text-right">
+                                {factor.p_value < 0.01 ? (
+                                  <span className="badge badge-success">***</span>
+                                ) : factor.p_value < 0.05 ? (
+                                  <span className="badge badge-success">**</span>
+                                ) : factor.p_value < 0.10 ? (
+                                  <span className="badge badge-warning">*</span>
+                                ) : (
+                                  <span className="text-zinc-400">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+
+                          return (
+                            <>
+                              {styleFactors.length > 0 && (
+                                <tr className="bg-zinc-50/80">
+                                  <td colSpan={9} className="text-xs font-semibold text-zinc-500 uppercase tracking-wider py-1.5 px-3">
+                                    Style Factors
+                                  </td>
+                                </tr>
                               )}
-                            </td>
-                          </tr>
-                        ))}
+                              {styleFactors.map(renderFactorRow)}
+                              {macroFactors.length > 0 && (
+                                <>
+                                  <tr className="bg-amber-50/60 border-t-2 border-amber-200/50">
+                                    <td colSpan={9} className="text-xs font-semibold text-amber-700 uppercase tracking-wider py-1.5 px-3">
+                                      Macro Overlay
+                                    </td>
+                                  </tr>
+                                  {macroFactors.map(renderFactorRow)}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
                         {/* Alpha row */}
                         <tr className="bg-indigo-50/50">
                           <td className="font-semibold text-indigo-900">Alpha (Skill)</td>

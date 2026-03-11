@@ -37,28 +37,29 @@ logger = logging.getLogger(__name__)
 DEFAULT_FACTOR_MODELS = {
     'US_CORE': {
         'name': 'US Core Factor Model',
-        'description': 'Core US equity factors using liquid ETF proxies',
+        'description': 'Core US equity factors using liquid ETF proxies with macro overlay',
         'factors_config': {
-            'MKT': {'symbol': 'SPY', 'source': 'tiingo', 'spread_vs': None, 'name': 'Market'},
-            'SIZE': {'symbol': 'IWM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Size (Small-Cap)'},
-            'VALUE': {'symbol': 'IWD', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Value'},
-            'MOM': {'symbol': 'MTUM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Momentum'},
-            'QUAL': {'symbol': 'QUAL', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Quality'},
-            'LOWVOL': {'symbol': 'USMV', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Low Volatility'},
+            'MKT': {'symbol': 'SPY', 'source': 'tiingo', 'spread_vs': None, 'name': 'Market', 'category': 'style'},
+            'SIZE': {'symbol': 'IWM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Size', 'category': 'style'},
+            'GROWTH_VALUE': {'symbol': 'IWF', 'source': 'tiingo', 'spread_vs': 'IWD', 'name': 'Growth / Value', 'category': 'style'},
+            'MOM': {'symbol': 'MTUM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Momentum', 'category': 'style'},
+            'QUAL': {'symbol': 'QUAL', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Quality', 'category': 'style'},
+            'LOWVOL': {'symbol': 'SPLV', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Low Volatility', 'category': 'style'},
+            'DURATION': {'symbol': 'TLT', 'source': 'tiingo', 'spread_vs': None, 'name': 'Duration', 'category': 'macro'},
         }
     },
     'US_EXTENDED': {
         'name': 'US Extended Factor Model',
-        'description': 'Extended factor model with growth and dividend factors',
+        'description': 'Extended factor model with growth, dividend, and macro factors',
         'factors_config': {
-            'MKT': {'symbol': 'SPY', 'source': 'tiingo', 'spread_vs': None, 'name': 'Market'},
-            'SIZE': {'symbol': 'IWM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Size'},
-            'VALUE': {'symbol': 'IWD', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Value'},
-            'GROWTH': {'symbol': 'IWF', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Growth'},
-            'MOM': {'symbol': 'MTUM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Momentum'},
-            'QUAL': {'symbol': 'QUAL', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Quality'},
-            'LOWVOL': {'symbol': 'USMV', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Low Volatility'},
-            'DIVYLD': {'symbol': 'DVY', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Dividend Yield'},
+            'MKT': {'symbol': 'SPY', 'source': 'tiingo', 'spread_vs': None, 'name': 'Market', 'category': 'style'},
+            'SIZE': {'symbol': 'IWM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Size', 'category': 'style'},
+            'GROWTH_VALUE': {'symbol': 'IWF', 'source': 'tiingo', 'spread_vs': 'IWD', 'name': 'Growth / Value', 'category': 'style'},
+            'MOM': {'symbol': 'MTUM', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Momentum', 'category': 'style'},
+            'QUAL': {'symbol': 'QUAL', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Quality', 'category': 'style'},
+            'LOWVOL': {'symbol': 'SPLV', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Low Volatility', 'category': 'style'},
+            'DIVYLD': {'symbol': 'DVY', 'source': 'tiingo', 'spread_vs': 'SPY', 'name': 'Dividend Yield', 'category': 'style'},
+            'DURATION': {'symbol': 'TLT', 'source': 'tiingo', 'spread_vs': None, 'name': 'Duration', 'category': 'macro'},
         }
     }
 }
@@ -90,13 +91,23 @@ class FactorBenchmarkingService:
         self.data_manager = DataProviderManager(fred_api_key=fred_api_key, tiingo_api_key=tiingo_api_key)
 
     def ensure_default_models(self):
-        """Ensure default factor models exist in database"""
+        """Ensure default factor models exist in database and are up to date"""
         for code, config in DEFAULT_FACTOR_MODELS.items():
             existing = self.db.query(FactorModelDefinition).filter(
                 FactorModelDefinition.code == code
             ).first()
 
-            if not existing:
+            if existing:
+                # Update existing model if config has changed
+                import json
+                existing_json = json.dumps(existing.factors_config, sort_keys=True)
+                new_json = json.dumps(config['factors_config'], sort_keys=True)
+                if existing_json != new_json:
+                    existing.factors_config = config['factors_config']
+                    existing.name = config['name']
+                    existing.description = config.get('description', existing.description)
+                    logger.info(f"Updated factor model {code} with new config")
+            else:
                 model = FactorModelDefinition(
                     code=code,
                     name=config['name'],
@@ -1081,6 +1092,7 @@ class FactorBenchmarkingService:
             'factor_contributions': {
                 f: {
                     'name': factor_names_display.get(f, f),
+                    'category': model.factors_config.get(f, {}).get('category', 'style') if model else 'style',
                     'beta': reg_results['betas'].get(f, 0),
                     'beta_ci': reg_results['beta_ci'].get(f, {}),
                     'factor_return': factor_cum_returns.get(f, 0) * 100,
