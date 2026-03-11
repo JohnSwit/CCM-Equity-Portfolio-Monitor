@@ -395,6 +395,10 @@ class ActiveCoverageResponse(BaseModel):
     bear_case: Optional[str] = None
     alert: Optional[str] = None
     has_alert: bool = False  # Computed from alert field
+    action_type: Optional[str] = None
+    action_price: Optional[float] = None
+    has_action: bool = False
+    action_diff_pct: Optional[float] = None
     # Portfolio data
     market_value: Optional[float] = None
     weight_pct: Optional[float] = None
@@ -486,6 +490,11 @@ class IdeaPipelineResponse(BaseModel):
     next_steps: Optional[str] = None
     notes: Optional[str] = None
     has_next_steps: bool = False
+    action_type: Optional[str] = None
+    action_price: Optional[float] = None
+    has_action: bool = False
+    action_diff_pct: Optional[float] = None
+    current_price: Optional[float] = None
     is_active: bool
     # Model data (same structure as coverage)
     model_data: Optional[CoverageModelDataResponse] = None
