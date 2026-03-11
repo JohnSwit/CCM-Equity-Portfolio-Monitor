@@ -347,6 +347,7 @@ def simulate_selected_lots(
     returns per-lot and aggregate tax impact analysis.
     """
     from app.models.models import TaxLot, PricesEOD
+    from sqlalchemy.orm import joinedload
 
     if not request.lot_ids:
         raise HTTPException(status_code=400, detail="No lot IDs provided")
@@ -354,8 +355,11 @@ def simulate_selected_lots(
     tax_service = TaxService(db)
     today = date.today()
 
-    # Fetch all selected lots with their relationships
-    lots = db.query(TaxLot).filter(
+    # Fetch all selected lots with their relationships (eager load to avoid N+1)
+    lots = db.query(TaxLot).options(
+        joinedload(TaxLot.account),
+        joinedload(TaxLot.security)
+    ).filter(
         TaxLot.id.in_(request.lot_ids),
         TaxLot.is_closed == False
     ).all()

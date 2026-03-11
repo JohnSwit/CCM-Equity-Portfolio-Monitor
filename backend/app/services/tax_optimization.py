@@ -4,8 +4,8 @@ wash sale detection, and tax-loss harvesting recommendations.
 """
 from datetime import date, timedelta
 from typing import List, Dict, Optional, Tuple
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_, or_, func, text
 import logging
 
 from app.models.models import (
@@ -241,7 +241,10 @@ class TaxService:
         include_closed: bool = False
     ) -> List[Dict]:
         """Get tax lots with current values. Only returns imported lots (not transaction-built)."""
-        query = self.db.query(TaxLot).join(Security).join(Account)
+        query = self.db.query(TaxLot).options(
+            joinedload(TaxLot.account),
+            joinedload(TaxLot.security)
+        )
 
         # Only include imported tax lots (not transaction-built ones)
         query = query.filter(TaxLot.import_log_id.isnot(None))
@@ -297,7 +300,10 @@ class TaxService:
         tax_year: Optional[int] = None
     ) -> Tuple[List[Dict], Dict]:
         """Get realized gains with summary. Returns gains from transaction-built tax lots (FIFO matching)."""
-        query = self.db.query(RealizedGain).join(Security).join(Account)
+        query = self.db.query(RealizedGain).options(
+            joinedload(RealizedGain.account),
+            joinedload(RealizedGain.security)
+        )
 
         # Only include realized gains from transaction-built tax lots (not imported ones)
         query = query.join(TaxLot, RealizedGain.tax_lot_id == TaxLot.id)
@@ -439,24 +445,32 @@ class TaxService:
                 by_security[lot["security_id"]] = []
             by_security[lot["security_id"]].append(lot)
 
-        candidates = []
         today = date.today()
-        wash_sale_restricted = []
 
+        # Pre-filter to securities with enough loss (avoid wash sale checks for non-candidates)
+        candidate_security_ids = []
         for security_id, security_lots in by_security.items():
             total_unrealized = sum(l["unrealized_gain_loss"] or 0 for l in security_lots)
+            if total_unrealized < -min_loss:
+                candidate_security_ids.append(security_id)
 
-            if total_unrealized >= -min_loss:
-                continue  # Not enough loss to harvest
+        # Batch wash sale check: single query for ALL candidate securities
+        wash_sale_map = self._batch_check_wash_sales(account_id, candidate_security_ids)
 
+        candidates = []
+        wash_sale_restricted = []
+
+        for security_id in candidate_security_ids:
+            security_lots = by_security[security_id]
+            total_unrealized = sum(l["unrealized_gain_loss"] or 0 for l in security_lots)
             symbol = security_lots[0]["symbol"]
 
             # Check for recent purchases (wash sale risk)
             recent_cutoff = today - timedelta(days=WASH_SALE_WINDOW_DAYS)
             recent_purchase = any(l["purchase_date"] >= recent_cutoff for l in security_lots)
 
-            # Check if there are pending wash sale issues
-            pending_wash = self._has_pending_wash_sale(account_id, security_id)
+            # Use pre-fetched batch result
+            pending_wash = wash_sale_map.get(security_id, False)
 
             short_term_loss = sum(
                 (l["unrealized_gain_loss"] or 0)
@@ -497,6 +511,34 @@ class TaxService:
         candidates.sort(key=lambda x: x["unrealized_loss"])
 
         return candidates, wash_sale_restricted
+
+    def _batch_check_wash_sales(
+        self,
+        account_id: Optional[int],
+        security_ids: List[int]
+    ) -> Dict[int, bool]:
+        """Batch check wash sales for multiple securities in a single query."""
+        if not security_ids:
+            return {}
+
+        today = date.today()
+        window_start = today - timedelta(days=WASH_SALE_WINDOW_DAYS)
+        buy_types = [TransactionType.BUY, TransactionType.DIVIDEND_REINVEST, TransactionType.TRANSFER_IN]
+
+        query = self.db.query(Transaction.security_id).filter(
+            and_(
+                Transaction.security_id.in_(security_ids),
+                Transaction.transaction_type.in_(buy_types),
+                Transaction.trade_date >= window_start
+            )
+        )
+        if account_id:
+            query = query.filter(Transaction.account_id == account_id)
+
+        # Get distinct security_ids that have recent purchases
+        wash_security_ids = set(row[0] for row in query.distinct().all())
+
+        return {sid: sid in wash_security_ids for sid in security_ids}
 
     def _has_pending_wash_sale(self, account_id: Optional[int], security_id: int) -> bool:
         """Check if selling would trigger a wash sale."""
@@ -783,29 +825,21 @@ class TaxService:
     def _get_current_prices_batch(self, security_ids: List[int]) -> Dict[int, float]:
         """
         Get the most recent price for multiple securities in a single query.
+        Uses DISTINCT ON (PostgreSQL) for maximum efficiency.
         Returns dict mapping security_id -> latest close price.
         """
         if not security_ids:
             return {}
 
-        # Subquery: max date per security
-        subq = (
-            self.db.query(
-                PricesEOD.security_id,
-                func.max(PricesEOD.date).label("max_date")
-            )
-            .filter(PricesEOD.security_id.in_(security_ids))
-            .group_by(PricesEOD.security_id)
-            .subquery()
-        )
+        # Use raw SQL with DISTINCT ON for optimal performance on PostgreSQL
+        # This avoids the expensive subquery + self-join pattern
+        id_list = ','.join(str(int(sid)) for sid in security_ids)
+        sql = text(f"""
+            SELECT DISTINCT ON (security_id) security_id, close
+            FROM prices_eod
+            WHERE security_id IN ({id_list})
+            ORDER BY security_id, date DESC
+        """)
+        rows = self.db.execute(sql).fetchall()
 
-        rows = (
-            self.db.query(PricesEOD.security_id, PricesEOD.close)
-            .join(subq, and_(
-                PricesEOD.security_id == subq.c.security_id,
-                PricesEOD.date == subq.c.max_date
-            ))
-            .all()
-        )
-
-        return {row.security_id: row.close for row in rows}
+        return {row[0]: row[1] for row in rows}

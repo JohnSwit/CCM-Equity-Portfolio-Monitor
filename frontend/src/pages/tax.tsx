@@ -167,6 +167,11 @@ export default function TaxPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Per-tab loading states
+  const [lotsLoading, setLotsLoading] = useState(false);
+  const [harvestLoading, setHarvestLoading] = useState(false);
+  const [realizedLoading, setRealizedLoading] = useState(false);
+
   // Data
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
@@ -218,15 +223,26 @@ export default function TaxPage() {
   }, [user]);
 
   useEffect(() => {
-    if (user && activeTab === 'summary') {
+    if (!user) return;
+    // Clear stale data from other tabs when account/year changes
+    setLots([]);
+    setHarvestCandidates([]);
+    setRealizedGains([]);
+    setSelectedLotIds(new Set());
+    setLotSimResult(null);
+  }, [selectedAccount, taxYear]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (activeTab === 'summary') {
       loadSummary();
-    } else if (user && activeTab === 'lots') {
+    } else if (activeTab === 'lots') {
       loadLots();
-    } else if (user && activeTab === 'harvest') {
+    } else if (activeTab === 'harvest') {
       loadHarvestCandidates();
-    } else if (user && activeTab === 'realized') {
+    } else if (activeTab === 'realized') {
       loadRealizedGains();
-    } else if (user && activeTab === 'import') {
+    } else if (activeTab === 'import') {
       loadImportHistory();
     }
   }, [activeTab, selectedAccount, taxYear]);
@@ -259,6 +275,7 @@ export default function TaxPage() {
 
   const loadLots = async () => {
     try {
+      setLotsLoading(true);
       const data = await api.getTaxLots({
         account_id: selectedAccount || undefined,
         include_closed: false,
@@ -266,11 +283,14 @@ export default function TaxPage() {
       setLots(data.lots || []);
     } catch (err: any) {
       console.error('Failed to load lots:', err);
+    } finally {
+      setLotsLoading(false);
     }
   };
 
   const loadHarvestCandidates = async () => {
     try {
+      setHarvestLoading(true);
       const data = await api.getHarvestCandidates({
         account_id: selectedAccount || undefined,
         min_loss: 100,
@@ -278,11 +298,14 @@ export default function TaxPage() {
       setHarvestCandidates(data.candidates || []);
     } catch (err: any) {
       console.error('Failed to load harvest candidates:', err);
+    } finally {
+      setHarvestLoading(false);
     }
   };
 
   const loadRealizedGains = async () => {
     try {
+      setRealizedLoading(true);
       const data = await api.getRealizedGains({
         account_id: selectedAccount || undefined,
         tax_year: taxYear,
@@ -290,6 +313,8 @@ export default function TaxPage() {
       setRealizedGains(data.gains || []);
     } catch (err: any) {
       console.error('Failed to load realized gains:', err);
+    } finally {
+      setRealizedLoading(false);
     }
   };
 
@@ -737,8 +762,14 @@ export default function TaxPage() {
 
         {activeTab === 'lots' && (
           <div className="space-y-4">
+            {lotsLoading && (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <span className="ml-3 text-zinc-500">Loading tax lots...</span>
+              </div>
+            )}
             {/* Simulation Results (shown at top when available) */}
-            {lotSimResult && (
+            {!lotsLoading && lotSimResult && (
               <div className="space-y-4">
                 {/* Totals Summary */}
                 <div className="card">
@@ -865,7 +896,7 @@ export default function TaxPage() {
             )}
 
             {/* Filters */}
-            <div className="card">
+            {!lotsLoading && <><div className="card">
               <div className="flex flex-wrap gap-4 items-end">
                 <div>
                   <label className="label">Symbol</label>
@@ -1036,12 +1067,20 @@ export default function TaxPage() {
                 </table>
               </div>
             </div>
+            </>}
 
           </div>
         )}
 
         {activeTab === 'harvest' && (
           <div className="space-y-6">
+            {harvestLoading && (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <span className="ml-3 text-zinc-500">Loading harvest candidates...</span>
+              </div>
+            )}
+            {!harvestLoading && <>
             <div className="alert alert-info">
               <div className="flex items-start gap-3">
                 <svg className="h-5 w-5 text-blue-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1173,13 +1212,20 @@ export default function TaxPage() {
                 </table>
               </div>
             </div>
+          </>}
           </div>
         )}
 
         {activeTab === 'realized' && (
           <div className="space-y-4">
+            {realizedLoading && (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <span className="ml-3 text-zinc-500">Loading realized gains...</span>
+              </div>
+            )}
             {/* Info banner + rebuild button */}
-            <div className="card">
+            {!realizedLoading && <><div className="card">
               <div className="flex justify-between items-center">
                 <div>
                   <p className="text-sm text-zinc-600">
@@ -1277,6 +1323,7 @@ export default function TaxPage() {
                 </table>
               </div>
             </div>
+          </>}
           </div>
         )}
 

@@ -592,6 +592,8 @@ class APIClient {
     bull_case?: string;
     bear_case?: string;
     alert?: string;
+    action_type?: string;
+    action_price?: number;
   }) {
     const response = await this.client.put(`/coverage/${coverageId}`, data);
     return response.data;
@@ -705,6 +707,8 @@ class APIClient {
     next_steps?: string;
     notes?: string;
     is_active?: boolean;
+    action_type?: string;
+    action_price?: number;
   }) {
     const response = await this.client.put(`/ideas/${ideaId}`, data);
     return response.data;
