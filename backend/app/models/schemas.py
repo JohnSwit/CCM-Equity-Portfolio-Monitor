@@ -253,6 +253,8 @@ class ActiveCoverageCreate(BaseModel):
     bull_case: Optional[str] = None
     bear_case: Optional[str] = None
     alert: Optional[str] = None
+    action_type: Optional[str] = None
+    action_price: Optional[float] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -269,6 +271,8 @@ class ActiveCoverageUpdate(BaseModel):
     bull_case: Optional[str] = None
     bear_case: Optional[str] = None
     alert: Optional[str] = None
+    action_type: Optional[str] = None
+    action_price: Optional[float] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -424,6 +428,8 @@ class IdeaPipelineCreate(BaseModel):
     bear_case: Optional[str] = None
     next_steps: Optional[str] = None
     notes: Optional[str] = None
+    action_type: Optional[str] = None
+    action_price: Optional[float] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -442,6 +448,8 @@ class IdeaPipelineUpdate(BaseModel):
     bear_case: Optional[str] = None
     next_steps: Optional[str] = None
     notes: Optional[str] = None
+    action_type: Optional[str] = None
+    action_price: Optional[float] = None
     is_active: Optional[bool] = None
 
     model_config = {"protected_namespaces": ()}

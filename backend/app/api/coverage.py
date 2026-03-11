@@ -226,6 +226,14 @@ def _build_coverage_response(
         "bear_case": coverage.bear_case,
         "alert": coverage.alert,
         "has_alert": bool(coverage.alert and coverage.alert.strip()),
+        "action_type": coverage.action_type,
+        "action_price": coverage.action_price,
+        "has_action": bool(coverage.action_type),
+        "action_diff_pct": (
+            ((coverage.action_price / current_price) - 1) * 100
+            if coverage.action_type and coverage.action_price and current_price and current_price > 0
+            else None
+        ),
         "market_value": market_value,
         "weight_pct": weight_pct,
         "current_price": current_price,
@@ -479,6 +487,15 @@ def update_coverage(
         coverage.bear_case = data.bear_case
     if data.alert is not None:
         coverage.alert = data.alert
+    if data.action_type is not None:
+        if data.action_type == '':
+            # Clear action item
+            coverage.action_type = None
+            coverage.action_price = None
+        else:
+            coverage.action_type = data.action_type.upper()
+    if data.action_price is not None:
+        coverage.action_price = data.action_price
 
     db.commit()
     db.refresh(coverage)

@@ -12,8 +12,10 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
+from sqlalchemy import and_
 from app.models.models import (
-    User, Analyst, IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument
+    User, Analyst, IdeaPipeline, IdeaPipelineModelData, IdeaPipelineDocument,
+    Security, PricesEOD
 )
 from app.models.schemas import (
     AnalystResponse,
@@ -136,6 +138,17 @@ def _build_model_data_response(data: IdeaPipelineModelData) -> CoverageModelData
     )
 
 
+def _get_current_price(db: Session, ticker: str) -> float:
+    """Get current price for a ticker from PricesEOD"""
+    security = db.query(Security).filter(Security.symbol == ticker).first()
+    if not security:
+        return None
+    price_row = db.query(PricesEOD.close).filter(
+        PricesEOD.security_id == security.id
+    ).order_by(PricesEOD.date.desc()).first()
+    return float(price_row[0]) if price_row else None
+
+
 def _build_idea_response(db: Session, idea: IdeaPipeline) -> dict:
     """Build an idea response with model data and documents"""
     # Get model data if available
@@ -150,6 +163,14 @@ def _build_idea_response(db: Session, idea: IdeaPipeline) -> dict:
     documents = db.query(IdeaPipelineDocument).filter(
         IdeaPipelineDocument.idea_id == idea.id
     ).order_by(IdeaPipelineDocument.uploaded_at.desc()).all()
+
+    # Get current price for action item % diff
+    current_price = _get_current_price(db, idea.ticker)
+
+    # Calculate action diff pct
+    action_diff_pct = None
+    if idea.action_type and idea.action_price and current_price and current_price > 0:
+        action_diff_pct = ((idea.action_price / current_price) - 1) * 100
 
     return {
         "id": idea.id,
@@ -168,6 +189,11 @@ def _build_idea_response(db: Session, idea: IdeaPipeline) -> dict:
         "next_steps": idea.next_steps,
         "notes": idea.notes,
         "has_next_steps": bool(idea.next_steps and idea.next_steps.strip()),
+        "action_type": getattr(idea, 'action_type', None),
+        "action_price": getattr(idea, 'action_price', None),
+        "has_action": bool(getattr(idea, 'action_type', None)),
+        "action_diff_pct": action_diff_pct,
+        "current_price": current_price,
         "is_active": idea.is_active,
         "model_data": model_data,
         "documents": documents,
@@ -298,6 +324,15 @@ def update_idea(
         idea.next_steps = data.next_steps
     if data.notes is not None:
         idea.notes = data.notes
+    if data.action_type is not None:
+        if data.action_type == '':
+            # Clear action item
+            idea.action_type = None
+            idea.action_price = None
+        else:
+            idea.action_type = data.action_type.upper()
+    if data.action_price is not None:
+        idea.action_price = data.action_price
     if data.is_active is not None:
         idea.is_active = data.is_active
 

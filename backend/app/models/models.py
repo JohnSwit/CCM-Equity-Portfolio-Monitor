@@ -532,6 +532,10 @@ class ActiveCoverage(Base):
     # Alert/action item - triggers UI icon when populated
     alert = Column(Text, nullable=True)
 
+    # Buy/Sell action item
+    action_type = Column(String, nullable=True)   # 'BUY' or 'SELL', null = no action
+    action_price = Column(Float, nullable=True)    # Target buy/sell price
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -682,6 +686,10 @@ class IdeaPipeline(Base):
     bear_case = Column(Text, nullable=True)
     next_steps = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
+
+    # Buy/Sell action item
+    action_type = Column(String, nullable=True)   # 'BUY' or 'SELL', null = no action
+    action_price = Column(Float, nullable=True)    # Target buy/sell price
 
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

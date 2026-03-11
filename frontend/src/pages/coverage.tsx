@@ -85,6 +85,10 @@ interface Coverage {
   bear_case: string | null;
   alert: string | null;
   has_alert: boolean;
+  action_type: string | null;
+  action_price: number | null;
+  has_action: boolean;
+  action_diff_pct: number | null;
   market_value: number | null;
   weight_pct: number | null;
   current_price: number | null;
@@ -124,6 +128,8 @@ export default function CoveragePage() {
   const [editBullCase, setEditBullCase] = useState('');
   const [editBearCase, setEditBearCase] = useState('');
   const [editAlert, setEditAlert] = useState('');
+  const [editActionType, setEditActionType] = useState('');
+  const [editActionPrice, setEditActionPrice] = useState('');
 
   // Snapshot diff view
   const [viewingSnapshotDiff, setViewingSnapshotDiff] = useState<{ coverageId: number; snapshotId: number } | null>(null);
@@ -225,6 +231,8 @@ export default function CoveragePage() {
         bull_case: editBullCase || undefined,
         bear_case: editBearCase || undefined,
         alert: editAlert || undefined,
+        action_type: editActionType || '',
+        action_price: editActionPrice ? parseFloat(editActionPrice) : undefined,
       });
 
       setEditingCoverage(null);
@@ -307,6 +315,8 @@ export default function CoveragePage() {
     setEditBullCase(coverage.bull_case || '');
     setEditBearCase(coverage.bear_case || '');
     setEditAlert(coverage.alert || '');
+    setEditActionType(coverage.action_type || '');
+    setEditActionPrice(coverage.action_price ? String(coverage.action_price) : '');
   };
 
   const handleToggleModelUpdated = async (coverageId: number, currentValue: boolean) => {
@@ -686,11 +696,28 @@ export default function CoveragePage() {
                               !
                             </span>
                           )}
+                          {coverage.has_action && (
+                            <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold ${coverage.action_type === 'BUY' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}
+                              title={`${coverage.action_type} @ ${coverage.action_price?.toFixed(2)} (${coverage.action_diff_pct != null ? (coverage.action_diff_pct > 0 ? '+' : '') + coverage.action_diff_pct.toFixed(1) + '%' : 'N/A'})`}
+                            >
+                              {coverage.action_type === 'BUY' ? 'B' : 'S'}
+                            </span>
+                          )}
                           <span>{coverage.ticker}</span>
                           <svg className={`h-4 w-4 text-zinc-400 transition-transform ${expandedTicker === coverage.id ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </div>
+                        {coverage.has_action && coverage.action_price && (
+                          <div className={`text-xs mt-0.5 font-medium ${coverage.action_type === 'BUY' ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {coverage.action_type} @ ${coverage.action_price.toFixed(2)}
+                            {coverage.action_diff_pct != null && (
+                              <span className={coverage.action_diff_pct < 0 ? 'text-emerald-600' : 'text-red-500'}>
+                                {' '}({coverage.action_diff_pct > 0 ? '+' : ''}{coverage.action_diff_pct.toFixed(1)}%)
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="text-center">
                         <button
@@ -976,6 +1003,74 @@ export default function CoveragePage() {
                                 />
                               </div>
 
+                              {/* Action Item Section */}
+                              <div className="bg-blue-50 rounded-lg border border-blue-200 p-5 lg:col-span-2">
+                                <h3 className="text-sm font-semibold text-blue-800 mb-3 flex items-center gap-2">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                  </svg>
+                                  Action Item
+                                </h3>
+                                <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
+                                  <select
+                                    value={coverage.action_type || ''}
+                                    onChange={async (e) => {
+                                      const val = e.target.value;
+                                      try {
+                                        await api.updateCoverage(coverage.id, {
+                                          action_type: val,
+                                          ...(val === '' ? { action_price: 0 } : {})
+                                        });
+                                        await loadData();
+                                      } catch (err) {
+                                        console.error('Failed to update action type', err);
+                                      }
+                                    }}
+                                    className="text-sm bg-white border border-blue-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
+                                  >
+                                    <option value="">No Action</option>
+                                    <option value="BUY">Buy</option>
+                                    <option value="SELL">Sell</option>
+                                  </select>
+                                  {coverage.action_type && (
+                                    <>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm text-blue-700 font-medium">Target Price:</span>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          defaultValue={coverage.action_price || ''}
+                                          onBlur={async (e) => {
+                                            const price = parseFloat(e.target.value);
+                                            if (!isNaN(price) && price > 0) {
+                                              try {
+                                                await api.updateCoverage(coverage.id, { action_price: price });
+                                                await loadData();
+                                              } catch (err) {
+                                                console.error('Failed to update action price', err);
+                                              }
+                                            }
+                                          }}
+                                          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                          placeholder="0.00"
+                                          className="w-28 text-sm bg-white border border-blue-200 rounded-lg px-3 py-2 tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
+                                        />
+                                      </div>
+                                      {coverage.action_price && coverage.current_price && (
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-sm text-zinc-500">Current: ${coverage.current_price.toFixed(2)}</span>
+                                          {coverage.action_diff_pct != null && (
+                                            <span className={`text-sm font-semibold ${coverage.action_diff_pct < 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                              ({coverage.action_diff_pct > 0 ? '+' : ''}{coverage.action_diff_pct.toFixed(1)}%)
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
                               {/* Snapshots/Version History Section */}
                               <div className="bg-white rounded-lg border border-zinc-200 p-5 lg:col-span-2">
                                 <h3 className="text-sm font-semibold text-zinc-900 mb-4">Model Version History</h3>
@@ -1157,6 +1252,32 @@ export default function CoveragePage() {
                     placeholder="Action items or alerts (will show warning icon if populated)..."
                     className="input resize-none border-amber-200 focus:border-amber-500 focus:ring-amber-500/20"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label text-blue-700">Action Type</label>
+                    <select
+                      value={editActionType}
+                      onChange={(e) => setEditActionType(e.target.value)}
+                      className="input"
+                    >
+                      <option value="">None</option>
+                      <option value="BUY">Buy</option>
+                      <option value="SELL">Sell</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label text-blue-700">Action Price</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editActionPrice}
+                      onChange={(e) => setEditActionPrice(e.target.value)}
+                      placeholder="Target price..."
+                      className="input"
+                      disabled={!editActionType}
+                    />
+                  </div>
                 </div>
               </div>
               <div className="modal-footer">
