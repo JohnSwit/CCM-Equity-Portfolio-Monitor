@@ -458,7 +458,7 @@ export default function PortfolioStatisticsPage() {
 
                 <div className="divider"></div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div className="group relative">
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Downside Deviation</div>
                     <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.downside_deviation)}</div>
@@ -468,6 +468,11 @@ export default function PortfolioStatisticsPage() {
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Mean Return (Ann.)</div>
                     <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.mean_return)}</div>
                     <div className="tooltip-hover">Average daily return scaled to an annual figure. Represents the expected annual return based on the historical average.</div>
+                  </div>
+                  <div className="group relative">
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Active Return (Ann.)</div>
+                    <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.active_return)}</div>
+                    <div className="tooltip-hover">Annualized excess return of the portfolio over the benchmark. Positive means the portfolio outperformed; negative means it underperformed.</div>
                   </div>
                   <div className="group relative">
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Skewness</div>
