@@ -70,7 +70,7 @@ export default function PortfolioStatisticsPage() {
   const [views, setViews] = useState<any[]>([]);
   const [selectedView, setSelectedView] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [benchmark, setBenchmark] = useState('SP500');
+  const [benchmark, setBenchmark] = useState('SPY');
   const [window, setWindow] = useState(2520);
 
   // Statistics data
@@ -385,7 +385,8 @@ export default function PortfolioStatisticsPage() {
                 onChange={(e) => setBenchmark(e.target.value)}
                 className="select"
               >
-                <option value="SP500">S&P 500</option>
+                <option value="SPY">S&P 500 (SPY)</option>
+                <option value="QQQ">Nasdaq 100 (QQQ)</option>
               </select>
             </div>
             <div>
