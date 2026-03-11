@@ -427,43 +427,56 @@ export default function PortfolioStatisticsPage() {
                   <h2 className="card-title">Risk & Volatility Metrics</h2>
                   <span className="text-xs text-zinc-500">vs {volatilityData.benchmark} | {volatilityData.window_days} days</span>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="metric-card metric-card-red">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  <div className="metric-card metric-card-red group relative">
                     <div className="metric-label">Annualized Volatility</div>
                     <div className="metric-value-lg">{formatPercent(volatilityData.annualized_volatility)}</div>
+                    <div className="tooltip-hover">Standard deviation of daily returns, annualized. Measures total portfolio risk - higher values indicate greater price uncertainty.</div>
                   </div>
-                  <div className="metric-card metric-card-orange">
+                  <div className="metric-card metric-card-orange group relative">
                     <div className="metric-label">Tracking Error</div>
                     <div className="metric-value-lg">{formatPercent(volatilityData.tracking_error)}</div>
+                    <div className="tooltip-hover">Annualized std deviation of active returns (portfolio minus benchmark). Measures how closely the portfolio follows its benchmark.</div>
                   </div>
-                  <div className="metric-card metric-card-blue">
+                  <div className="metric-card metric-card-blue group relative">
                     <div className="metric-label">Information Ratio</div>
                     <div className="metric-value-lg">{formatNumber(volatilityData.information_ratio)}</div>
+                    <div className="tooltip-hover">Active return divided by tracking error. Measures risk-adjusted outperformance vs benchmark. Above 0.5 is good, above 1.0 is excellent.</div>
                   </div>
-                  <div className="metric-card metric-card-purple">
+                  <div className="metric-card metric-card-green group relative">
+                    <div className="metric-label">Sharpe Ratio</div>
+                    <div className="metric-value-lg">{formatNumber(volatilityData.sharpe_ratio)}</div>
+                    <div className="tooltip-hover">Annualized return divided by annualized volatility. Measures return per unit of total risk. Above 1.0 is good, above 2.0 is excellent.</div>
+                  </div>
+                  <div className="metric-card metric-card-purple group relative">
                     <div className="metric-label">Sortino Ratio</div>
                     <div className="metric-value-lg">{formatNumber(volatilityData.sortino_ratio)}</div>
+                    <div className="tooltip-hover">Annualized return divided by downside deviation. Like Sharpe but only penalizes downside volatility, not upside. Higher is better.</div>
                   </div>
                 </div>
 
                 <div className="divider"></div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
+                  <div className="group relative">
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Downside Deviation</div>
                     <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.downside_deviation)}</div>
+                    <div className="tooltip-hover">Annualized volatility of negative returns only. Unlike standard deviation, it ignores upside moves and focuses purely on loss risk.</div>
                   </div>
-                  <div>
+                  <div className="group relative">
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Mean Return (Ann.)</div>
                     <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatPercent(volatilityData.mean_return)}</div>
+                    <div className="tooltip-hover">Average daily return scaled to an annual figure. Represents the expected annual return based on the historical average.</div>
                   </div>
-                  <div>
+                  <div className="group relative">
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Skewness</div>
                     <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatNumber(volatilityData.skewness)}</div>
+                    <div className="tooltip-hover">Measures asymmetry of the return distribution. Negative skew means larger left tail (more extreme losses than gains). Zero is symmetric.</div>
                   </div>
-                  <div>
-                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Kurtosis</div>
+                  <div className="group relative">
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">Excess Kurtosis</div>
                     <div className="text-lg font-semibold text-zinc-800 tabular-nums">{formatNumber(volatilityData.kurtosis)}</div>
+                    <div className="tooltip-hover">Measures tail fatness relative to a normal distribution. Positive values mean fatter tails (more extreme events than expected). Zero is normal.</div>
                   </div>
                 </div>
               </div>
@@ -556,117 +569,33 @@ export default function PortfolioStatisticsPage() {
 
             {/* VaR & CVaR */}
             {varData && !varData.error && (
-              <div className="space-y-4">
-                {/* Historical VaR/CVaR */}
-                <div className="card">
-                  <div className="card-header">
-                    <h2 className="card-title">Tail Risk (VaR & CVaR)</h2>
-                    <span className="text-xs text-zinc-500">
-                      {varData.observation_count ? `${varData.observation_count} trading days` : `${window} days`} | Historical & Parametric
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="metric-card metric-card-red">
-                      <div className="metric-label">VaR 95% (Historical)</div>
-                      <div className="metric-value-lg">{formatPercent(varData.var_95)}</div>
-                      <div className="text-xs text-zinc-500 mt-1">1-day, 95% confidence</div>
-                    </div>
-                    <div className="metric-card metric-card-red">
-                      <div className="metric-label">CVaR 95% (Historical)</div>
-                      <div className="metric-value-lg">{formatPercent(varData.cvar_95)}</div>
-                      <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
-                    </div>
-                    <div className="metric-card metric-card-red">
-                      <div className="metric-label">VaR 99% (Historical)</div>
-                      <div className="metric-value-lg">{formatPercent(varData.var_99)}</div>
-                      <div className="text-xs text-zinc-500 mt-1">1-day, 99% confidence</div>
-                    </div>
-                    <div className="metric-card metric-card-red">
-                      <div className="metric-label">CVaR 99% (Historical)</div>
-                      <div className="metric-value-lg">{formatPercent(varData.cvar_99)}</div>
-                      <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
-                    </div>
-                  </div>
-                  {/* Parametric (Gaussian) VaR */}
-                  {varData.parametric_var_95 != null && (
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                      <div className="metric-card metric-card-orange">
-                        <div className="metric-label">VaR 95% (Parametric)</div>
-                        <div className="metric-value-lg">{formatPercent(varData.parametric_var_95)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">Gaussian assumption</div>
-                      </div>
-                      <div className="metric-card metric-card-orange">
-                        <div className="metric-label">CVaR 95% (Parametric)</div>
-                        <div className="metric-value-lg">{formatPercent(varData.parametric_cvar_95)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">Gaussian expected shortfall</div>
-                      </div>
-                      <div className="metric-card metric-card-orange">
-                        <div className="metric-label">VaR 99% (Parametric)</div>
-                        <div className="metric-value-lg">{formatPercent(varData.parametric_var_99)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">Gaussian assumption</div>
-                      </div>
-                      <div className="metric-card metric-card-orange">
-                        <div className="metric-label">CVaR 99% (Parametric)</div>
-                        <div className="metric-value-lg">{formatPercent(varData.parametric_cvar_99)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">Gaussian expected shortfall</div>
-                      </div>
-                    </div>
-                  )}
+              <div className="card">
+                <div className="card-header">
+                  <h2 className="card-title">Tail Risk (VaR & CVaR)</h2>
+                  <span className="text-xs text-zinc-500">Historical simulation | {varData.observation_count || window} days</span>
                 </div>
-
-                {/* Stress Scenarios & Distribution */}
-                {varData.stress_1sigma != null && (
-                  <div className="card">
-                    <div className="card-header">
-                      <h2 className="card-title">Stress Scenarios & Distribution</h2>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                      <div className="metric-card">
-                        <div className="metric-label">1-Sigma Down</div>
-                        <div className="metric-value-lg text-amber-600">{formatPercent(varData.stress_1sigma)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">
-                          {varData.count_beyond_1sigma} actual occurrences
-                        </div>
-                      </div>
-                      <div className="metric-card">
-                        <div className="metric-label">2-Sigma Down</div>
-                        <div className="metric-value-lg text-orange-600">{formatPercent(varData.stress_2sigma)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">
-                          {varData.count_beyond_2sigma} actual vs {varData.expected_beyond_2sigma} expected
-                        </div>
-                      </div>
-                      <div className="metric-card">
-                        <div className="metric-label">3-Sigma Down</div>
-                        <div className="metric-value-lg text-red-600">{formatPercent(varData.stress_3sigma)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">
-                          {varData.count_beyond_3sigma} actual vs {varData.expected_beyond_3sigma} expected
-                        </div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                      <div className="metric-card">
-                        <div className="metric-label">Worst Day</div>
-                        <div className="metric-value-lg text-red-700">{formatPercent(varData.worst_day)}</div>
-                      </div>
-                      <div className="metric-card">
-                        <div className="metric-label">Worst 5 Avg</div>
-                        <div className="metric-value-lg text-red-600">{formatPercent(varData.worst_5_avg)}</div>
-                      </div>
-                      <div className="metric-card">
-                        <div className="metric-label">Annualized Vol</div>
-                        <div className="metric-value-lg">{formatPercent(varData.annualized_vol)}</div>
-                      </div>
-                      <div className="metric-card">
-                        <div className="metric-label">Skew / Kurtosis</div>
-                        <div className="metric-value-lg">{varData.skewness?.toFixed(2)} / {varData.excess_kurtosis?.toFixed(2)}</div>
-                        <div className="text-xs text-zinc-500 mt-1">
-                          {(varData.skewness ?? 0) < -0.5 ? 'Left-skewed (fat left tail)' : (varData.skewness ?? 0) > 0.5 ? 'Right-skewed' : 'Roughly symmetric'}
-                          {(varData.excess_kurtosis ?? 0) > 1 ? ' | Fat tails' : ''}
-                        </div>
-                      </div>
-                    </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">VaR 95%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.var_95)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">1-day, 95% confidence</div>
                   </div>
-                )}
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">CVaR 95%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.cvar_95)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
+                  </div>
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">VaR 99%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.var_99)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">1-day, 99% confidence</div>
+                  </div>
+                  <div className="metric-card metric-card-red">
+                    <div className="metric-label">CVaR 99%</div>
+                    <div className="metric-value-lg">{formatPercent(varData.cvar_99)}</div>
+                    <div className="text-xs text-zinc-500 mt-1">Expected shortfall</div>
+                  </div>
+                </div>
               </div>
             )}
 

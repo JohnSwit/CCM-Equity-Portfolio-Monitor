@@ -159,7 +159,10 @@ class PortfolioStatisticsEngine:
     ) -> Dict:
         """
         Calculate volatility and related risk metrics.
+        Uses sample std (ddof=1) for unbiased estimation.
         """
+        from scipy import stats
+
         # Get portfolio returns
         returns = self.db.query(ReturnsEOD).filter(
             and_(
@@ -173,6 +176,7 @@ class PortfolioStatisticsEngine:
 
         returns = list(reversed(returns))
         port_returns = np.array([r.twr_return for r in returns])
+        n = len(port_returns)
 
         # Get benchmark returns
         dates = [r.date for r in returns]
@@ -186,44 +190,56 @@ class PortfolioStatisticsEngine:
         bench_dict = {b.date: b.return_value for b in bench_returns}
         bench_returns_arr = np.array([bench_dict.get(d, 0) for d in dates])
 
-        # Active returns
+        # Active returns (portfolio minus benchmark)
         active_returns = port_returns - bench_returns_arr
 
-        # Calculate metrics
-        volatility = np.std(port_returns) * np.sqrt(self.trading_days_per_year)
-        active_vol = np.std(active_returns) * np.sqrt(self.trading_days_per_year)
+        # Daily and annualized mean return
+        daily_mean = float(np.mean(port_returns))
+        mean_return = daily_mean * self.trading_days_per_year
 
-        # Tracking error
-        tracking_error = active_vol
+        # Annualized volatility (sample std, ddof=1)
+        daily_vol = float(np.std(port_returns, ddof=1))
+        volatility = daily_vol * np.sqrt(self.trading_days_per_year)
 
-        # Information ratio
-        mean_active_return = np.mean(active_returns) * self.trading_days_per_year
-        information_ratio = mean_active_return / tracking_error if tracking_error > 0 else 0
+        # Tracking error (annualized std of active returns)
+        tracking_error = float(np.std(active_returns, ddof=1)) * np.sqrt(self.trading_days_per_year)
 
-        # Downside deviation (Sortino)
-        downside_returns = port_returns[port_returns < 0]
-        downside_deviation = np.std(downside_returns) * np.sqrt(self.trading_days_per_year) if len(downside_returns) > 0 else 0
+        # Information ratio = annualized active return / tracking error
+        mean_active_return = float(np.mean(active_returns)) * self.trading_days_per_year
+        information_ratio = mean_active_return / tracking_error if tracking_error > 0 else 0.0
 
-        mean_return = np.mean(port_returns) * self.trading_days_per_year
-        sortino_ratio = mean_return / downside_deviation if downside_deviation > 0 else 0
+        # Sharpe ratio = (annualized return - risk-free) / annualized vol
+        # Assume risk-free rate of 0 (excess return Sharpe)
+        sharpe_ratio = mean_return / volatility if volatility > 0 else 0.0
 
-        # Skewness and Kurtosis
-        from scipy import stats
-        skewness = stats.skew(port_returns)
-        kurtosis = stats.kurtosis(port_returns)
+        # Downside deviation (Sortino convention):
+        # DD = sqrt( (1/N) * sum( min(r_i - MAR, 0)^2 ) ) * sqrt(252)
+        # MAR (Minimum Acceptable Return) = 0
+        # Uses ALL returns, not just negative ones
+        downside_diff = np.minimum(port_returns, 0.0)
+        downside_deviation = float(np.sqrt(np.mean(downside_diff ** 2))) * np.sqrt(self.trading_days_per_year)
+
+        # Sortino ratio = annualized return / annualized downside deviation
+        sortino_ratio = mean_return / downside_deviation if downside_deviation > 0 else 0.0
+
+        # Skewness (measures asymmetry; negative = fat left tail)
+        skewness = float(stats.skew(port_returns))
+
+        # Excess kurtosis (measures tail fatness; >0 = fatter than normal)
+        kurtosis = float(stats.kurtosis(port_returns))
 
         return {
             'annualized_volatility': float(volatility),
             'tracking_error': float(tracking_error),
-            'active_volatility': float(active_vol),
             'information_ratio': float(information_ratio),
+            'sharpe_ratio': float(sharpe_ratio),
             'downside_deviation': float(downside_deviation),
             'sortino_ratio': float(sortino_ratio),
             'skewness': float(skewness),
             'kurtosis': float(kurtosis),
             'mean_return': float(mean_return),
             'active_return': float(mean_active_return),
-            'window_days': len(returns),
+            'window_days': n,
             'benchmark': benchmark_code
         }
 
