@@ -1356,7 +1356,7 @@ export default function PortfolioStatisticsPage() {
                               {factorBenchmarking.tracking_error_pct?.toFixed(2)}%
                             </div>
                             <div className="text-xs text-zinc-400 mt-1">
-                              Active Adj. R\u00b2: {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
+                              Active Adj. R²: {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
                             </div>
                           </div>
                         </div>
@@ -1388,7 +1388,7 @@ export default function PortfolioStatisticsPage() {
                             {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
                           </div>
                           <div className="text-xs text-zinc-400 mt-1">
-                            (R\u00b2: {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%)
+                            (R²: {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%)
                           </div>
                         </div>
                         <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
@@ -1513,7 +1513,7 @@ export default function PortfolioStatisticsPage() {
                               </th>
                               <th className="text-right" title="95% confidence interval">Beta CI</th>
                               <th className="text-right">Factor Ret</th>
-                              <th className="text-right" title={isBenchRelative ? "Active Beta \u00d7 Factor Return" : "Beta \u00d7 Factor Return"}>
+                              <th className="text-right" title={isBenchRelative ? "Active Beta × Factor Return" : "Beta × Factor Return"}>
                                 {isBenchRelative ? 'Active Contrib' : 'Contrib'}
                               </th>
                               <th className="text-right" title={isBenchRelative ? "% of active return" : "% of total return"}>
