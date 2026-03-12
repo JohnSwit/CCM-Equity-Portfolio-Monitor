@@ -1602,9 +1602,6 @@ export default function PortfolioStatisticsPage() {
                     );
                   })()}
 
-                  </div>
-
-
                   {/* Diagnostics Panel */}
                   {showDiagnostics && factorBenchmarking.diagnostics && (
                     <div className="mt-6 pt-6 border-t border-zinc-200">
