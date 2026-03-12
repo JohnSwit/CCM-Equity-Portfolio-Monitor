@@ -1118,6 +1118,14 @@ class ClassificationService:
         "NICE": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
         "MNDY": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Software"},
         "ARM": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Semiconductors"},
+        # ── Recent S&P 500 additions / ticker changes ──
+        "MRSH": {"sector": "Financials", "gics_sector": "Financials", "gics_industry": "Insurance Brokers"},
+        "CRH": {"sector": "Materials", "gics_sector": "Materials", "gics_industry": "Construction Materials"},
+        "CIEN": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Communications Equipment"},
+        "CVNA": {"sector": "Consumer Discretionary", "gics_sector": "Consumer Discretionary", "gics_industry": "Internet Retail"},
+        "XYZ": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Transaction & Payment Processing"},
+        "PSKY": {"sector": "Communication", "gics_sector": "Communication Services", "gics_industry": "Entertainment"},
+        "SNDK": {"sector": "Technology", "gics_sector": "Information Technology", "gics_industry": "Technology Hardware"},
     }
 
     def __init__(self, db: Session):

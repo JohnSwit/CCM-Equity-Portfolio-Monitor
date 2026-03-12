@@ -518,11 +518,27 @@ class BrinsonAttributionAnalyzer:
             sector_lookup[c.symbol] = c.sector or c.gics_sector
 
         # Enrich benchmark holdings — prefer SectorClassification (same as portfolio),
-        # fall back to BenchmarkConstituent.sector from the SPY file
+        # fall back to BenchmarkConstituent.sector, then ClassificationService.STATIC_MAPPING
+        from app.services.data_sourcing import ClassificationService
         enriched_holdings = []
         unclassified_count = 0
         for holding in benchmark_holdings:
-            sector = sector_lookup.get(holding.symbol) or holding.sector
+            # Skip blank/empty symbols (data quality issue in benchmark files)
+            if not holding.symbol or not holding.symbol.strip():
+                continue
+
+            norm_sym = TickerNormalizer.normalize(holding.symbol)
+            # Priority 1: SectorClassification table (unified taxonomy)
+            sector = sector_lookup.get(norm_sym) or sector_lookup.get(holding.symbol)
+            # Priority 2: BenchmarkConstituent.sector from the SPY file
+            if not sector:
+                sector = holding.sector
+            # Priority 3: Static mapping fallback (recent S&P adds, ticker changes)
+            if not sector:
+                static = ClassificationService.STATIC_MAPPING.get(norm_sym)
+                if static:
+                    sector = static.get('sector')
+
             if sector:
                 enriched_holdings.append({
                     'symbol': holding.symbol,
@@ -531,6 +547,7 @@ class BrinsonAttributionAnalyzer:
                 })
             else:
                 unclassified_count += 1
+                logger.debug(f"Brinson: Unclassified benchmark constituent: {holding.symbol} (weight={holding.weight})")
 
         if unclassified_count > 0:
             logger.warning(f"Brinson: {unclassified_count} benchmark constituents have no sector classification")
