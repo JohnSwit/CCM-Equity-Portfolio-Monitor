@@ -654,15 +654,21 @@ class BrinsonAttributionAnalyzer:
             key=lambda x: x['total_effect']
         )[:5]
 
-        # ── Actual returns for reconciliation ───────────────────────────
-        actual_portfolio_return = self._get_actual_portfolio_return(view_type, view_id, start_date, end_date)
+        # ── Model-implied returns (self-consistent with Brinson identity) ──
+        # The Brinson decomposition decomposes the model-implied active return:
+        #   model_active = Σ(W_p × R_p) - Σ(W_b × R_b)
+        #                = Σ(Allocation + Selection + Interaction)
+        # Using these as the reported returns ensures the waterfall adds up exactly
+        # with zero unattributed residual.
+        model_portfolio_return = float(total_portfolio_return)
+        model_benchmark_return = float(total_benchmark_return)
+        model_active_return = model_portfolio_return - model_benchmark_return
+        attributed_active_return = float(total_allocation + total_selection + total_interaction)
 
-        # Map benchmark definition code to ETF proxy code for BenchmarkReturn lookup
+        # Also fetch actual compound returns for reference / diagnostics
+        actual_portfolio_return = self._get_actual_portfolio_return(view_type, view_id, start_date, end_date)
         etf_proxy = self.BENCHMARK_ETF_PROXY.get(benchmark_code, 'SPY')
         actual_benchmark_return = self._get_actual_benchmark_return(etf_proxy, start_date, end_date)
-
-        attributed_active_return = float(total_allocation + total_selection + total_interaction)
-        actual_active_return = (actual_portfolio_return or 0) - (actual_benchmark_return or 0)
 
         # ── Overall coverage summary ────────────────────────────────────
         total_bench_constituents = len(enriched_holdings)
@@ -674,11 +680,16 @@ class BrinsonAttributionAnalyzer:
             'allocation_effect': float(total_allocation),
             'selection_effect': float(total_selection),
             'interaction_effect': float(total_interaction),
-            'total_active_return': actual_active_return,
-            'portfolio_return': actual_portfolio_return,
-            'benchmark_return': actual_benchmark_return,
+            # Model-consistent returns: identity holds exactly
+            'total_active_return': model_active_return,
+            'portfolio_return': model_portfolio_return,
+            'benchmark_return': model_benchmark_return,
             'attributed_active_return': attributed_active_return,
-            'unattributed': actual_active_return - attributed_active_return if actual_portfolio_return and actual_benchmark_return else 0,
+            'unattributed': 0.0,
+            # Actual compound returns for reference
+            'actual_portfolio_return': actual_portfolio_return,
+            'actual_benchmark_return': actual_benchmark_return,
+            'actual_active_return': (actual_portfolio_return or 0) - (actual_benchmark_return or 0) if actual_portfolio_return and actual_benchmark_return else None,
             'top_contributors': contributors,
             'top_detractors': detractors,
             'by_sector': attribution_by_sector,
