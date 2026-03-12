@@ -689,6 +689,210 @@ class FactorBenchmarkingService:
             logger.error(f"Factor regression failed: {e}")
             return None
 
+    def run_active_return_regression(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        model_code: str,
+        benchmark_code: str,
+        start_date: date,
+        end_date: date,
+        use_robust: bool = False
+    ) -> Optional[Dict]:
+        """
+        Run factor regression on ACTIVE returns (portfolio - benchmark).
+        Used in benchmark-relative mode. Returns same shape as run_factor_regression()
+        plus daily component series for attribution.
+
+        Attribution convention: arithmetic sum of daily returns.
+        """
+        # Get portfolio returns
+        portfolio_returns = self.db.query(ReturnsEOD).filter(
+            and_(
+                ReturnsEOD.view_type == view_type,
+                ReturnsEOD.view_id == view_id,
+                ReturnsEOD.date >= start_date,
+                ReturnsEOD.date <= end_date
+            )
+        ).order_by(ReturnsEOD.date).all()
+
+        if not portfolio_returns or len(portfolio_returns) < 30:
+            logger.warning(f"Insufficient portfolio returns for active regression: {len(portfolio_returns) if portfolio_returns else 0}")
+            return None
+
+        port_df = pd.DataFrame([
+            {'date': r.date, 'portfolio_return': r.twr_return}
+            for r in portfolio_returns
+        ]).set_index('date')
+
+        # Get benchmark returns
+        benchmark_returns = self.get_benchmark_returns(benchmark_code, start_date, end_date)
+        if benchmark_returns.empty:
+            logger.warning(f"No benchmark returns for {benchmark_code}")
+            return None
+
+        bench_df = pd.DataFrame({'benchmark_return': benchmark_returns})
+
+        # Get factor returns
+        factor_df = self.get_factor_returns(model_code, start_date, end_date)
+        if factor_df.empty:
+            logger.warning("No factor returns available for active regression")
+            return None
+
+        # Inner-join all three on date
+        merged = port_df.join(bench_df, how='inner').join(factor_df, how='inner').dropna()
+
+        if len(merged) < 30:
+            logger.warning(f"Insufficient aligned data for active regression: {len(merged)}")
+            return None
+
+        # Compute daily active returns
+        merged['active_return'] = merged['portfolio_return'] - merged['benchmark_return']
+
+        # Prepare regression variables
+        y = merged['active_return'].values.copy()
+        factor_names = [c for c in merged.columns if c not in ['portfolio_return', 'benchmark_return', 'active_return']]
+        X = merged[factor_names].values.copy()
+
+        # Detect outliers before regression
+        outliers = self._detect_outliers(y, list(merged.index))
+
+        # Add constant for alpha
+        X_with_const = sm.add_constant(X)
+
+        try:
+            model = sm.OLS(y, X_with_const)
+
+            if use_robust:
+                # HAC (Newey-West) standard errors for robust inference
+                results = model.fit(cov_type='HAC', cov_kwds={'maxlags': int(len(y) ** (1/3))})
+            else:
+                results = model.fit()
+
+            # Extract results
+            betas = {
+                factor: float(results.params[i+1])
+                for i, factor in enumerate(factor_names)
+            }
+
+            alpha_daily = float(results.params[0])
+            alpha_annualized = alpha_daily * 252
+
+            t_stats = {
+                factor: float(results.tvalues[i+1])
+                for i, factor in enumerate(factor_names)
+            }
+
+            p_values = {
+                factor: float(results.pvalues[i+1])
+                for i, factor in enumerate(factor_names)
+            }
+
+            # Confidence intervals (95%)
+            conf_int = results.conf_int(alpha=0.05)
+            if hasattr(conf_int, 'iloc'):
+                beta_ci = {
+                    factor: {
+                        'lower': float(conf_int.iloc[i+1, 0]),
+                        'upper': float(conf_int.iloc[i+1, 1])
+                    }
+                    for i, factor in enumerate(factor_names)
+                }
+                alpha_ci = {
+                    'lower': float(conf_int.iloc[0, 0]) * 252,
+                    'upper': float(conf_int.iloc[0, 1]) * 252
+                }
+            else:
+                beta_ci = {
+                    factor: {
+                        'lower': float(conf_int[i+1, 0]),
+                        'upper': float(conf_int[i+1, 1])
+                    }
+                    for i, factor in enumerate(factor_names)
+                }
+                alpha_ci = {
+                    'lower': float(conf_int[0, 0]) * 252,
+                    'upper': float(conf_int[0, 1]) * 252
+                }
+
+            # Standard errors
+            std_errors = {
+                factor: float(results.bse[i+1])
+                for i, factor in enumerate(factor_names)
+            }
+            alpha_std_error = float(results.bse[0])
+
+            residuals = results.resid
+            residual_std = float(np.std(residuals))
+            residual_std_ann = residual_std * np.sqrt(252)
+
+            # VIF for multicollinearity
+            vif = self._compute_vif(X, factor_names)
+            vif_values = [v for v in vif.values() if v is not None]
+            max_vif = float(max(vif_values)) if vif_values else 0.0
+            multicollinearity_warning = bool(max_vif > 5)
+            multicollinearity_severe = bool(max_vif > 10)
+
+            # Factor correlations
+            factor_correlations = self._compute_factor_correlations(merged[factor_names])
+
+            # Residual diagnostics
+            residual_diagnostics = self._compute_residual_diagnostics(residuals, X)
+
+            # Alpha Information Ratio (using active regression residual vol)
+            alpha_ir = alpha_annualized / residual_std_ann if residual_std_ann > 0 else 0
+
+            # Build daily component series for attribution
+            daily_factor_contribs = {}
+            for i, factor in enumerate(factor_names):
+                daily_factor_contribs[factor] = merged[factor].values * betas[factor]
+
+            daily_residuals = residuals
+
+            # Tracking error = annualized std of daily active returns
+            tracking_error_ann = float(np.std(merged['active_return'].values)) * np.sqrt(252)
+
+            return {
+                'betas': betas,
+                'alpha_daily': alpha_daily,
+                'alpha_annualized': alpha_annualized,
+                'alpha_ci': alpha_ci,
+                'alpha_std_error': alpha_std_error * 252,
+                'alpha_ir': alpha_ir,
+                'r_squared': float(results.rsquared),
+                'adj_r_squared': float(results.rsquared_adj),
+                't_stats': t_stats,
+                'p_values': p_values,
+                'beta_ci': beta_ci,
+                'std_errors': std_errors,
+                'vif': vif,
+                'multicollinearity_warning': multicollinearity_warning,
+                'multicollinearity_severe': multicollinearity_severe,
+                'factor_correlations': factor_correlations,
+                'residual_std': residual_std * 100,
+                'residual_std_ann': residual_std_ann * 100,
+                'residual_diagnostics': residual_diagnostics,
+                'outliers': outliers,
+                'n_observations': len(merged),
+                'start_date': merged.index.min(),
+                'end_date': merged.index.max(),
+                'use_robust': use_robust,
+                'tracking_error_ann': tracking_error_ann,
+                # Daily component series for attribution
+                'daily_active_returns': merged['active_return'].values,
+                'daily_portfolio_returns': merged['portfolio_return'].values,
+                'daily_benchmark_returns': merged['benchmark_return'].values,
+                'daily_factor_contribs': daily_factor_contribs,
+                'daily_alpha': alpha_daily,
+                'daily_residuals': np.array(daily_residuals),
+                'factor_names': factor_names,
+                'factor_df': merged[factor_names],
+            }
+
+        except Exception as e:
+            logger.error(f"Active return regression failed: {e}")
+            return None
+
     def compute_rolling_analysis(
         self,
         view_type: ViewType,
@@ -866,136 +1070,6 @@ class FactorBenchmarkingService:
             'betas_used': reg_results['betas']
         }
 
-    def compute_benchmark_relative_attribution(
-        self,
-        view_type: ViewType,
-        view_id: int,
-        model_code: str,
-        benchmark_code: str,
-        start_date: date,
-        end_date: date,
-        use_excess_returns: bool = False
-    ) -> Optional[Dict]:
-        """
-        Compute benchmark-relative (active) return attribution.
-        """
-        # Get portfolio regression results
-        port_reg = self.run_factor_regression(
-            view_type, view_id, model_code, start_date, end_date,
-            use_excess_returns=use_excess_returns
-        )
-        if not port_reg:
-            return None
-
-        # Get benchmark returns
-        benchmark_returns = self.get_benchmark_returns(benchmark_code, start_date, end_date)
-        if benchmark_returns.empty:
-            return None
-
-        # Get factor returns
-        factor_df = self.get_factor_returns(model_code, start_date, end_date)
-        if factor_df.empty:
-            return None
-
-        # Align benchmark with factors
-        bench_df = pd.DataFrame({'benchmark_return': benchmark_returns})
-        merged_bench = bench_df.join(factor_df, how='inner').dropna()
-
-        if len(merged_bench) < 30:
-            return None
-
-        # Run regression for benchmark
-        rf_daily = RISK_FREE_RATE_ANNUAL / 252 if use_excess_returns else 0
-        y_bench = merged_bench['benchmark_return'].values - rf_daily
-        factor_names = [c for c in merged_bench.columns if c != 'benchmark_return']
-        X_bench = merged_bench[factor_names].values
-        X_bench_const = sm.add_constant(X_bench)
-
-        try:
-            bench_model = sm.OLS(y_bench, X_bench_const)
-            bench_results = bench_model.fit()
-
-            bench_betas = {
-                f: float(bench_results.params[i+1])
-                for i, f in enumerate(factor_names)
-            }
-            bench_alpha = float(bench_results.params[0]) * 252
-        except Exception:
-            return None
-
-        # Calculate active betas
-        active_betas = {
-            f: port_reg['betas'].get(f, 0) - bench_betas.get(f, 0)
-            for f in factor_names
-        }
-
-        # Get cumulative factor returns for the period
-        factor_cum_returns = {}
-        for f in factor_names:
-            if f in factor_df.columns:
-                factor_cum_returns[f] = float((1 + factor_df[f]).prod() - 1)
-
-        # Active return decomposition
-        # Active factor tilts contribution = sum(active_beta * factor_return)
-        active_factor_contribution = {}
-        total_active_factor = 0
-        for f in factor_names:
-            contrib = active_betas[f] * factor_cum_returns.get(f, 0)
-            active_factor_contribution[f] = float(contrib * 100)
-            total_active_factor += contrib
-
-        # Get portfolio and benchmark cumulative returns
-        # (need to recalculate to align periods)
-        portfolio_returns = self.db.query(ReturnsEOD).filter(
-            and_(
-                ReturnsEOD.view_type == view_type,
-                ReturnsEOD.view_id == view_id,
-                ReturnsEOD.date >= start_date,
-                ReturnsEOD.date <= end_date
-            )
-        ).order_by(ReturnsEOD.date).all()
-
-        port_df = pd.DataFrame([
-            {'date': r.date, 'portfolio_return': r.twr_return}
-            for r in portfolio_returns
-        ]).set_index('date')
-
-        # Align all three
-        combined = port_df.join(bench_df, how='inner').dropna()
-        if use_excess_returns:
-            combined['portfolio_return'] = combined['portfolio_return'] - rf_daily
-            combined['benchmark_return'] = combined['benchmark_return'] - rf_daily
-
-        total_portfolio_return = float((1 + combined['portfolio_return']).prod() - 1)
-        total_benchmark_return = float((1 + combined['benchmark_return']).prod() - 1)
-        active_return = total_portfolio_return - total_benchmark_return
-
-        # Active alpha = portfolio alpha - benchmark alpha
-        active_alpha = port_reg['alpha_annualized'] - bench_alpha
-
-        # Active selection/residual
-        active_selection = active_return - total_active_factor
-
-        return {
-            'portfolio_return': total_portfolio_return * 100,
-            'benchmark_return': total_benchmark_return * 100,
-            'active_return': active_return * 100,
-            'benchmark_name': BENCHMARK_CONFIGS.get(benchmark_code, {}).get('name', benchmark_code),
-            'portfolio_betas': port_reg['betas'],
-            'benchmark_betas': bench_betas,
-            'active_betas': active_betas,
-            'active_factor_contributions': active_factor_contribution,
-            'total_active_factor_contribution': total_active_factor * 100,
-            'active_alpha': active_alpha,
-            'active_selection': active_selection * 100,
-            'factors': factor_names,
-            'n_observations': len(combined),
-            'period': {
-                'start_date': str(combined.index.min()),
-                'end_date': str(combined.index.max()),
-            }
-        }
-
     def compute_attribution(
         self,
         view_type: ViewType,
@@ -1009,7 +1083,35 @@ class FactorBenchmarkingService:
         rolling_window: int = 63
     ) -> Optional[Dict]:
         """
-        Compute comprehensive return attribution with all enhancements.
+        Compute comprehensive return attribution.
+        Branches into absolute mode (no benchmark) or benchmark-relative mode.
+        """
+        if benchmark_code:
+            return self._compute_active_attribution(
+                view_type, view_id, model_code, benchmark_code,
+                start_date, end_date, use_robust=use_robust
+            )
+        else:
+            return self._compute_absolute_attribution(
+                view_type, view_id, model_code,
+                start_date, end_date,
+                use_excess_returns=use_excess_returns,
+                use_robust=use_robust
+            )
+
+    def _compute_absolute_attribution(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        model_code: str,
+        start_date: date,
+        end_date: date,
+        use_excess_returns: bool = False,
+        use_robust: bool = False
+    ) -> Optional[Dict]:
+        """
+        Absolute mode: attribute portfolio return to factors + alpha + residual.
+        Uses arithmetic daily return aggregation.
         """
         # Run regression
         reg_results = self.run_factor_regression(
@@ -1048,33 +1150,40 @@ class FactorBenchmarkingService:
         rf_daily = RISK_FREE_RATE_ANNUAL / 252 if use_excess_returns else 0
         merged['portfolio_return'] = merged['portfolio_return'] - rf_daily
 
-        # Compute cumulative returns
-        total_return = (1 + merged['portfolio_return']).prod() - 1
+        # Compute cumulative returns (arithmetic sum of daily)
+        total_return = float(merged['portfolio_return'].sum())
 
-        # Compute factor contributions
+        # Compute factor contributions from daily fitted components
         factor_contributions = {}
         factor_cum_returns = {}
         total_factor_contribution = 0
 
         for factor_name in reg_results['betas'].keys():
             if factor_name in merged.columns:
-                cum_factor_return = (1 + merged[factor_name]).prod() - 1
+                # Daily factor contribution = beta * factor_return_t, then sum
+                daily_contrib = merged[factor_name].values * reg_results['betas'][factor_name]
+                contribution = float(daily_contrib.sum())
+                cum_factor_return = float(merged[factor_name].sum())
                 factor_cum_returns[factor_name] = cum_factor_return
-                contribution = reg_results['betas'][factor_name] * cum_factor_return
                 factor_contributions[factor_name] = contribution
                 total_factor_contribution += contribution
 
         trading_days = len(merged)
         alpha_contribution = reg_results['alpha_daily'] * trading_days
-        explained = total_factor_contribution + alpha_contribution
-        residual_contribution = total_return - explained
+        residual_contribution = total_return - total_factor_contribution - alpha_contribution
 
-        # Percentage of return
-        denominator = abs(total_return) if abs(total_return) > 0.0001 else 1
-        factor_pct = {f: c / denominator * 100 for f, c in factor_contributions.items()}
-        alpha_pct = alpha_contribution / denominator * 100
-        residual_pct = residual_contribution / denominator * 100
-        factor_explained_pct = total_factor_contribution / denominator * 100
+        # Percentage of return — safeguard against near-zero denominator
+        denominator = abs(total_return) if abs(total_return) > 0.0001 else None
+        if denominator is not None:
+            factor_pct = {f: c / denominator * 100 for f, c in factor_contributions.items()}
+            alpha_pct = alpha_contribution / denominator * 100
+            residual_pct = residual_contribution / denominator * 100
+            factor_explained_pct = total_factor_contribution / denominator * 100
+        else:
+            factor_pct = {f: None for f in factor_contributions}
+            alpha_pct = None
+            residual_pct = None
+            factor_explained_pct = None
 
         # Factor display names
         factor_names_display = {}
@@ -1084,7 +1193,8 @@ class FactorBenchmarkingService:
 
         # Build result
         result = {
-            'total_return': float(total_return),
+            'mode': 'absolute',
+            'total_return': total_return,
             'total_return_pct': float(total_return * 100),
             'use_excess_returns': use_excess_returns,
             'use_robust': use_robust,
@@ -1097,7 +1207,7 @@ class FactorBenchmarkingService:
                     'beta_ci': reg_results['beta_ci'].get(f, {}),
                     'factor_return': factor_cum_returns.get(f, 0) * 100,
                     'contribution': c * 100,
-                    'contribution_pct': factor_pct.get(f, 0),
+                    'contribution_pct': factor_pct.get(f),
                     't_stat': reg_results['t_stats'].get(f, 0),
                     'p_value': reg_results['p_values'].get(f, 0),
                     'vif': reg_results['vif'].get(f, 1),
@@ -1180,17 +1290,239 @@ class FactorBenchmarkingService:
                 'severity': 'warning'
             })
 
-        # Rolling analysis (async-friendly: compute in separate call if needed)
-        # For now, include basic rolling if requested
+        return result
 
-        # Benchmark-relative attribution
-        if benchmark_code:
-            bench_attr = self.compute_benchmark_relative_attribution(
-                view_type, view_id, model_code, benchmark_code,
-                start_date, end_date, use_excess_returns
-            )
-            if bench_attr:
-                result['benchmark_attribution'] = bench_attr
+    def _compute_active_attribution(
+        self,
+        view_type: ViewType,
+        view_id: int,
+        model_code: str,
+        benchmark_code: str,
+        start_date: date,
+        end_date: date,
+        use_robust: bool = False
+    ) -> Optional[Dict]:
+        """
+        Benchmark-relative mode: attribute active return (portfolio - benchmark) to factors.
+        Uses a single direct active-return regression as the source of truth.
+        All attribution uses arithmetic sum of daily returns.
+
+        Side regressions for portfolio_beta and benchmark_beta are display-only helpers.
+        """
+        # Run the active return regression (source of truth)
+        active_reg = self.run_active_return_regression(
+            view_type, view_id, model_code, benchmark_code,
+            start_date, end_date, use_robust=use_robust
+        )
+
+        if not active_reg:
+            return None
+
+        model = self.get_factor_model(model_code)
+        factor_names = active_reg['factor_names']
+
+        # ─── Side regressions for display-only portfolio/benchmark betas ───
+        port_reg = self.run_factor_regression(
+            view_type, view_id, model_code, start_date, end_date,
+            use_excess_returns=False, use_robust=False
+        )
+        portfolio_betas = port_reg['betas'] if port_reg else {}
+
+        # Benchmark regression
+        benchmark_betas = {}
+        try:
+            benchmark_returns = self.get_benchmark_returns(benchmark_code, start_date, end_date)
+            factor_df = self.get_factor_returns(model_code, start_date, end_date)
+            if not benchmark_returns.empty and not factor_df.empty:
+                bench_df = pd.DataFrame({'benchmark_return': benchmark_returns})
+                merged_bench = bench_df.join(factor_df, how='inner').dropna()
+                if len(merged_bench) >= 30:
+                    y_bench = merged_bench['benchmark_return'].values
+                    bench_factor_names = [c for c in merged_bench.columns if c != 'benchmark_return']
+                    X_bench = merged_bench[bench_factor_names].values
+                    X_bench_const = sm.add_constant(X_bench)
+                    bench_model = sm.OLS(y_bench, X_bench_const)
+                    bench_results = bench_model.fit()
+                    benchmark_betas = {
+                        f: float(bench_results.params[i+1])
+                        for i, f in enumerate(bench_factor_names)
+                    }
+        except Exception as e:
+            logger.warning(f"Benchmark regression for display failed: {e}")
+
+        # ─── Build attribution from daily model components ───
+        daily_active = active_reg['daily_active_returns']
+        daily_factor_contribs = active_reg['daily_factor_contribs']
+        daily_portfolio = active_reg['daily_portfolio_returns']
+        daily_benchmark = active_reg['daily_benchmark_returns']
+        daily_residuals = active_reg['daily_residuals']
+        factor_data = active_reg['factor_df']
+
+        trading_days = len(daily_active)
+
+        # Arithmetic sum of daily returns
+        total_active = float(np.sum(daily_active))
+        total_portfolio = float(np.sum(daily_portfolio))
+        total_benchmark = float(np.sum(daily_benchmark))
+
+        # Per-factor contributions (arithmetic sum of daily fitted components)
+        factor_contributions = {}
+        factor_cum_returns = {}
+        total_factor_contribution = 0.0
+
+        for factor in factor_names:
+            # Sum of daily (beta * factor_return_t)
+            contribution = float(np.sum(daily_factor_contribs[factor]))
+            # Sum of daily factor returns
+            cum_factor_return = float(factor_data[factor].sum())
+            factor_contributions[factor] = contribution
+            factor_cum_returns[factor] = cum_factor_return
+            total_factor_contribution += contribution
+
+        # Alpha contribution = alpha_daily * trading_days
+        alpha_contribution = active_reg['alpha_daily'] * trading_days
+
+        # Residual = sum of daily residuals
+        residual_contribution = float(np.sum(daily_residuals))
+
+        # Verify reconciliation (should be exact)
+        recon_check = total_factor_contribution + alpha_contribution + residual_contribution
+        recon_diff = total_active - recon_check
+        if abs(recon_diff) > 1e-10:
+            logger.warning(f"Active attribution reconciliation drift: {recon_diff:.2e}")
+
+        # % of active return — safeguard against near-zero denominator
+        denominator = abs(total_active) if abs(total_active) > 0.0001 else None
+        if denominator is not None:
+            factor_pct = {f: c / denominator * 100 for f, c in factor_contributions.items()}
+            alpha_pct = alpha_contribution / denominator * 100
+            residual_pct = residual_contribution / denominator * 100
+            factor_explained_pct = total_factor_contribution / denominator * 100
+        else:
+            factor_pct = {f: None for f in factor_contributions}
+            alpha_pct = None
+            residual_pct = None
+            factor_explained_pct = None
+
+        # Factor display names (with "(Active)" for market)
+        factor_names_display = {}
+        if model:
+            for f_name, config in model.factors_config.items():
+                display_name = config.get('name', f_name)
+                if f_name == 'MKT':
+                    display_name = 'Market (Active)'
+                factor_names_display[f_name] = display_name
+
+        # Build result
+        result = {
+            'mode': 'benchmark_relative',
+            'benchmark_code': benchmark_code,
+            'benchmark_name': BENCHMARK_CONFIGS.get(benchmark_code, {}).get('name', benchmark_code),
+            # Arithmetic attribution-period returns
+            'total_return': total_portfolio,
+            'total_return_pct': float(total_portfolio * 100),
+            'benchmark_return': total_benchmark,
+            'benchmark_return_pct': float(total_benchmark * 100),
+            'active_return': total_active,
+            'active_return_pct': float(total_active * 100),
+            'tracking_error': active_reg['tracking_error_ann'],
+            'tracking_error_pct': float(active_reg['tracking_error_ann'] * 100),
+            'use_excess_returns': False,  # always False in active mode
+            'use_robust': use_robust,
+            'risk_free_rate_annual': RISK_FREE_RATE_ANNUAL * 100,
+            'factor_contributions': {
+                f: {
+                    'name': factor_names_display.get(f, f),
+                    'category': model.factors_config.get(f, {}).get('category', 'style') if model else 'style',
+                    'portfolio_beta': portfolio_betas.get(f, None),
+                    'benchmark_beta': benchmark_betas.get(f, None),
+                    'active_beta': active_reg['betas'].get(f, 0),
+                    'beta': active_reg['betas'].get(f, 0),  # alias for backward compat
+                    'beta_ci': active_reg['beta_ci'].get(f, {}),
+                    'factor_return': factor_cum_returns.get(f, 0) * 100,
+                    'contribution': factor_contributions[f] * 100,
+                    'contribution_pct': factor_pct.get(f),
+                    't_stat': active_reg['t_stats'].get(f, 0),
+                    'p_value': active_reg['p_values'].get(f, 0),
+                    'vif': active_reg['vif'].get(f, 1),
+                }
+                for f in factor_names if f in factor_contributions
+            },
+            'factor_explained': total_factor_contribution * 100,
+            'factor_explained_pct': factor_explained_pct,
+            'alpha_contribution': alpha_contribution * 100,
+            'alpha_contribution_pct': alpha_pct,
+            'residual_contribution': residual_contribution * 100,
+            'residual_contribution_pct': residual_pct,
+            'regression': {
+                'r_squared': active_reg['r_squared'],
+                'adj_r_squared': active_reg['adj_r_squared'],
+                'alpha_daily': active_reg['alpha_daily'] * 100,
+                'alpha_annualized': active_reg['alpha_annualized'] * 100,
+                'alpha_ci': {
+                    'lower': active_reg['alpha_ci']['lower'] * 100,
+                    'upper': active_reg['alpha_ci']['upper'] * 100,
+                },
+                'alpha_ir': active_reg['alpha_ir'],
+                'residual_std': active_reg['residual_std'],
+                'residual_std_ann': active_reg['residual_std_ann'],
+                'durbin_watson': active_reg['residual_diagnostics']['durbin_watson'],
+                'dw_interpretation': active_reg['residual_diagnostics']['dw_interpretation'],
+                'n_observations': active_reg['n_observations'],
+            },
+            'diagnostics': {
+                'vif': active_reg['vif'],
+                'max_vif': max(active_reg['vif'].values()) if active_reg['vif'] else 0,
+                'multicollinearity_warning': active_reg['multicollinearity_warning'],
+                'multicollinearity_severe': active_reg['multicollinearity_severe'],
+                'factor_correlations': active_reg['factor_correlations'],
+                'residual_diagnostics': active_reg['residual_diagnostics'],
+                'outliers': active_reg['outliers'],
+                'outlier_count': len(active_reg['outliers']),
+            },
+            'period': {
+                'start_date': str(active_reg['start_date']),
+                'end_date': str(active_reg['end_date']),
+                'trading_days': trading_days,
+            },
+            'warnings': []
+        }
+
+        # Generate warnings
+        if active_reg['n_observations'] < 60:
+            result['warnings'].append({
+                'type': 'low_observations',
+                'message': f"Only {active_reg['n_observations']} observations. Results may be unreliable.",
+                'severity': 'warning'
+            })
+
+        if active_reg['multicollinearity_severe']:
+            result['warnings'].append({
+                'type': 'multicollinearity',
+                'message': 'Severe multicollinearity detected (VIF > 10). Active betas may be unstable.',
+                'severity': 'error'
+            })
+        elif active_reg['multicollinearity_warning']:
+            result['warnings'].append({
+                'type': 'multicollinearity',
+                'message': 'Moderate multicollinearity detected (VIF > 5). Interpret active betas with caution.',
+                'severity': 'warning'
+            })
+
+        if len(active_reg['outliers']) > 5:
+            result['warnings'].append({
+                'type': 'outliers',
+                'message': f"{len(active_reg['outliers'])} extreme active return days detected.",
+                'severity': 'warning'
+            })
+
+        dw = active_reg['residual_diagnostics']['durbin_watson']
+        if dw < 1.5 or dw > 2.5:
+            result['warnings'].append({
+                'type': 'autocorrelation',
+                'message': f"Durbin-Watson = {dw:.2f}. Residual autocorrelation may affect standard errors.",
+                'severity': 'warning'
+            })
 
         return result
 

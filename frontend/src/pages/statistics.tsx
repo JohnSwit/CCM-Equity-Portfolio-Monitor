@@ -172,7 +172,7 @@ export default function PortfolioStatisticsPage() {
         selectedView.view_id,
         'US_CORE',
         factorBenchPeriod,
-        useExcessReturns,
+        selectedBenchmark ? false : useExcessReturns,
         useRobustMode,
         selectedBenchmark || undefined
       );
@@ -1234,15 +1234,20 @@ export default function PortfolioStatisticsPage() {
               {/* Settings Row */}
               <div className="flex flex-wrap gap-4 mb-6 p-4 bg-zinc-50 rounded-lg border border-zinc-100">
                 {/* Excess Returns Toggle */}
-                <label className="flex items-center gap-2 cursor-pointer" title="Subtract risk-free rate from returns before regression">
+                <label className={`flex items-center gap-2 ${selectedBenchmark ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`} title={selectedBenchmark ? "In benchmark-relative mode, risk-free adjustment cancels out and does not affect active returns." : "Subtract risk-free rate from returns before regression"}>
                   <input
                     type="checkbox"
-                    checked={useExcessReturns}
-                    onChange={(e) => setUseExcessReturns(e.target.checked)}
+                    checked={selectedBenchmark ? false : useExcessReturns}
+                    onChange={(e) => !selectedBenchmark && setUseExcessReturns(e.target.checked)}
+                    disabled={!!selectedBenchmark}
                     className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
                   />
                   <span className="text-sm text-zinc-700">Excess Returns</span>
-                  <span className="text-xs text-zinc-400 cursor-help" title="Uses 5% annual risk-free rate">(?)</span>
+                  {selectedBenchmark ? (
+                    <span className="text-xs text-zinc-400 cursor-help" title="In benchmark-relative mode, risk-free adjustment cancels out">(N/A)</span>
+                  ) : (
+                    <span className="text-xs text-zinc-400 cursor-help" title="Uses 5% annual risk-free rate">(?)</span>
+                  )}
                 </label>
 
                 {/* Robust Mode Toggle */}
@@ -1310,51 +1315,101 @@ export default function PortfolioStatisticsPage() {
                     </div>
                   )}
 
-                  {/* Summary Stats */}
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
-                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">
-                        {useExcessReturns ? 'Excess Return' : 'Total Return'}
+                  {/* Summary Stats — mode-aware */}
+                  {(() => {
+                    const mode = factorBenchmarking?.mode || 'absolute';
+                    if (mode === 'benchmark_relative') {
+                      return (
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+                          <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                            <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Portfolio Return</div>
+                            <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
+                              {factorBenchmarking.total_return_pct?.toFixed(2)}%
+                            </div>
+                            <div className="text-xs text-zinc-400 mt-1">arithmetic</div>
+                          </div>
+                          <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                            <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Benchmark Return</div>
+                            <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.benchmark_return >= 0 ? 'value-positive' : 'value-negative'}`}>
+                              {factorBenchmarking.benchmark_return_pct?.toFixed(2)}%
+                            </div>
+                            <div className="text-xs text-zinc-400 mt-1">{factorBenchmarking.benchmark_name}</div>
+                          </div>
+                          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                            <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Return</div>
+                            <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.active_return >= 0 ? 'value-positive' : 'value-negative'}`}>
+                              {factorBenchmarking.active_return >= 0 ? '+' : ''}{factorBenchmarking.active_return_pct?.toFixed(2)}%
+                            </div>
+                          </div>
+                          <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
+                            <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Active Alpha (Ann.)</div>
+                            <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
+                              {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
+                            </div>
+                            <div className="text-xs text-zinc-400 mt-1">
+                              IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                            <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Tracking Error</div>
+                            <div className="text-xl font-bold text-zinc-800 tabular-nums">
+                              {factorBenchmarking.tracking_error_pct?.toFixed(2)}%
+                            </div>
+                            <div className="text-xs text-zinc-400 mt-1">
+                              Active Adj. R\u00b2: {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    // Absolute mode
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+                        <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                          <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">
+                            {useExcessReturns ? 'Return (ex. Risk-Free)' : 'Total Return'}
+                          </div>
+                          <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
+                            {factorBenchmarking.total_return_pct?.toFixed(2)}%
+                          </div>
+                        </div>
+                        <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
+                          <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Alpha (Ann.)</div>
+                          <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
+                            {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
+                          </div>
+                          <div className="text-xs text-zinc-400 mt-1">
+                            IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
+                          </div>
+                        </div>
+                        <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                          <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Adj. R-Squared</div>
+                          <div className="text-xl font-bold text-zinc-800 tabular-nums">
+                            {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
+                          </div>
+                          <div className="text-xs text-zinc-400 mt-1">
+                            (R\u00b2: {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%)
+                          </div>
+                        </div>
+                        <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
+                          <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Residual Vol</div>
+                          <div className="text-xl font-bold text-zinc-800 tabular-nums">
+                            {factorBenchmarking.regression?.residual_std_ann?.toFixed(2)}%
+                          </div>
+                          <div className="text-xs text-zinc-400 mt-1">annualized</div>
+                        </div>
+                        <div className="bg-indigo-50 rounded-lg p-4 border border-indigo-100">
+                          <div className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Factor Explained</div>
+                          <div className="text-xl font-bold text-indigo-600 tabular-nums">
+                            {factorBenchmarking.factor_explained?.toFixed(2)}%
+                          </div>
+                          <div className="text-xs text-indigo-400 mt-1">
+                            ({factorBenchmarking.factor_explained_pct != null ? factorBenchmarking.factor_explained_pct?.toFixed(0) + '% of return' : 'N/A'})
+                          </div>
+                        </div>
                       </div>
-                      <div className={`text-xl font-bold tabular-nums ${factorBenchmarking.total_return >= 0 ? 'value-positive' : 'value-negative'}`}>
-                        {factorBenchmarking.total_return_pct?.toFixed(2)}%
-                      </div>
-                    </div>
-                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100" title={`95% CI: [${factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, ${factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]`}>
-                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Alpha (Ann.)</div>
-                      <div className={`text-xl font-bold tabular-nums ${(factorBenchmarking.regression?.alpha_annualized || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
-                        {factorBenchmarking.regression?.alpha_annualized?.toFixed(2)}%
-                      </div>
-                      <div className="text-xs text-zinc-400 mt-1">
-                        IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
-                      </div>
-                    </div>
-                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
-                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Adj. R-Squared</div>
-                      <div className="text-xl font-bold text-zinc-800 tabular-nums">
-                        {(factorBenchmarking.regression?.adj_r_squared * 100)?.toFixed(1)}%
-                      </div>
-                      <div className="text-xs text-zinc-400 mt-1">
-                        (R²: {(factorBenchmarking.regression?.r_squared * 100)?.toFixed(1)}%)
-                      </div>
-                    </div>
-                    <div className="bg-zinc-50 rounded-lg p-4 border border-zinc-100">
-                      <div className="text-xs text-zinc-500 uppercase tracking-wide font-medium">Residual Vol</div>
-                      <div className="text-xl font-bold text-zinc-800 tabular-nums">
-                        {factorBenchmarking.regression?.residual_std_ann?.toFixed(2)}%
-                      </div>
-                      <div className="text-xs text-zinc-400 mt-1">annualized</div>
-                    </div>
-                    <div className="bg-indigo-50 rounded-lg p-4 border border-indigo-100">
-                      <div className="text-xs text-indigo-600 uppercase tracking-wide font-medium">Factor Explained</div>
-                      <div className="text-xl font-bold text-indigo-600 tabular-nums">
-                        {factorBenchmarking.factor_explained?.toFixed(2)}%
-                      </div>
-                      <div className="text-xs text-indigo-400 mt-1">
-                        ({factorBenchmarking.factor_explained_pct?.toFixed(0)}% of return)
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   {/* Table Controls */}
                   <div className="flex flex-wrap gap-4 mb-4 items-center">
@@ -1382,183 +1437,178 @@ export default function PortfolioStatisticsPage() {
                     </label>
                   </div>
 
-                  {/* Factor Exposures and Attribution Table */}
-                  <div className="table-container">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>Factor</th>
-                          <th className="text-right" title="Factor exposure coefficient">Beta</th>
-                          <th className="text-right" title="95% confidence interval">Beta CI</th>
-                          <th className="text-right">Factor Ret</th>
-                          <th className="text-right" title="Beta × Factor Return">Contrib</th>
-                          <th className="text-right" title="% of total return explained by this factor">% Total</th>
-                          <th className="text-right">t-Stat</th>
-                          <th className="text-right" title="Variance Inflation Factor - warn if > 5">VIF</th>
-                          <th className="text-right" title="*p<0.10, **p<0.05, ***p<0.01">Sig</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          const allFactors = Object.entries(factorBenchmarking.factor_contributions || {})
-                            .filter(([_, factor]: [string, any]) => !hideInsignificant || factor.p_value < 0.10)
-                            .sort((a: any, b: any) => {
-                              const [_, fa] = a;
-                              const [__, fb] = b;
-                              if (factorSortBy === `contribution`) return Math.abs(fb.contribution) - Math.abs(fa.contribution);
-                              if (factorSortBy === `beta`) return Math.abs(fb.beta) - Math.abs(fa.beta);
-                              if (factorSortBy === `t_stat`) return Math.abs(fb.t_stat) - Math.abs(fa.t_stat);
-                              return fa.name.localeCompare(fb.name);
-                            });
-                          const styleFactors = allFactors.filter(([_, f]: [string, any]) => (f.category || `style`) === `style`);
-                          const macroFactors = allFactors.filter(([_, f]: [string, any]) => f.category === `macro`);
+                  {/* Factor Exposures and Attribution Table — mode-aware */}
+                  {(() => {
+                    const mode = factorBenchmarking?.mode || 'absolute';
+                    const isBenchRelative = mode === 'benchmark_relative';
+                    const colCount = isBenchRelative ? 11 : 9;
 
-                          const renderFactorRow = ([key, factor]: [string, any]) => (
-                            <tr key={key}>
-                              <td className="font-medium text-zinc-900">{factor.name}</td>
-                              <td className="text-right tabular-nums">{factor.beta?.toFixed(3)}</td>
-                              <td className="text-right text-xs text-zinc-500 tabular-nums">
-                                [{factor.beta_ci?.lower?.toFixed(2)}, {factor.beta_ci?.upper?.toFixed(2)}]
-                              </td>
-                              <td className={`text-right tabular-nums ${(factor.factor_return || 0) >= 0 ? `value-positive` : `value-negative`}`}>
-                                {factor.factor_return?.toFixed(2)}%
-                              </td>
-                              <td className={`text-right font-semibold tabular-nums ${(factor.contribution || 0) >= 0 ? `value-positive` : `value-negative`}`}>
-                                {factor.contribution?.toFixed(2)}%
-                              </td>
-                              <td className="text-right tabular-nums">
-                                {factor.contribution_pct?.toFixed(1)}%
-                              </td>
-                              <td className="text-right tabular-nums">{factor.t_stat?.toFixed(2)}</td>
-                              <td className={`text-right tabular-nums ${factor.vif > 10 ? `text-red-600 font-bold` : factor.vif > 5 ? `text-amber-600` : ``}`}>
-                                {factor.vif?.toFixed(1)}
-                              </td>
-                              <td className="text-right">
-                                {factor.p_value < 0.01 ? (
-                                  <span className="badge badge-success">***</span>
-                                ) : factor.p_value < 0.05 ? (
-                                  <span className="badge badge-success">**</span>
-                                ) : factor.p_value < 0.10 ? (
-                                  <span className="badge badge-warning">*</span>
-                                ) : (
-                                  <span className="text-zinc-400">-</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
+                    const allFactors = Object.entries(factorBenchmarking.factor_contributions || {})
+                      .filter(([_, factor]: [string, any]) => !hideInsignificant || factor.p_value < 0.10)
+                      .sort((a: any, b: any) => {
+                        const [_, fa] = a;
+                        const [__, fb] = b;
+                        if (factorSortBy === 'contribution') return Math.abs(fb.contribution) - Math.abs(fa.contribution);
+                        if (factorSortBy === 'beta') return Math.abs(fb.beta) - Math.abs(fa.beta);
+                        if (factorSortBy === 't_stat') return Math.abs(fb.t_stat) - Math.abs(fa.t_stat);
+                        return fa.name.localeCompare(fb.name);
+                      });
+                    const styleFactors = allFactors.filter(([_, f]: [string, any]) => (f.category || 'style') === 'style');
+                    const macroFactors = allFactors.filter(([_, f]: [string, any]) => f.category === 'macro');
 
-                          return (
-                            <>
-                              {styleFactors.length > 0 && (
-                                <tr className="bg-zinc-50/80">
-                                  <td colSpan={9} className="text-xs font-semibold text-zinc-500 uppercase tracking-wider py-1.5 px-3">
-                                    Style Factors
-                                  </td>
-                                </tr>
-                              )}
-                              {styleFactors.map(renderFactorRow)}
-                              {macroFactors.length > 0 && (
+                    const renderFactorRow = ([key, factor]: [string, any]) => (
+                      <tr key={key}>
+                        <td className="font-medium text-zinc-900">{factor.name}</td>
+                        {isBenchRelative && (
+                          <>
+                            <td className="text-right tabular-nums text-zinc-500">{factor.portfolio_beta != null ? factor.portfolio_beta?.toFixed(3) : '-'}</td>
+                            <td className="text-right tabular-nums text-zinc-500">{factor.benchmark_beta != null ? factor.benchmark_beta?.toFixed(3) : '-'}</td>
+                          </>
+                        )}
+                        <td className="text-right tabular-nums">{(isBenchRelative ? factor.active_beta : factor.beta)?.toFixed(3)}</td>
+                        <td className="text-right text-xs text-zinc-500 tabular-nums">
+                          [{factor.beta_ci?.lower?.toFixed(2)}, {factor.beta_ci?.upper?.toFixed(2)}]
+                        </td>
+                        <td className={`text-right tabular-nums ${(factor.factor_return || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
+                          {factor.factor_return?.toFixed(2)}%
+                        </td>
+                        <td className={`text-right font-semibold tabular-nums ${(factor.contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
+                          {factor.contribution?.toFixed(2)}%
+                        </td>
+                        <td className="text-right tabular-nums">
+                          {factor.contribution_pct != null ? factor.contribution_pct?.toFixed(1) + '%' : 'N/A'}
+                        </td>
+                        <td className="text-right tabular-nums">{factor.t_stat?.toFixed(2)}</td>
+                        <td className={`text-right tabular-nums ${factor.vif > 10 ? 'text-red-600 font-bold' : factor.vif > 5 ? 'text-amber-600' : ''}`}>
+                          {factor.vif?.toFixed(1)}
+                        </td>
+                        <td className="text-right">
+                          {factor.p_value < 0.01 ? (
+                            <span className="badge badge-success">***</span>
+                          ) : factor.p_value < 0.05 ? (
+                            <span className="badge badge-success">**</span>
+                          ) : factor.p_value < 0.10 ? (
+                            <span className="badge badge-warning">*</span>
+                          ) : (
+                            <span className="text-zinc-400">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+
+                    return (
+                      <div className="table-container">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Factor</th>
+                              {isBenchRelative && (
                                 <>
-                                  <tr className="bg-amber-50/60 border-t-2 border-amber-200/50">
-                                    <td colSpan={9} className="text-xs font-semibold text-amber-700 uppercase tracking-wider py-1.5 px-3">
-                                      Macro Overlay
-                                    </td>
-                                  </tr>
-                                  {macroFactors.map(renderFactorRow)}
+                                  <th className="text-right" title="Portfolio factor exposure">Port Beta</th>
+                                  <th className="text-right" title="Benchmark factor exposure">Bench Beta</th>
                                 </>
                               )}
-                            </>
-                          );
-                        })()}
-                        {/* Alpha row */}
-                        <tr className="bg-indigo-50/50">
-                          <td className="font-semibold text-indigo-900">Alpha (Skill)</td>
-                          <td className="text-right">-</td>
-                          <td className="text-right text-xs text-zinc-500 tabular-nums">
-                            [{factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, {factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]
-                          </td>
-                          <td className="text-right">-</td>
-                          <td className={`text-right font-semibold tabular-nums ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
-                            {factorBenchmarking.alpha_contribution?.toFixed(2)}%
-                          </td>
-                          <td className="text-right tabular-nums">
-                            {factorBenchmarking.alpha_contribution_pct?.toFixed(1)}%
-                          </td>
-                          <td colSpan={3} className="text-right text-xs text-zinc-500">
-                            IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
-                          </td>
-                        </tr>
-                        {/* Residual row */}
-                        <tr className="bg-zinc-50">
-                          <td className="font-semibold text-zinc-600">Residual (Unexplained)</td>
-                          <td className="text-right">-</td>
-                          <td className="text-right">-</td>
-                          <td className="text-right">-</td>
-                          <td className={`text-right font-semibold tabular-nums ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
-                            {factorBenchmarking.residual_contribution?.toFixed(2)}%
-                          </td>
-                          <td className="text-right tabular-nums">
-                            {factorBenchmarking.residual_contribution_pct?.toFixed(1)}%
-                          </td>
-                          <td colSpan={3}></td>
-                        </tr>
-                      </tbody>
-                    </table>
+                              <th className="text-right" title={isBenchRelative ? "Active factor exposure (from active regression)" : "Factor exposure coefficient"}>
+                                {isBenchRelative ? 'Active Beta' : 'Beta'}
+                              </th>
+                              <th className="text-right" title="95% confidence interval">Beta CI</th>
+                              <th className="text-right">Factor Ret</th>
+                              <th className="text-right" title={isBenchRelative ? "Active Beta \u00d7 Factor Return" : "Beta \u00d7 Factor Return"}>
+                                {isBenchRelative ? 'Active Contrib' : 'Contrib'}
+                              </th>
+                              <th className="text-right" title={isBenchRelative ? "% of active return" : "% of total return"}>
+                                {isBenchRelative ? '% Active' : '% Total'}
+                              </th>
+                              <th className="text-right">t-Stat</th>
+                              <th className="text-right" title="Variance Inflation Factor - warn if > 5">VIF</th>
+                              <th className="text-right" title="*p<0.10, **p<0.05, ***p<0.01">Sig</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {styleFactors.length > 0 && (
+                              <tr className="bg-zinc-50/80">
+                                <td colSpan={colCount} className="text-xs font-semibold text-zinc-500 uppercase tracking-wider py-1.5 px-3">
+                                  Style Factors
+                                </td>
+                              </tr>
+                            )}
+                            {styleFactors.map(renderFactorRow)}
+                            {macroFactors.length > 0 && (
+                              <>
+                                <tr className="bg-amber-50/60 border-t-2 border-amber-200/50">
+                                  <td colSpan={colCount} className="text-xs font-semibold text-amber-700 uppercase tracking-wider py-1.5 px-3">
+                                    Macro Overlay
+                                  </td>
+                                </tr>
+                                {macroFactors.map(renderFactorRow)}
+                              </>
+                            )}
+                            {/* Alpha row */}
+                            <tr className="bg-indigo-50/50">
+                              <td className="font-semibold text-indigo-900">{isBenchRelative ? 'Active Alpha (Skill)' : 'Alpha (Skill)'}</td>
+                              {isBenchRelative && <><td className="text-right">-</td><td className="text-right">-</td></>}
+                              <td className="text-right">-</td>
+                              <td className="text-right text-xs text-zinc-500 tabular-nums">
+                                [{factorBenchmarking.regression?.alpha_ci?.lower?.toFixed(2)}%, {factorBenchmarking.regression?.alpha_ci?.upper?.toFixed(2)}%]
+                              </td>
+                              <td className="text-right">-</td>
+                              <td className={`text-right font-semibold tabular-nums ${(factorBenchmarking.alpha_contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
+                                {factorBenchmarking.alpha_contribution?.toFixed(2)}%
+                              </td>
+                              <td className="text-right tabular-nums">
+                                {factorBenchmarking.alpha_contribution_pct != null ? factorBenchmarking.alpha_contribution_pct?.toFixed(1) + '%' : 'N/A'}
+                              </td>
+                              <td colSpan={3} className="text-right text-xs text-zinc-500">
+                                IR: {factorBenchmarking.regression?.alpha_ir?.toFixed(2)}
+                              </td>
+                            </tr>
+                            {/* Residual row */}
+                            <tr className="bg-zinc-50">
+                              <td className="font-semibold text-zinc-600">Residual (Unexplained)</td>
+                              {isBenchRelative && <><td className="text-right">-</td><td className="text-right">-</td></>}
+                              <td className="text-right">-</td>
+                              <td className="text-right">-</td>
+                              <td className="text-right">-</td>
+                              <td className={`text-right font-semibold tabular-nums ${(factorBenchmarking.residual_contribution || 0) >= 0 ? 'value-positive' : 'value-negative'}`}>
+                                {factorBenchmarking.residual_contribution?.toFixed(2)}%
+                              </td>
+                              <td className="text-right tabular-nums">
+                                {factorBenchmarking.residual_contribution_pct != null ? factorBenchmarking.residual_contribution_pct?.toFixed(1) + '%' : 'N/A'}
+                              </td>
+                              <td colSpan={3}></td>
+                            </tr>
+                            {/* Reconciliation total row (benchmark-relative mode) */}
+                            {isBenchRelative && (
+                              <tr className="bg-blue-50 border-t-2 border-blue-200 font-bold">
+                                <td className="text-blue-900">Total Active Return</td>
+                                <td className="text-right">-</td>
+                                <td className="text-right">-</td>
+                                <td className="text-right">-</td>
+                                <td className="text-right">-</td>
+                                <td className="text-right">-</td>
+                                <td className={`text-right tabular-nums ${factorBenchmarking.active_return >= 0 ? 'value-positive' : 'value-negative'}`}>
+                                  {factorBenchmarking.active_return_pct?.toFixed(2)}%
+                                </td>
+                                <td className="text-right tabular-nums">100%</td>
+                                <td colSpan={3} className="text-right text-xs font-normal text-zinc-500">
+                                  = Factor {factorBenchmarking.factor_explained?.toFixed(2)}% + Alpha {factorBenchmarking.alpha_contribution?.toFixed(2)}% + Residual {factorBenchmarking.residual_contribution?.toFixed(2)}%
+                                  {' '}(Diff: {((factorBenchmarking.active_return_pct || 0) - (factorBenchmarking.factor_explained || 0) - (factorBenchmarking.alpha_contribution || 0) - (factorBenchmarking.residual_contribution || 0)).toFixed(4)}%)
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+
                   </div>
 
-                  {/* Benchmark-Relative Attribution */}
-                  {factorBenchmarking.benchmark_attribution && (
-                    <div className="mt-6 p-5 bg-blue-50 rounded-xl border border-blue-200/80">
-                      <h3 className="font-semibold text-blue-900 mb-4">
-                        Active Attribution vs {factorBenchmarking.benchmark_attribution.benchmark_name}
-                      </h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                        <div>
-                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Portfolio Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.portfolio_return >= 0 ? 'value-positive' : 'value-negative'}`}>
-                            {factorBenchmarking.benchmark_attribution.portfolio_return?.toFixed(2)}%
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Benchmark Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.benchmark_return >= 0 ? 'value-positive' : 'value-negative'}`}>
-                            {factorBenchmarking.benchmark_attribution.benchmark_return?.toFixed(2)}%
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Return</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_return >= 0 ? 'value-positive' : 'value-negative'}`}>
-                            {factorBenchmarking.benchmark_attribution.active_return >= 0 ? '+' : ''}
-                            {factorBenchmarking.benchmark_attribution.active_return?.toFixed(2)}%
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-blue-600 uppercase tracking-wide font-medium">Active Alpha</div>
-                          <div className={`text-lg font-bold tabular-nums ${factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? 'value-positive' : 'value-negative'}`}>
-                            {factorBenchmarking.benchmark_attribution.active_alpha >= 0 ? '+' : ''}
-                            {factorBenchmarking.benchmark_attribution.active_alpha?.toFixed(2)}%
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Active Factor Tilts */}
-                      <div className="mt-4 pt-4 border-t border-blue-200/60">
-                        <div className="text-sm font-medium text-blue-800 mb-3">Active Factor Contributions:</div>
-                        <div className="flex flex-wrap gap-2">
-                          {Object.entries(factorBenchmarking.benchmark_attribution.active_factor_contributions || {}).map(([factor, contrib]: [string, any]) => (
-                            <span key={factor} className={`badge ${contrib >= 0 ? 'badge-success' : 'badge-danger'}`}>
-                              {factor}: {contrib >= 0 ? '+' : ''}{contrib?.toFixed(2)}%
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
                   {/* Diagnostics Panel */}
                   {showDiagnostics && factorBenchmarking.diagnostics && (
                     <div className="mt-6 pt-6 border-t border-zinc-200">
-                      <h3 className="font-semibold text-zinc-800 mb-4">Regression Diagnostics</h3>
+                      <h3 className="font-semibold text-zinc-800 mb-4">Regression Diagnostics{(factorBenchmarking?.mode === 'benchmark_relative') && <span className="text-sm font-normal text-zinc-500 ml-2">(Active Return Model)</span>}</h3>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {/* VIF Summary */}
@@ -1684,8 +1734,8 @@ export default function PortfolioStatisticsPage() {
                         )}
                       </div>
 
-                      {/* Rolling Analysis */}
-                      {factorRollingData && factorRollingData.rolling_data && (
+                      {/* Rolling Analysis — hidden in benchmark-relative mode */}
+                      {!selectedBenchmark && factorRollingData && factorRollingData.rolling_data && (
                         <div className="mt-6 pt-6 border-t border-zinc-200">
                           <div className="flex items-center gap-4 mb-4">
                             <h4 className="text-sm font-semibold text-zinc-700">Rolling Analysis</h4>
@@ -1773,7 +1823,7 @@ export default function PortfolioStatisticsPage() {
                       )}
 
                       {/* Contribution Over Time */}
-                      {factorContribOverTime && factorContribOverTime.periods && (
+                      {!selectedBenchmark && factorContribOverTime && factorContribOverTime.periods && (
                         <div className="mt-6 pt-6 border-t border-zinc-200">
                           <div className="flex items-center gap-4 mb-4">
                             <h4 className="text-sm font-semibold text-zinc-700">Factor Contribution Over Time</h4>
@@ -1842,8 +1892,11 @@ export default function PortfolioStatisticsPage() {
                   <div className="mt-6 pt-4 border-t border-zinc-200 text-sm text-zinc-500 flex flex-wrap gap-4">
                     <span>Period: {factorBenchmarking.period?.start_date} to {factorBenchmarking.period?.end_date}</span>
                     <span>{factorBenchmarking.regression?.n_observations} trading days</span>
-                    {useExcessReturns && (
+                    {factorBenchmarking?.mode !== 'benchmark_relative' && useExcessReturns && (
                       <span>Risk-free rate: {factorBenchmarking.risk_free_rate_annual?.toFixed(1)}% annual</span>
+                    )}
+                    {factorBenchmarking?.mode === 'benchmark_relative' && (
+                      <span className="badge badge-blue">Benchmark-relative mode ({factorBenchmarking.benchmark_name})</span>
                     )}
                     {useRobustMode && (
                       <span className="badge badge-blue">Robust mode active</span>
