@@ -591,9 +591,44 @@ class BrinsonAttributionAnalyzer:
             for sector in bench_weights:
                 bench_weights[sector] = bench_weights[sector] / total_bench_weight
 
-        # ── Brinson decomposition ───────────────────────────────────────
+        # ── Reconcile sector returns to actual totals ─────────────────
+        # Bottom-up sector returns (from individual security prices) may differ
+        # from actual compound returns due to: stale prices, missing dividends,
+        # index rebalancing, unclassified constituents, compounding effects.
+        # Standard institutional technique: compute the gap and apply a uniform
+        # adjustment so the BHB decomposition fully explains the actual active return.
+        actual_portfolio_return = self._get_actual_portfolio_return(view_type, view_id, start_date, end_date)
+        etf_proxy = self.BENCHMARK_ETF_PROXY.get(benchmark_code, 'SPY')
+        actual_benchmark_return = self._get_actual_benchmark_return(etf_proxy, start_date, end_date)
+
         all_sectors = set(port_weights.keys()) | set(bench_weights.keys())
 
+        if actual_portfolio_return is not None and actual_benchmark_return is not None:
+            # Bottom-up totals from raw sector returns
+            bottomup_portfolio = sum(
+                port_weights.get(s, 0) * portfolio_sector_returns.get(s, 0) for s in all_sectors
+            )
+            bottomup_benchmark = sum(
+                bench_weights.get(s, 0) * benchmark_sector_returns.get(s, 0) for s in all_sectors
+            )
+
+            # Uniform adjustment = actual - bottom_up
+            port_adj = actual_portfolio_return - bottomup_portfolio
+            bench_adj = actual_benchmark_return - bottomup_benchmark
+
+            logger.info(
+                f"Brinson reconciliation: "
+                f"port bottomup={bottomup_portfolio*100:.2f}% actual={actual_portfolio_return*100:.2f}% adj={port_adj*100:.2f}%, "
+                f"bench bottomup={bottomup_benchmark*100:.2f}% actual={actual_benchmark_return*100:.2f}% adj={bench_adj*100:.2f}%"
+            )
+
+            # Apply uniform adjustment to each sector's returns
+            for sector in list(portfolio_sector_returns.keys()):
+                portfolio_sector_returns[sector] += port_adj
+            for sector in list(benchmark_sector_returns.keys()):
+                benchmark_sector_returns[sector] += bench_adj
+
+        # ── Brinson decomposition (on reconciled sector returns) ──────
         attribution_by_sector = []
         total_allocation = 0.0
         total_selection = 0.0
@@ -654,21 +689,10 @@ class BrinsonAttributionAnalyzer:
             key=lambda x: x['total_effect']
         )[:5]
 
-        # ── Model-implied returns (self-consistent with Brinson identity) ──
-        # The Brinson decomposition decomposes the model-implied active return:
-        #   model_active = Σ(W_p × R_p) - Σ(W_b × R_b)
-        #                = Σ(Allocation + Selection + Interaction)
-        # Using these as the reported returns ensures the waterfall adds up exactly
-        # with zero unattributed residual.
-        model_portfolio_return = float(total_portfolio_return)
-        model_benchmark_return = float(total_benchmark_return)
-        model_active_return = model_portfolio_return - model_benchmark_return
+        # ── Reconciled returns ─────────────────────────────────────────
+        # After reconciliation, the BHB effects sum exactly to actual active return.
         attributed_active_return = float(total_allocation + total_selection + total_interaction)
-
-        # Also fetch actual compound returns for reference / diagnostics
-        actual_portfolio_return = self._get_actual_portfolio_return(view_type, view_id, start_date, end_date)
-        etf_proxy = self.BENCHMARK_ETF_PROXY.get(benchmark_code, 'SPY')
-        actual_benchmark_return = self._get_actual_benchmark_return(etf_proxy, start_date, end_date)
+        actual_active_return = (actual_portfolio_return or 0) - (actual_benchmark_return or 0)
 
         # ── Overall coverage summary ────────────────────────────────────
         total_bench_constituents = len(enriched_holdings)
@@ -680,16 +704,11 @@ class BrinsonAttributionAnalyzer:
             'allocation_effect': float(total_allocation),
             'selection_effect': float(total_selection),
             'interaction_effect': float(total_interaction),
-            # Model-consistent returns: identity holds exactly
-            'total_active_return': model_active_return,
-            'portfolio_return': model_portfolio_return,
-            'benchmark_return': model_benchmark_return,
+            'total_active_return': actual_active_return,
+            'portfolio_return': actual_portfolio_return,
+            'benchmark_return': actual_benchmark_return,
             'attributed_active_return': attributed_active_return,
-            'unattributed': 0.0,
-            # Actual compound returns for reference
-            'actual_portfolio_return': actual_portfolio_return,
-            'actual_benchmark_return': actual_benchmark_return,
-            'actual_active_return': (actual_portfolio_return or 0) - (actual_benchmark_return or 0) if actual_portfolio_return and actual_benchmark_return else None,
+            'unattributed': actual_active_return - attributed_active_return if actual_portfolio_return and actual_benchmark_return else 0,
             'top_contributors': contributors,
             'top_detractors': detractors,
             'by_sector': attribution_by_sector,
@@ -755,7 +774,7 @@ class BrinsonAttributionAnalyzer:
             logger.warning("No TIINGO_API_KEY configured – cannot fetch missing benchmark prices")
             return 0
 
-        # ── 1. Identify which benchmark symbols are missing ──────────────
+        # ── 1. Identify missing OR stale benchmark symbols ──────────────
         missing_symbols: set = set()
         for holding in enriched_holdings:
             ticker = TickerNormalizer.normalize(holding['symbol'])
@@ -766,8 +785,35 @@ class BrinsonAttributionAnalyzer:
             elif security_id not in start_prices or security_id not in end_prices:
                 missing_symbols.add(ticker)
 
+        # Also detect stale prices: benchmark constituents whose latest price
+        # is more than 5 days before end_date. These are typically stocks not
+        # in the portfolio, so the nightly market data job doesn't refresh them.
+        stale_cutoff = end_date - timedelta(days=5)
+        bench_ids_present = {
+            bench_symbol_to_id.get(TickerNormalizer.normalize(h['symbol']))
+            for h in enriched_holdings
+        } - {None} - {bench_symbol_to_id.get(TickerNormalizer.normalize(s)) for s in missing_symbols if bench_symbol_to_id.get(TickerNormalizer.normalize(s))}
+
+        if bench_ids_present:
+            stale_query = self.db.query(
+                PricesEOD.security_id,
+                func.max(PricesEOD.date).label('latest_date')
+            ).filter(
+                and_(
+                    PricesEOD.security_id.in_(bench_ids_present),
+                    PricesEOD.date <= end_date
+                )
+            ).group_by(PricesEOD.security_id).all()
+
+            stale_ids = {r.security_id for r in stale_query if r.latest_date and r.latest_date < stale_cutoff}
+            if stale_ids:
+                id_to_symbol = {v: k for k, v in bench_symbol_to_id.items()}
+                stale_symbols = {id_to_symbol[sid] for sid in stale_ids if sid in id_to_symbol}
+                missing_symbols |= stale_symbols
+                logger.info(f"Brinson: {len(stale_symbols)} benchmark tickers have stale prices (> 5 days old)")
+
         if not missing_symbols:
-            logger.info("Brinson: All benchmark constituents have local price data (100%% coverage)")
+            logger.info("Brinson: All benchmark constituents have fresh local price data")
             return 0
 
         logger.info(f"Brinson: Fetching Tiingo prices for {len(missing_symbols)} missing benchmark tickers")
